@@ -1,0 +1,108 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/str/quest_snapshot.schema.json",
+  "title": "QuestSnapshot",
+  "type": "object",
+  "required": [
+    "questId",
+    "status",
+    "currentStage",
+    "revision",
+    "initiatorPlayerId",
+    "objectives",
+    "referenceAliases",
+    "locationAliases",
+    "questItems"
+  ],
+  "properties": {
+    "questId": { "type": "string" },
+    "status": {
+      "type": "string",
+      "enum": ["inactive", "running", "stopped", "completed"]
+    },
+    "currentStage": { "type": "integer", "minimum": 0 },
+    "completedStages": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "uniqueItems": true
+    },
+    "revision": { "type": "integer", "minimum": 0 },
+    "initiatorPlayerId": { "type": "integer", "minimum": 0 },
+    "objectives": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "state"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 0 },
+          "state": {
+            "type": "string",
+            "enum": ["hidden", "displayed", "completed", "failed"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "referenceAliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["aliasId", "referenceId", "isQuestObject"],
+        "properties": {
+          "aliasId": { "type": "integer", "minimum": 0 },
+          "referenceId": { "type": ["string", "null"] },
+          "isQuestObject": { "type": "boolean" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "locationAliases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["aliasId", "locationId"],
+        "properties": {
+          "aliasId": { "type": "integer", "minimum": 0 },
+          "locationId": { "type": ["string", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "createdReferences": {
+      "type": "array",
+      "items": { "type": "string" },
+      "uniqueItems": true
+    },
+    "sceneParticipantPlayerId": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "questItems": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/questItem" }
+    }
+  },
+  "$defs": {
+    "questItem": {
+      "type": "object",
+      "required": ["baseFormId", "count", "sourceAliasIds"],
+      "properties": {
+        "instanceId": { "type": ["string", "null"] },
+        "baseFormId": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 },
+        "customName": { "type": ["string", "null"] },
+        "enchantmentFormId": { "type": ["string", "null"] },
+        "charge": { "type": ["number", "null"] },
+        "health": { "type": ["number", "null"] },
+        "soul": { "type": ["integer", "null"] },
+        "sourceAliasIds": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
