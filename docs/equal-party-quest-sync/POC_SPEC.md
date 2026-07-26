@@ -4,7 +4,7 @@
 
 Extend Skyrim Together Reborn so a party has one canonical quest journal while any member may initiate the next valid quest action. The party leader remains an administrator, not the exclusive quest authority.
 
-This proof of concept does not change live quest behavior yet. Its first milestone defines and validates a deterministic `QuestSnapshot` representation.
+The proof of concept is intentionally incremental. It first validates deterministic snapshots, then reads live Skyrim quest state without changing saves or network behavior.
 
 ## Agreed gameplay model
 
@@ -24,6 +24,8 @@ This proof of concept does not change live quest behavior yet. Its first milesto
 
 ### PoC A: deterministic snapshot and digest
 
+Status: complete and validated by Windows, Linux, and dedicated test CI.
+
 1. Represent fixed quest state independently from runtime pointers.
 2. Canonicalize unordered collections.
 3. Compute a stable digest that does not depend on collection insertion order.
@@ -38,10 +40,26 @@ This proof of concept does not change live quest behavior yet. Its first milesto
 
 ### PoC C: runtime collector and aliases
 
-1. Collect stage, status, objectives, reference aliases, and location aliases from `TESQuest`.
-2. Log snapshots from two clients.
-3. Validate safe restoration of alias values.
-4. Define a compatibility fallback if direct alias restoration is unsafe.
+Status: runtime collection is in progress.
+
+Implemented read-only collection:
+
+1. Quest status, including failure.
+2. Current stage and completed stages.
+3. Objective indices and runtime states.
+4. Reference alias IDs and resolved references when they map to a stable `GameId`.
+5. The alias `Quest Object` flag.
+6. Created references when they already have a stable mapped ID.
+7. Location alias identities.
+8. Diagnostic snapshots after local and replicated quest events.
+
+Still required:
+
+1. Resolve the selected `BGSLocation` behind a location alias.
+2. Assign party-owned IDs to dynamic references that cannot use a normal plugin `GameId`.
+3. Compare logs from two live clients.
+4. Validate safe restoration of alias values.
+5. Define a compatibility fallback if direct alias restoration is unsafe.
 
 ### PoC D: mirrored quest items
 
@@ -64,14 +82,15 @@ This proof of concept does not change live quest behavior yet. Its first milesto
 - A reconnecting stale client is repaired from server state.
 - Manual administrator selection is reserved for failed automatic repair.
 
-## Current commit scope
+## Current implementation safety boundary
 
-The initial commit adds only:
+The runtime collector is observational only. It does not:
 
-- the `QuestSnapshot` data model;
-- deterministic canonicalization;
-- a stable FNV-1a digest;
-- unit tests for order independence, mismatch detection, and duplicate removal;
-- reference JSON schemas.
+- send snapshots over the network;
+- change quest stages or objectives;
+- fill, clear, or replace aliases;
+- add or remove inventory items;
+- modify saves;
+- change dialogue ownership.
 
-No runtime hooks, messages, save changes, or quest mutations are introduced.
+Location aliases are listed by alias ID but their selected location remains unresolved until a dedicated accessor is validated. Dynamic references that cannot be converted to a stable plugin `GameId` remain explicitly unresolved rather than being compared using client-local form IDs.
