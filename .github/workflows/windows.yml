@@ -100,7 +100,7 @@ jobs:
           cp -r Code/skyrim_ui/dist/UI ${{ env.STR_BUILD_DIR }}
 
       - id: output-version
-        run: echo "version=$(git describe --tags)" >> $env:GITHUB_OUTPUT
+        run: echo "version=$(git describe --tags --always)" >> $env:GITHUB_OUTPUT
 
       - name: Upload build files for the next job
         if: ${{ inputs.upload-build-for-next-job }}
