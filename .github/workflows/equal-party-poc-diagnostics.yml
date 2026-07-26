@@ -64,13 +64,65 @@ jobs:
             exit 1
           fi
 
-      - name: Upload diagnostic log
+      - name: Upload Linux diagnostic log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: equal-party-poc-diagnostics
+          name: equal-party-poc-linux-diagnostics
           path: |
             poc-config.log
             poc-errors.txt
             poc-build.log
+          retention-days: 7
+
+  build-poc-windows:
+    runs-on: windows-2022
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive --depth=1
+
+      - name: Cache xmake dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/.xmake/packages
+          key: ${{ runner.os }}-xmake-${{ hashFiles('**/xmake.lua') }}
+
+      - name: Setup xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: "3.0.9"
+
+      - name: Configure
+        run: xmake config --arch=x64 --mode=debug --yes -vD
+
+      - name: Build runtime collector and capture diagnostics
+        shell: pwsh
+        run: |
+          xmake -y -vD SkyrimTogetherClient *> poc-windows-build.log
+          $status = $LASTEXITCODE
+
+          $matches = Select-String -Path poc-windows-build.log -Pattern 'error C[0-9]+|fatal error|LNK[0-9]+|error:' | Select-Object -Last 250
+          if ($matches) {
+            $matches | ForEach-Object { $_.Line } | Set-Content poc-windows-errors.txt
+          } else {
+            Get-Content poc-windows-build.log -Tail 300 | Set-Content poc-windows-errors.txt
+          }
+
+          exit $status
+
+      - name: Upload Windows diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: equal-party-poc-windows-diagnostics
+          path: |
+            poc-windows-errors.txt
+            poc-windows-build.log
           retention-days: 7
