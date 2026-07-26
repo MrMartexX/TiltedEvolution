@@ -39,7 +39,7 @@ jobs:
         run: |
           set +e
           set -o pipefail
-          xmake build TPTests -vD 2>&1 | tee poc-build.log
+          xmake -vD TPTests 2>&1 | tee poc-build.log
           status=${PIPESTATUS[0]}
           grep -Ei "error:|fatal error:|undefined reference|collect2:|error C[0-9]+|LNK[0-9]+" poc-build.log | tail -n 250 > poc-errors.txt || true
           if [ ! -s poc-errors.txt ]; then
