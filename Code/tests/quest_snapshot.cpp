@@ -62,6 +62,16 @@ TEST_CASE("QuestSnapshot digest detects hidden quest-state changes", "[quest.sna
     REQUIRE(canonical.ComputeDigest() != divergent.ComputeDigest());
 }
 
+TEST_CASE("QuestSnapshot digest distinguishes failed quest state", "[quest.snapshot]")
+{
+    auto running = BuildSnapshot();
+    auto failed = BuildSnapshot();
+    failed.Status = QuestSnapshotStatus::Failed;
+
+    REQUIRE(running.ComputeDigest() != failed.ComputeDigest());
+    REQUIRE(QuestSnapshot::SchemaVersion == 2);
+}
+
 TEST_CASE("QuestSnapshot canonicalization removes exact duplicates", "[quest.snapshot]")
 {
     auto snapshot = BuildSnapshot();
