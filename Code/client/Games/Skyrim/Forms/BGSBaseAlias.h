@@ -2,6 +2,9 @@
 
 #include <Misc/BSString.h>
 
+#include <cstddef>
+#include <cstdint>
+
 struct TESForm;
 struct TESQuest;
 
