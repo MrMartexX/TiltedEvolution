@@ -1,5 +1,8 @@
 #pragma once
 
+#include <TiltedCore/Stl.hpp>
+#include <TiltedCore/Buffer.hpp>
+
 #include <Structs/GameId.h>
 
 #include <cstdint>
