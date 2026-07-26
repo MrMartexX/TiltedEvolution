@@ -18,7 +18,7 @@
     "questId": { "type": "string" },
     "status": {
       "type": "string",
-      "enum": ["inactive", "running", "stopped", "completed"]
+      "enum": ["inactive", "running", "stopped", "completed", "failed"]
     },
     "currentStage": { "type": "integer", "minimum": 0 },
     "completedStages": {
