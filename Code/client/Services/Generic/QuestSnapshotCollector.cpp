@@ -153,17 +153,20 @@ void QuestSnapshotCollector::Log(TESQuest* apQuest, const QuestSnapshot& acSnaps
         acSnapshot.CurrentStage, acSnapshot.ComputeDigest(), acSnapshot.CompletedStages.size(), acSnapshot.Objectives.size(),
         acSnapshot.ReferenceAliases.size(), acSnapshot.LocationAliases.size(), acSnapshot.CreatedReferences.size());
 
+    // These detail lines intentionally use info during the runtime PoC. The
+    // production client logger filters debug messages, and two-client validation
+    // needs the exact objective and alias values in tp_client.log.
     for (const auto& objective : acSnapshot.Objectives)
-        spdlog::debug("QuestSnapshot objective: index={} state={}", objective.Index, static_cast<uint8_t>(objective.State));
+        spdlog::info("QuestSnapshotDetail objective: index={} state={}", objective.Index, static_cast<uint8_t>(objective.State));
 
     for (const auto& alias : acSnapshot.ReferenceAliases)
     {
         if (alias.ReferenceId)
-            spdlog::debug("QuestSnapshot ref alias: id={} ref={:016X} questObject={}", alias.AliasId, alias.ReferenceId->LogFormat(), alias.IsQuestObject);
+            spdlog::info("QuestSnapshotDetail refAlias: id={} ref={:016X} questObject={}", alias.AliasId, alias.ReferenceId->LogFormat(), alias.IsQuestObject);
         else
-            spdlog::debug("QuestSnapshot ref alias: id={} ref=<unfilled-or-unmapped> questObject={}", alias.AliasId, alias.IsQuestObject);
+            spdlog::info("QuestSnapshotDetail refAlias: id={} ref=<unfilled-or-unmapped> questObject={}", alias.AliasId, alias.IsQuestObject);
     }
 
     for (const auto& alias : acSnapshot.LocationAliases)
-        spdlog::debug("QuestSnapshot location alias: id={} location=<pending-location-accessor-poc>", alias.AliasId);
+        spdlog::info("QuestSnapshotDetail locationAlias: id={} location=<pending-location-accessor-poc>", alias.AliasId);
 }
