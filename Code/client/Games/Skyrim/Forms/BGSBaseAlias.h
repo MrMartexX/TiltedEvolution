@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Misc/BSString.h>
+#include <Misc/BSFixedString.h>
 
 #include <cstddef>
 #include <cstdint>
