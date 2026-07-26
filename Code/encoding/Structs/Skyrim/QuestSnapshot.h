@@ -14,7 +14,8 @@ enum class QuestSnapshotStatus : uint8_t
     Inactive,
     Running,
     Stopped,
-    Completed
+    Completed,
+    Failed
 };
 
 enum class QuestObjectiveState : uint8_t
@@ -60,7 +61,7 @@ struct QuestLocationAliasSnapshot
  */
 struct QuestSnapshot
 {
-    static constexpr uint16_t SchemaVersion = 1;
+    static constexpr uint16_t SchemaVersion = 2;
 
     GameId QuestId{};
     QuestSnapshotStatus Status{QuestSnapshotStatus::Inactive};
