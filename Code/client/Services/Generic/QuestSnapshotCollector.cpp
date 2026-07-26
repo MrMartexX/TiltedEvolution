@@ -142,7 +142,7 @@ std::optional<QuestSnapshot> QuestSnapshotCollector::Collect(TESQuest* apQuest, 
     return snapshot;
 }
 
-void QuestSnapshotCollector::Log(const TESQuest* apQuest, const QuestSnapshot& acSnapshot, const char* acReason) noexcept
+void QuestSnapshotCollector::Log(TESQuest* apQuest, const QuestSnapshot& acSnapshot, const char* acReason) noexcept
 {
     if (!apQuest)
         return;
