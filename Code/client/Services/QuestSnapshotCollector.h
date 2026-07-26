@@ -13,5 +13,5 @@ struct TESQuest;
 struct QuestSnapshotCollector final
 {
     [[nodiscard]] static std::optional<QuestSnapshot> Collect(TESQuest* apQuest, const ModSystem& acModSystem) noexcept;
-    static void Log(const TESQuest* apQuest, const QuestSnapshot& acSnapshot, const char* acReason) noexcept;
+    static void Log(TESQuest* apQuest, const QuestSnapshot& acSnapshot, const char* acReason) noexcept;
 };
