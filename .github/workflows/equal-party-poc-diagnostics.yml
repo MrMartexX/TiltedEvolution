@@ -7,6 +7,11 @@ on:
     paths:
       - "Code/encoding/Structs/Skyrim/QuestSnapshot.*"
       - "Code/tests/quest_snapshot.cpp"
+      - "Code/client/Services/QuestSnapshotCollector.h"
+      - "Code/client/Services/Generic/QuestSnapshotCollector.cpp"
+      - "Code/client/Services/Generic/QuestService.cpp"
+      - "Code/client/Games/Skyrim/Forms/BGSBaseAlias.h"
+      - "Code/client/Games/Skyrim/Forms/TESQuest.h"
       - ".github/workflows/equal-party-poc-diagnostics.yml"
   workflow_dispatch:
 
@@ -37,19 +42,27 @@ jobs:
           timeout 25m xmake config --arch=x64 --mode=debug --yes 2>&1 | tee -a poc-config.log
           exit 0
 
-      - name: Build TPTests and capture diagnostics
+      - name: Build snapshot tests and runtime collector
         id: build
         shell: bash
         run: |
           set +e
           set -o pipefail
+
           timeout 25m xmake -y -vD TPTests 2>&1 | tee poc-build.log
-          status=${PIPESTATUS[0]}
+          tests_status=${PIPESTATUS[0]}
+
+          timeout 25m xmake -y -vD SkyrimTogetherClient 2>&1 | tee -a poc-build.log
+          client_status=${PIPESTATUS[0]}
+
           grep -Ei "error:|fatal error:|undefined reference|collect2:|error C[0-9]+|LNK[0-9]+" poc-build.log | tail -n 250 > poc-errors.txt || true
           if [ ! -s poc-errors.txt ]; then
             tail -n 300 poc-build.log > poc-errors.txt
           fi
-          exit "$status"
+
+          if [ "$tests_status" -ne 0 ] || [ "$client_status" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Upload diagnostic log
         if: always()
