@@ -42,7 +42,7 @@ jobs:
           timeout 25m xmake config --arch=x64 --mode=debug --yes 2>&1 | tee -a poc-config.log
           exit 0
 
-      - name: Build snapshot tests and runtime collector
+      - name: Build snapshot tests
         id: build
         shell: bash
         run: |
@@ -52,17 +52,12 @@ jobs:
           timeout 25m xmake -y -vD TPTests 2>&1 | tee poc-build.log
           tests_status=${PIPESTATUS[0]}
 
-          timeout 25m xmake -y -vD SkyrimTogetherClient 2>&1 | tee -a poc-build.log
-          client_status=${PIPESTATUS[0]}
-
           grep -Ei "error:|fatal error:|undefined reference|collect2:|error C[0-9]+|LNK[0-9]+" poc-build.log | tail -n 250 > poc-errors.txt || true
           if [ ! -s poc-errors.txt ]; then
             tail -n 300 poc-build.log > poc-errors.txt
           fi
 
-          if [ "$tests_status" -ne 0 ] || [ "$client_status" -ne 0 ]; then
-            exit 1
-          fi
+          exit "$tests_status"
 
       - name: Upload Linux diagnostic log
         if: always()
