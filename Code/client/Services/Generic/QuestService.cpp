@@ -3,6 +3,7 @@
 #include <Events/ConnectedEvent.h>
 
 #include <Services/QuestService.h>
+#include <Services/QuestSnapshotCollector.h>
 #include <Services/ImguiService.h>
 
 #include <PlayerCharacter.h>
@@ -21,6 +22,17 @@ static TESQuest* FindQuestByNameId(const String& name)
     auto it = std::find_if(questRegistry.begin(), questRegistry.end(), [name](auto* it) { return std::strcmp(it->idName.AsAscii(), name.c_str()); });
 
     return it != questRegistry.end() ? *it : nullptr;
+}
+
+static void CollectAndLogQuestSnapshot(World& aWorld, uint32_t aFormId, const char* acReason)
+{
+    TESQuest* pQuest = Cast<TESQuest>(TESForm::GetById(aFormId));
+    if (!pQuest)
+        return;
+
+    const auto snapshot = QuestSnapshotCollector::Collect(pQuest, aWorld.GetModSystem());
+    if (snapshot)
+        QuestSnapshotCollector::Log(pQuest, *snapshot, acReason);
 }
 
 QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
@@ -63,7 +75,7 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
     {
         if (IsNonSyncableQuest(pQuest))
             return BSTEventResult::kOk;
-     
+      
         if (pQuest->type == TESQuest::Type::None || pQuest->type == TESQuest::Type::Miscellaneous)
         {
             // Perhaps redundant, but necessary. We need the logging and
@@ -94,6 +106,8 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
 
                     m_world.GetTransport().Send(update);
                 }
+
+                CollectAndLogQuestSnapshot(m_world, formId, stopped ? "local-stop" : "local-start");
             });
     }
 
@@ -144,6 +158,8 @@ BSTEventResult QuestService::OnEvent(const TESQuestStageEvent* apEvent, const Ev
 
                     m_world.GetTransport().Send(update);
                 }
+
+                CollectAndLogQuestSnapshot(m_world, formId, "local-stage");
             });
     }
 
@@ -192,7 +208,12 @@ void QuestService::OnQuestUpdate(const NotifyQuestUpdate& aUpdate) noexcept
     }
 
     if (!bResult)
+    {
         spdlog::error("Failed to update the client quest state, quest: {:X}, stage: {}, status: {}", formId, aUpdate.Stage, aUpdate.Status);
+        return;
+    }
+
+    CollectAndLogQuestSnapshot(m_world, formId, "remote-update");
 }
 
 bool QuestService::StopQuest(uint32_t aformId)
