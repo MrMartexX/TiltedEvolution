@@ -27,11 +27,15 @@ jobs:
         with:
           xmake-version: "3.0.9"
 
-      - name: Configure
+      - name: Configure and install dependencies
         continue-on-error: true
+        shell: bash
         run: |
-          xmake repo --update
-          timeout 15m xmake config --arch=x64 --mode=debug --yes
+          set +e
+          set -o pipefail
+          xmake repo --update 2>&1 | tee poc-config.log
+          timeout 25m xmake config --arch=x64 --mode=debug --yes 2>&1 | tee -a poc-config.log
+          exit 0
 
       - name: Build TPTests and capture diagnostics
         id: build
@@ -39,7 +43,7 @@ jobs:
         run: |
           set +e
           set -o pipefail
-          xmake -vD TPTests 2>&1 | tee poc-build.log
+          timeout 25m xmake -y -vD TPTests 2>&1 | tee poc-build.log
           status=${PIPESTATUS[0]}
           grep -Ei "error:|fatal error:|undefined reference|collect2:|error C[0-9]+|LNK[0-9]+" poc-build.log | tail -n 250 > poc-errors.txt || true
           if [ ! -s poc-errors.txt ]; then
@@ -53,6 +57,7 @@ jobs:
         with:
           name: equal-party-poc-diagnostics
           path: |
+            poc-config.log
             poc-errors.txt
             poc-build.log
           retention-days: 7
