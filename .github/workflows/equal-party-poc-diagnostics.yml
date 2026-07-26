@@ -28,9 +28,10 @@ jobs:
           xmake-version: "3.0.9"
 
       - name: Configure
+        continue-on-error: true
         run: |
           xmake repo --update
-          xmake config --arch=x64 --mode=debug --yes
+          timeout 15m xmake config --arch=x64 --mode=debug --yes
 
       - name: Build TPTests and capture diagnostics
         id: build
