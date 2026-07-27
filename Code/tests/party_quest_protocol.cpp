@@ -1,11 +1,13 @@
+#include <TiltedCore/Stl.hpp>
+#include <TiltedCore/Allocator.hpp>
+#include <TiltedCore/Buffer.hpp>
+#include <TiltedCore/Serialization.hpp>
+
 #include <Messages/ClientMessageFactory.h>
 #include <Messages/PartyQuestMessages.h>
 #include <Messages/ServerMessageFactory.h>
 
 #include <Structs/Skyrim/PartyQuestRepair.h>
-
-#include <TiltedCore/Buffer.hpp>
-#include <TiltedCore/Stl.hpp>
 
 #include <catch2/catch.hpp>
 
