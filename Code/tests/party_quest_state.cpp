@@ -68,6 +68,33 @@ TEST_CASE("Party quest state makes repeated delivery idempotent", "[quest.party-
     REQUIRE(state.GetJournal().size() == 1);
 }
 
+TEST_CASE("Party quest transaction identity ignores unordered collection insertion order", "[quest.party-state]")
+{
+    PartyQuestState state;
+    const GameId questId(1, 0x250);
+
+    auto first = BuildTransaction(2501, questId, 0, 20);
+    first.ProposedSnapshot.CompletedStages = {20, 10, 20};
+    first.ProposedSnapshot.Objectives = {
+        {20, QuestObjectiveState::Displayed},
+        {10, QuestObjectiveState::Completed}
+    };
+    first.ProposedSnapshot.ReferenceAliases = {
+        {2, std::nullopt, true},
+        {1, GameId(1, 0x900), false}
+    };
+
+    auto reordered = first;
+    reordered.ProposedSnapshot.CompletedStages = {10, 20};
+    std::reverse(reordered.ProposedSnapshot.Objectives.begin(), reordered.ProposedSnapshot.Objectives.end());
+    std::reverse(reordered.ProposedSnapshot.ReferenceAliases.begin(), reordered.ProposedSnapshot.ReferenceAliases.end());
+
+    REQUIRE(state.Apply(first).Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(state.Apply(reordered).Status == PartyQuestApplyStatus::Duplicate);
+    REQUIRE(state.GetJournal().size() == 1);
+    REQUIRE(state.GetJournal().front().Transaction.ProposedSnapshot.CompletedStages == std::vector<uint16_t>{10, 20});
+}
+
 TEST_CASE("Party quest state rejects transaction id reuse with another payload", "[quest.party-state]")
 {
     PartyQuestState state;
