@@ -108,3 +108,25 @@ struct NotifyPartyQuestRepairPlan final : ServerMessage
     PartyQuestRepairPlan Plan;
     bool IsValid{true};
 };
+
+/** Canonical accepted transition broadcast to every connected campaign client. */
+struct NotifyPartyQuestCanonicalUpdate final : ServerMessage
+{
+    static constexpr ServerOpcode Opcode = kNotifyPartyQuestCanonicalUpdate;
+
+    NotifyPartyQuestCanonicalUpdate()
+        : ServerMessage(Opcode)
+    {
+    }
+
+    void SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept override;
+    void DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept override;
+
+    bool operator==(const NotifyPartyQuestCanonicalUpdate& acRhs) const noexcept;
+
+    uint64_t TransactionId{};
+    uint64_t WorldRevision{};
+    uint32_t InitiatorPlayerId{};
+    QuestSnapshot CanonicalSnapshot;
+    bool IsValid{true};
+};
