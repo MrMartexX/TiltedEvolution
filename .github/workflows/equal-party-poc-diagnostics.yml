@@ -6,7 +6,9 @@ on:
       - dev
     paths:
       - "Code/encoding/Structs/Skyrim/QuestSnapshot.*"
+      - "Code/encoding/Structs/Skyrim/PartyQuestState.*"
       - "Code/tests/quest_snapshot.cpp"
+      - "Code/tests/party_quest_state.cpp"
       - "Code/client/Services/QuestSnapshotCollector.h"
       - "Code/client/Services/Generic/QuestSnapshotCollector.cpp"
       - "Code/client/Services/Generic/QuestService.cpp"
@@ -42,7 +44,7 @@ jobs:
           timeout 25m xmake config --arch=x64 --mode=debug --yes 2>&1 | tee -a poc-config.log
           exit 0
 
-      - name: Build snapshot tests
+      - name: Build quest state tests
         id: build
         shell: bash
         run: |
