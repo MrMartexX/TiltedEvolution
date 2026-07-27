@@ -120,5 +120,6 @@ enum ServerOpcode : unsigned char
     kNotifySetTimeResult,
     kNotifyPartyQuestTransactionResult,
     kNotifyPartyQuestRepairPlan,
+    kNotifyPartyQuestCanonicalUpdate,
     kServerOpcodeMax
 };
