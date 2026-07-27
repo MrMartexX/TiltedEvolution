@@ -67,6 +67,7 @@ public:
     [[nodiscard]] const QuestSnapshot* FindQuest(const GameId& acQuestId) const noexcept;
     [[nodiscard]] uint64_t GetWorldRevision() const noexcept { return m_worldRevision; }
     [[nodiscard]] size_t GetQuestCount() const noexcept { return m_quests.size(); }
+    [[nodiscard]] const std::unordered_map<GameId, QuestSnapshot>& GetQuests() const noexcept { return m_quests; }
     [[nodiscard]] const std::vector<PartyQuestJournalEntry>& GetJournal() const noexcept { return m_journal; }
 
 private:
