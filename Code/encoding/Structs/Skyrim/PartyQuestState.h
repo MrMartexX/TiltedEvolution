@@ -21,7 +21,8 @@ struct PartyQuestTransaction
     uint64_t ExpectedQuestRevision{};
     QuestSnapshot ProposedSnapshot;
 
-    bool operator==(const PartyQuestTransaction&) const noexcept = default;
+    /** Compares semantic canonical payloads, not container insertion order. */
+    bool operator==(const PartyQuestTransaction& acRhs) const;
 };
 
 /** One accepted transaction as recorded in the campaign event journal. */
@@ -31,7 +32,7 @@ struct PartyQuestJournalEntry
     uint64_t QuestRevision{};
     PartyQuestTransaction Transaction;
 
-    bool operator==(const PartyQuestJournalEntry&) const noexcept = default;
+    bool operator==(const PartyQuestJournalEntry&) const = default;
 };
 
 enum class PartyQuestApplyStatus : uint8_t
