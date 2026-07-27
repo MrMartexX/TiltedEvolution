@@ -77,7 +77,8 @@ TEST_CASE("Coordinator correlates transaction requests and emits one canonical b
     REQUIRE(dispatch.Status == PartyQuestTransactionHandleStatus::Processed);
     REQUIRE(dispatch.Response.Result.Status == PartyQuestApplyStatus::Accepted);
     REQUIRE(dispatch.Broadcast.has_value());
-    REQUIRE(dispatch.Recipients == std::vector<uint32_t>{10, 20});
+    const std::vector<uint32_t> expectedRecipients{10, 20};
+    REQUIRE(dispatch.Recipients == expectedRecipients);
 
     auto decodedUpdate = RoundTripCoordinatorServerMessage(*dispatch.Broadcast);
     REQUIRE(decodedUpdate->IsValid);
