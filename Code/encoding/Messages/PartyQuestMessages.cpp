@@ -172,3 +172,32 @@ bool NotifyPartyQuestRepairPlan::operator==(const NotifyPartyQuestRepairPlan& ac
     return GetOpcode() == acRhs.GetOpcode() && ReportId == acRhs.ReportId &&
            PlanId == acRhs.PlanId && Plan == acRhs.Plan && IsValid == acRhs.IsValid;
 }
+
+void NotifyPartyQuestCanonicalUpdate::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
+{
+    WriteProtocolHeader(aWriter);
+    Serialization::WriteVarInt(aWriter, TransactionId);
+    Serialization::WriteVarInt(aWriter, WorldRevision);
+    Serialization::WriteVarInt(aWriter, InitiatorPlayerId);
+    PartyQuestWireCodec::SerializeQuestSnapshot(aWriter, CanonicalSnapshot);
+}
+
+void NotifyPartyQuestCanonicalUpdate::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
+{
+    ServerMessage::DeserializeRaw(aReader);
+    IsValid = ReadProtocolHeader(aReader);
+    TransactionId = Serialization::ReadVarInt(aReader);
+    WorldRevision = Serialization::ReadVarInt(aReader);
+    InitiatorPlayerId = static_cast<uint32_t>(Serialization::ReadVarInt(aReader));
+    IsValid = IsValid && TransactionId != 0 && WorldRevision != 0 && InitiatorPlayerId != 0 &&
+              PartyQuestWireCodec::DeserializeQuestSnapshot(aReader, CanonicalSnapshot) &&
+              CanonicalSnapshot.QuestId && CanonicalSnapshot.Revision != 0 &&
+              CanonicalSnapshot.InitiatorPlayerId == InitiatorPlayerId;
+}
+
+bool NotifyPartyQuestCanonicalUpdate::operator==(const NotifyPartyQuestCanonicalUpdate& acRhs) const noexcept
+{
+    return GetOpcode() == acRhs.GetOpcode() && TransactionId == acRhs.TransactionId &&
+           WorldRevision == acRhs.WorldRevision && InitiatorPlayerId == acRhs.InitiatorPlayerId &&
+           CanonicalSnapshot == acRhs.CanonicalSnapshot && IsValid == acRhs.IsValid;
+}
