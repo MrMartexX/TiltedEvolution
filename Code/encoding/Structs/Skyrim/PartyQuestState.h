@@ -49,6 +49,8 @@ struct PartyQuestApplyResult
     PartyQuestApplyStatus Status{PartyQuestApplyStatus::InvalidTransactionId};
     uint64_t WorldRevision{};
     uint64_t QuestRevision{};
+
+    bool operator==(const PartyQuestApplyResult&) const noexcept = default;
 };
 
 /**
