@@ -20,6 +20,8 @@ struct PartyQuestReplicaReport
 {
     uint64_t WorldRevision{};
     std::unordered_map<GameId, PartyQuestReplicaEntry> Quests;
+
+    bool operator==(const PartyQuestReplicaReport&) const noexcept = default;
 };
 
 enum class PartyQuestRepairReason : uint8_t
@@ -57,6 +59,8 @@ struct PartyQuestRepairPlan
     uint64_t BaseClientWorldRevision{};
     uint64_t TargetWorldRevision{};
     std::vector<PartyQuestRepairItem> Items;
+
+    bool operator==(const PartyQuestRepairPlan&) const noexcept = default;
 };
 
 class PartyQuestRepairPlanner final
