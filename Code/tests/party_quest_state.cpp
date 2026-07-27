@@ -2,6 +2,8 @@
 
 #include <catch2/catch.hpp>
 
+#include <algorithm>
+
 namespace
 {
 QuestSnapshot BuildQuestSnapshot(GameId aQuestId, uint16_t aStage)
@@ -92,7 +94,8 @@ TEST_CASE("Party quest transaction identity ignores unordered collection inserti
     REQUIRE(state.Apply(first).Status == PartyQuestApplyStatus::Accepted);
     REQUIRE(state.Apply(reordered).Status == PartyQuestApplyStatus::Duplicate);
     REQUIRE(state.GetJournal().size() == 1);
-    REQUIRE(state.GetJournal().front().Transaction.ProposedSnapshot.CompletedStages == std::vector<uint16_t>{10, 20});
+    const std::vector<uint16_t> expectedStages{10, 20};
+    REQUIRE(state.GetJournal().front().Transaction.ProposedSnapshot.CompletedStages == expectedStages);
 }
 
 TEST_CASE("Party quest state rejects transaction id reuse with another payload", "[quest.party-state]")
