@@ -7,8 +7,10 @@ on:
     paths:
       - "Code/encoding/Structs/Skyrim/QuestSnapshot.*"
       - "Code/encoding/Structs/Skyrim/PartyQuestState.*"
+      - "Code/encoding/Structs/Skyrim/PartyQuestStatePersistence.*"
       - "Code/tests/quest_snapshot.cpp"
       - "Code/tests/party_quest_state.cpp"
+      - "Code/tests/party_quest_persistence.cpp"
       - "Code/client/Services/QuestSnapshotCollector.h"
       - "Code/client/Services/Generic/QuestSnapshotCollector.cpp"
       - "Code/client/Services/Generic/QuestService.cpp"
