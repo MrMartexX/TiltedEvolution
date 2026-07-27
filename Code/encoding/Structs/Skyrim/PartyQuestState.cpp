@@ -33,6 +33,7 @@ PartyQuestApplyResult PartyQuestState::Apply(const PartyQuestTransaction& acTran
 
     QuestSnapshot canonicalSnapshot = acTransaction.ProposedSnapshot;
     canonicalSnapshot.Revision = currentQuestRevision + 1;
+    canonicalSnapshot.InitiatorPlayerId = acTransaction.InitiatorPlayerId;
     canonicalSnapshot.Canonicalize();
 
     ++m_worldRevision;
