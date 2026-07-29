@@ -324,3 +324,86 @@ const PartyQuestCoordinatorSessionInfo* PartyQuestProtocolCoordinator::FindSessi
     const auto it = m_sessions.find(aClientId);
     return it != m_sessions.end() ? &it->second.Info : nullptr;
 }
+
+RequestPartyQuestReplicaReport PartyQuestClientSession::BuildReplicaReport(uint64_t aReportId, bool aReconnect) const
+{
+    RequestPartyQuestReplicaReport request;
+    request.ReportId = aReportId;
+    request.IsReconnect = aReconnect;
+    request.Report = m_replica.BuildReport();
+    request.IsValid = aReportId != 0;
+    return request;
+}
+
+PartyQuestClientCanonicalStatus PartyQuestClientSession::HandleCanonicalUpdate(
+    const NotifyPartyQuestCanonicalUpdate& acUpdate)
+{
+    if (!acUpdate.IsValid || acUpdate.TransactionId == 0 || acUpdate.WorldRevision == 0 ||
+        acUpdate.InitiatorPlayerId == 0 || !acUpdate.CanonicalSnapshot.QuestId ||
+        acUpdate.CanonicalSnapshot.Revision == 0 ||
+        acUpdate.CanonicalSnapshot.InitiatorPlayerId != acUpdate.InitiatorPlayerId)
+    {
+        return PartyQuestClientCanonicalStatus::InvalidMessage;
+    }
+
+    const auto cachedIt = m_canonicalUpdates.find(acUpdate.TransactionId);
+    if (cachedIt != m_canonicalUpdates.end())
+    {
+        return cachedIt->second.Update == acUpdate
+            ? PartyQuestClientCanonicalStatus::Duplicate
+            : PartyQuestClientCanonicalStatus::TransactionConflict;
+    }
+
+    if (acUpdate.WorldRevision != m_replica.GetWorldRevision() + 1)
+        return PartyQuestClientCanonicalStatus::RevisionGap;
+
+    const uint64_t currentQuestRevision = GetReplicaQuestRevision(m_replica, acUpdate.CanonicalSnapshot.QuestId);
+    if (acUpdate.CanonicalSnapshot.Revision != currentQuestRevision + 1)
+        return PartyQuestClientCanonicalStatus::RevisionGap;
+
+    m_replica.ObserveLocalSnapshot(acUpdate.CanonicalSnapshot);
+    m_replica.SetObservedWorldRevision(acUpdate.WorldRevision);
+    m_canonicalUpdates.emplace(acUpdate.TransactionId, CanonicalCacheEntry{acUpdate});
+    return PartyQuestClientCanonicalStatus::Applied;
+}
+
+PartyQuestClientRepairResult PartyQuestClientSession::HandleRepairPlan(const NotifyPartyQuestRepairPlan& acPlan)
+{
+    PartyQuestClientRepairResult result;
+    result.Ack.PlanId = acPlan.PlanId;
+
+    const auto cachedIt = m_repairs.find(acPlan.PlanId);
+    if (cachedIt != m_repairs.end())
+    {
+        if (cachedIt->second.Plan == acPlan)
+        {
+            result.Status = PartyQuestClientRepairStatus::Duplicate;
+            result.Ack = cachedIt->second.Ack;
+            return result;
+        }
+
+        result.Status = PartyQuestClientRepairStatus::PlanConflict;
+        result.Ack.ApplyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
+        result.Ack.PostApplyReport = m_replica.BuildReport();
+        result.Ack.IsValid = acPlan.PlanId != 0;
+        return result;
+    }
+
+    PartyQuestReplicaApplyStatus applyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
+    if (acPlan.IsValid && acPlan.ReportId != 0 && acPlan.PlanId != 0)
+        applyStatus = m_replica.Apply(acPlan.Plan);
+
+    result.Status = ToClientRepairStatus(applyStatus);
+    result.Ack.ApplyStatus = applyStatus;
+    result.Ack.PostApplyReport = m_replica.BuildReport();
+    result.Ack.IsValid = acPlan.IsValid && acPlan.PlanId != 0;
+
+    if (acPlan.PlanId != 0)
+    {
+        m_repairs.emplace(
+            acPlan.PlanId,
+            RepairCacheEntry{acPlan, result.Ack, result.Status});
+    }
+
+    return result;
+}
