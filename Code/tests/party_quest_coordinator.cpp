@@ -225,3 +225,109 @@ TEST_CASE("Coordinator rejects spoofed initiators and repairs a client after a b
     unknownAck.PostApplyReport = client8.GetReplica().BuildReport();
     REQUIRE(coordinator.HandleRepairAck(8, unknownAck).Status == PartyQuestAckHandleStatus::UnknownPlan);
 }
+
+TEST_CASE("Client submission queue suppresses canonical-equivalent and duplicate observations", "[quest.party-state.coordinator.submission]")
+{
+    PartyQuestClientSubmissionQueue queue;
+    PartyQuestReplica replica;
+    const GameId questId(5, 0x4000);
+
+    QuestSnapshot canonical = BuildCoordinatorSnapshot(questId, 20);
+    canonical.Revision = 7;
+    canonical.InitiatorPlayerId = 42;
+    replica.ObserveLocalSnapshot(canonical);
+    replica.SetObservedWorldRevision(7);
+
+    QuestSnapshot localEquivalent = BuildCoordinatorSnapshot(questId, 20);
+    const auto duplicateCanonical = queue.Observe(localEquivalent, replica);
+    REQUIRE(duplicateCanonical.Status == PartyQuestClientSubmissionStatus::Duplicate);
+    REQUIRE_FALSE(duplicateCanonical.ReadySnapshot.has_value());
+
+    QuestSnapshot changed = BuildCoordinatorSnapshot(questId, 30);
+    const auto ready = queue.Observe(changed, replica);
+    REQUIRE(ready.Status == PartyQuestClientSubmissionStatus::Ready);
+    REQUIRE(ready.ReadySnapshot.has_value());
+    REQUIRE(queue.MarkInFlight(7000, *ready.ReadySnapshot));
+
+    const auto duplicateInFlight = queue.Observe(changed, replica);
+    REQUIRE(duplicateInFlight.Status == PartyQuestClientSubmissionStatus::Duplicate);
+    REQUIRE(queue.GetInFlightCount() == 1);
+    REQUIRE(queue.GetQueuedCount() == 0);
+}
+
+TEST_CASE("Client submission queue coalesces rapid stages to the latest snapshot", "[quest.party-state.coordinator.submission]")
+{
+    PartyQuestClientSubmissionQueue queue;
+    PartyQuestReplica replica;
+    const GameId questId(6, 0x5000);
+
+    const QuestSnapshot first = BuildCoordinatorSnapshot(questId, 10);
+    const auto ready = queue.Observe(first, replica);
+    REQUIRE(ready.Status == PartyQuestClientSubmissionStatus::Ready);
+    REQUIRE(queue.MarkInFlight(8000, *ready.ReadySnapshot));
+
+    const QuestSnapshot second = BuildCoordinatorSnapshot(questId, 20);
+    REQUIRE(queue.Observe(second, replica).Status == PartyQuestClientSubmissionStatus::Queued);
+
+    const QuestSnapshot latest = BuildCoordinatorSnapshot(questId, 40);
+    REQUIRE(queue.Observe(latest, replica).Status == PartyQuestClientSubmissionStatus::ReplacedQueued);
+    REQUIRE(queue.Observe(latest, replica).Status == PartyQuestClientSubmissionStatus::Duplicate);
+    REQUIRE(queue.GetInFlightCount() == 1);
+    REQUIRE(queue.GetQueuedCount() == 1);
+
+    QuestSnapshot firstCanonical = first;
+    firstCanonical.Revision = 1;
+    firstCanonical.InitiatorPlayerId = 1;
+    const auto coalesced = queue.Complete(8000, firstCanonical);
+    REQUIRE(coalesced.has_value());
+    REQUIRE(coalesced->CurrentStage == 40);
+    REQUIRE(queue.GetInFlightCount() == 0);
+    REQUIRE(queue.GetQueuedCount() == 0);
+
+    REQUIRE(queue.MarkInFlight(8001, *coalesced));
+    QuestSnapshot latestCanonical = latest;
+    latestCanonical.Revision = 2;
+    latestCanonical.InitiatorPlayerId = 1;
+    REQUIRE_FALSE(queue.Complete(8001, latestCanonical).has_value());
+    REQUIRE(queue.GetInFlightCount() == 0);
+}
+
+TEST_CASE("Rejected and disconnected submissions wait for replica repair before retry", "[quest.party-state.coordinator.submission]")
+{
+    PartyQuestClientSubmissionQueue queue;
+    PartyQuestReplica replica;
+    const GameId questId(7, 0x6000);
+
+    const QuestSnapshot first = BuildCoordinatorSnapshot(questId, 10);
+    const auto ready = queue.Observe(first, replica);
+    REQUIRE(queue.MarkInFlight(9000, *ready.ReadySnapshot));
+
+    const QuestSnapshot newer = BuildCoordinatorSnapshot(questId, 20);
+    REQUIRE(queue.Observe(newer, replica).Status == PartyQuestClientSubmissionStatus::Queued);
+    REQUIRE(queue.Reject(9000));
+    REQUIRE(queue.GetInFlightCount() == 0);
+    REQUIRE(queue.GetQueuedCount() == 1);
+
+    QuestSnapshot repairedCanonical = newer;
+    repairedCanonical.Revision = 1;
+    repairedCanonical.InitiatorPlayerId = 9;
+    replica.ObserveLocalSnapshot(repairedCanonical);
+    replica.SetObservedWorldRevision(1);
+
+    REQUIRE(queue.TakeReady(replica).empty());
+    REQUIRE(queue.GetQueuedCount() == 0);
+
+    const QuestSnapshot afterRepair = BuildCoordinatorSnapshot(questId, 30);
+    const auto next = queue.Observe(afterRepair, replica);
+    REQUIRE(next.Status == PartyQuestClientSubmissionStatus::Ready);
+    REQUIRE(queue.MarkInFlight(9001, *next.ReadySnapshot));
+
+    queue.RequeueInFlight();
+    REQUIRE(queue.GetInFlightCount() == 0);
+    REQUIRE(queue.GetQueuedCount() == 1);
+
+    const auto retry = queue.TakeReady(replica);
+    REQUIRE(retry.size() == 1);
+    REQUIRE(retry.front().CurrentStage == 30);
+    REQUIRE(queue.GetQueuedCount() == 0);
+}
