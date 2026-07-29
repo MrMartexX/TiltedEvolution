@@ -12,15 +12,6 @@ uint64_t ComputeSemanticDigest(QuestSnapshot aSnapshot)
     return aSnapshot.ComputeDigest();
 }
 
-PartyQuestClientSubmissionQueue::SubmissionSnapshot BuildSubmissionSnapshot(const QuestSnapshot& acSnapshot)
-{
-    PartyQuestClientSubmissionQueue::SubmissionSnapshot submission;
-    submission.Snapshot = acSnapshot;
-    submission.Snapshot.Canonicalize();
-    submission.SemanticDigest = ComputeSemanticDigest(submission.Snapshot);
-    return submission;
-}
-
 bool GameIdLess(const GameId& acLeft, const GameId& acRight) noexcept
 {
     if (acLeft.ModId != acRight.ModId)
@@ -38,7 +29,11 @@ PartyQuestClientSubmissionDecision PartyQuestClientSubmissionQueue::Observe(
     if (!acSnapshot.QuestId)
         return decision;
 
-    SubmissionSnapshot observed = BuildSubmissionSnapshot(acSnapshot);
+    SubmissionSnapshot observed;
+    observed.Snapshot = acSnapshot;
+    observed.Snapshot.Canonicalize();
+    observed.SemanticDigest = ComputeSemanticDigest(observed.Snapshot);
+
     QuestEntry& entry = m_quests[observed.Snapshot.QuestId];
 
     if (entry.InFlight)
@@ -97,7 +92,12 @@ bool PartyQuestClientSubmissionQueue::MarkInFlight(
     if (entry.InFlight)
         return false;
 
-    entry.InFlight = BuildSubmissionSnapshot(acSnapshot);
+    SubmissionSnapshot submission;
+    submission.Snapshot = acSnapshot;
+    submission.Snapshot.Canonicalize();
+    submission.SemanticDigest = ComputeSemanticDigest(submission.Snapshot);
+
+    entry.InFlight = std::move(submission);
     entry.Queued.reset();
     m_transactionQuests.emplace(aTransactionId, acSnapshot.QuestId);
     return true;
