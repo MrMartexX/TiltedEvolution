@@ -15,6 +15,7 @@ on:
       - "Code/encoding/Structs/Skyrim/PartyQuestRepair.*"
       - "Code/encoding/Structs/Skyrim/PartyQuestWireCodec.*"
       - "Code/encoding/Structs/Skyrim/PartyQuestProtocol.*"
+      - "Code/encoding/Structs/Skyrim/PartyQuestSubmissionQueue.*"
       - "Code/tests/quest_snapshot.cpp"
       - "Code/tests/party_quest_state.cpp"
       - "Code/tests/party_quest_persistence.cpp"
@@ -31,6 +32,10 @@ on:
       - "Code/server/Services/QuestService.cpp"
       - ".github/workflows/equal-party-poc-diagnostics.yml"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-poc-tests:
