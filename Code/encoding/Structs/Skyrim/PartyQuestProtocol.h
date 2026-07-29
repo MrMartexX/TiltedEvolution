@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <unordered_map>
 #include <vector>
@@ -14,7 +15,8 @@ enum class PartyQuestTransactionHandleStatus : uint8_t
     DuplicateRequest,
     UnknownClient,
     InvalidMessage,
-    RequestIdConflict
+    RequestIdConflict,
+    PersistenceFailure
 };
 
 struct PartyQuestTransactionDispatch
@@ -73,14 +75,23 @@ struct PartyQuestCoordinatorSessionInfo
  *
  * It owns canonical quest state, correlates requests, caches duplicate replies,
  * tracks reconnect/repair sessions, and emits canonical broadcasts. It does not
- * touch Skyrim runtime state or save files.
+ * touch Skyrim runtime state or save files directly. An optional durable commit
+ * handler can persist a candidate state before it becomes canonical.
  */
 class PartyQuestProtocolCoordinator final
 {
 public:
+    using DurableCommitHandler = std::function<bool(const PartyQuestState&)>;
+
     bool ConnectClient(uint32_t aClientId);
     bool DisconnectClient(uint32_t aClientId);
     [[nodiscard]] bool IsClientConnected(uint32_t aClientId) const noexcept;
+
+    /** Installs a pre-commit durability barrier. An empty handler disables it. */
+    void SetDurableCommitHandler(DurableCommitHandler aHandler);
+
+    /** Restores validated canonical state before any protocol session is created. */
+    [[nodiscard]] bool RestoreCanonicalState(PartyQuestState aState);
 
     [[nodiscard]] PartyQuestTransactionDispatch HandleTransaction(
         uint32_t aClientId,
@@ -132,6 +143,7 @@ private:
     [[nodiscard]] std::vector<uint32_t> BuildConnectedRecipientList() const;
 
     PartyQuestState m_state;
+    DurableCommitHandler m_durableCommitHandler;
     uint64_t m_nextPlanId{1};
     std::unordered_map<uint32_t, Session> m_sessions;
 };
