@@ -13,6 +13,7 @@
 #include <Messages/NotifyQuestUpdate.h>
 #include <Messages/PartyQuestMessages.h>
 
+#include <Structs/Skyrim/PartyQuestCampaignPersistence.h>
 #include <Structs/Skyrim/PartyQuestStatePersistence.h>
 
 #include <Setting.h>
@@ -59,6 +60,23 @@ const char* PersistenceStatusName(PartyQuestPersistenceStatus aStatus) noexcept
 
     return "unknown";
 }
+
+const char* CampaignPersistenceStatusName(PartyQuestCampaignPersistenceStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestCampaignPersistenceStatus::Success: return "success";
+    case PartyQuestCampaignPersistenceStatus::FileNotFound: return "file-not-found";
+    case PartyQuestCampaignPersistenceStatus::IoError: return "io-error";
+    case PartyQuestCampaignPersistenceStatus::InvalidMagic: return "invalid-magic";
+    case PartyQuestCampaignPersistenceStatus::UnsupportedVersion: return "unsupported-version";
+    case PartyQuestCampaignPersistenceStatus::Truncated: return "truncated";
+    case PartyQuestCampaignPersistenceStatus::ChecksumMismatch: return "checksum-mismatch";
+    case PartyQuestCampaignPersistenceStatus::InvalidData: return "invalid-data";
+    }
+
+    return "unknown";
+}
 }
 
 QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
@@ -78,7 +96,11 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
     m_partyQuestPersistenceEnabled = bEnablePartyQuestStatePersistence;
     if (!m_partyQuestPersistenceEnabled)
     {
-        spdlog::warn("PartyQuestProtocol persistence is disabled; accepted canonical state will not survive a server restart");
+        m_campaignId = PartyQuestCampaignPersistence::GenerateCampaignId();
+        spdlog::warn(
+            "PartyQuestProtocol persistence is disabled; campaign={:016X}{:016X} is ephemeral and canonical state will not survive a server restart",
+            m_campaignId.High,
+            m_campaignId.Low);
         return true;
     }
 
@@ -89,11 +111,15 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
         return false;
     }
 
+    m_partyQuestCampaignIdPath = m_partyQuestStatePath;
+    m_partyQuestCampaignIdPath += ".campaign-id";
+
+    bool hadStateArchive = false;
     auto loadResult = PartyQuestStatePersistence::Load(m_partyQuestStatePath);
     if (loadResult.Status == PartyQuestPersistenceStatus::FileNotFound)
     {
         spdlog::info(
-            "PartyQuestProtocol persistence: no archive found at '{}'; starting a new canonical campaign",
+            "PartyQuestProtocol persistence: no state archive found at '{}'; starting a new canonical campaign",
             m_partyQuestStatePath.string());
     }
     else if (loadResult.Status != PartyQuestPersistenceStatus::Success || !loadResult.State)
@@ -106,6 +132,7 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
     }
     else
     {
+        hadStateArchive = true;
         PartyQuestState restoredState = std::move(*loadResult.State);
         const uint64_t worldRevision = restoredState.GetWorldRevision();
         const size_t questCount = restoredState.GetQuestCount();
@@ -150,12 +177,87 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
             loadResult.UsedBackup);
     }
 
+    if (!InitializePartyQuestCampaignIdentity(hadStateArchive))
+        return false;
+
     m_partyQuestCoordinator.SetDurableCommitHandler(
         [this](const PartyQuestState& acState)
         {
             return PersistPartyQuestState(acState);
         });
 
+    return true;
+}
+
+bool QuestService::InitializePartyQuestCampaignIdentity(bool aHadStateArchive) noexcept
+{
+    auto loadResult = PartyQuestCampaignPersistence::Load(m_partyQuestCampaignIdPath);
+    if (loadResult.Status == PartyQuestCampaignPersistenceStatus::FileNotFound)
+    {
+        m_campaignId = PartyQuestCampaignPersistence::GenerateCampaignId();
+        const auto saveStatus = PartyQuestCampaignPersistence::SaveAtomically(
+            m_partyQuestCampaignIdPath,
+            m_campaignId);
+        if (saveStatus != PartyQuestCampaignPersistenceStatus::Success)
+        {
+            spdlog::error(
+                "PartyQuestProtocol could not create campaign identity metadata '{}': status={}; protocol messages will be rejected",
+                m_partyQuestCampaignIdPath.string(),
+                CampaignPersistenceStatusName(saveStatus));
+            return false;
+        }
+
+        spdlog::info(
+            "PartyQuestProtocol campaign identity created: campaign={:016X}{:016X} path='{}' migratedLegacyState={}",
+            m_campaignId.High,
+            m_campaignId.Low,
+            m_partyQuestCampaignIdPath.string(),
+            aHadStateArchive);
+        return true;
+    }
+
+    if (loadResult.Status != PartyQuestCampaignPersistenceStatus::Success || !loadResult.CampaignId)
+    {
+        spdlog::error(
+            "PartyQuestProtocol campaign identity load failed: path='{}' status={}; protocol messages will be rejected to avoid attaching state to a different campaign",
+            m_partyQuestCampaignIdPath.string(),
+            CampaignPersistenceStatusName(loadResult.Status));
+        return false;
+    }
+
+    m_campaignId = *loadResult.CampaignId;
+    if (loadResult.UsedBackup)
+    {
+        std::error_code removeError;
+        std::filesystem::remove(m_partyQuestCampaignIdPath, removeError);
+        if (removeError)
+        {
+            spdlog::error(
+                "PartyQuestProtocol recovered campaign identity from backup but could not remove invalid primary '{}': {}; protocol messages will be rejected",
+                m_partyQuestCampaignIdPath.string(),
+                removeError.message());
+            return false;
+        }
+
+        const auto healStatus = PartyQuestCampaignPersistence::SaveAtomically(
+            m_partyQuestCampaignIdPath,
+            m_campaignId);
+        if (healStatus != PartyQuestCampaignPersistenceStatus::Success)
+        {
+            spdlog::error(
+                "PartyQuestProtocol recovered campaign identity from backup but could not heal primary '{}': status={}; protocol messages will be rejected",
+                m_partyQuestCampaignIdPath.string(),
+                CampaignPersistenceStatusName(healStatus));
+            return false;
+        }
+    }
+
+    spdlog::info(
+        "PartyQuestProtocol campaign identity loaded: campaign={:016X}{:016X} path='{}' usedBackup={}",
+        m_campaignId.High,
+        m_campaignId.Low,
+        m_partyQuestCampaignIdPath.string(),
+        loadResult.UsedBackup);
     return true;
 }
 
@@ -177,12 +279,29 @@ bool QuestService::PersistPartyQuestState(const PartyQuestState& acState) noexce
     }
 
     spdlog::debug(
-        "PartyQuestProtocol persistence saved: path='{}' worldRevision={} quests={} journalEntries={}",
+        "PartyQuestProtocol persistence saved: campaign={:016X}{:016X} path='{}' worldRevision={} quests={} journalEntries={}",
+        m_campaignId.High,
+        m_campaignId.Low,
         m_partyQuestStatePath.string(),
         acState.GetWorldRevision(),
         acState.GetQuestCount(),
         acState.GetJournal().size());
     return true;
+}
+
+bool QuestService::IsPartyActive(uint32_t aPartyId) const noexcept
+{
+    for (Player* pPlayer : m_world.GetPlayerManager())
+    {
+        if (!pPlayer)
+            continue;
+
+        const auto& party = pPlayer->GetParty();
+        if (party.JoinedPartyId && *party.JoinedPartyId == aPartyId)
+            return true;
+    }
+
+    return false;
 }
 
 bool QuestService::PreparePartyQuestClient(Player* apPlayer, uint32_t& aPartyId) noexcept
@@ -210,18 +329,35 @@ bool QuestService::PreparePartyQuestClient(Player* apPlayer, uint32_t& aPartyId)
     {
         m_campaignPartyId = aPartyId;
         spdlog::info(
-            "PartyQuestProtocol: bound the server campaign to party {} at worldRevision {}",
+            "PartyQuestProtocol: bound campaign={:016X}{:016X} to active party {} at worldRevision {}",
+            m_campaignId.High,
+            m_campaignId.Low,
             aPartyId,
             m_partyQuestCoordinator.GetCanonicalState().GetWorldRevision());
     }
     else if (*m_campaignPartyId != aPartyId)
     {
-        spdlog::warn(
-            "PartyQuestProtocol: rejected player {} from party {}; this server campaign is bound to party {}",
-            apPlayer->GetId(),
+        const uint32_t previousPartyId = *m_campaignPartyId;
+        if (IsPartyActive(previousPartyId))
+        {
+            spdlog::warn(
+                "PartyQuestProtocol: rejected player {} from party {}; campaign={:016X}{:016X} currently has active party {}",
+                apPlayer->GetId(),
+                aPartyId,
+                m_campaignId.High,
+                m_campaignId.Low,
+                previousPartyId);
+            return false;
+        }
+
+        m_campaignPartyId = aPartyId;
+        spdlog::info(
+            "PartyQuestProtocol: rebound campaign={:016X}{:016X} from inactive party {} to recreated party {} at worldRevision {}",
+            m_campaignId.High,
+            m_campaignId.Low,
+            previousPartyId,
             aPartyId,
-            *m_campaignPartyId);
-        return false;
+            m_partyQuestCoordinator.GetCanonicalState().GetWorldRevision());
     }
 
     if (!m_partyQuestCoordinator.IsClientConnected(apPlayer->GetId()))
@@ -266,7 +402,10 @@ void QuestService::OnPartyQuestTransaction(const PacketEvent<RequestPartyQuestTr
         SendCanonicalUpdateToCampaign(*dispatch.Broadcast, dispatch.Recipients, partyId);
 
     spdlog::info(
-        "PartyQuestProtocol transaction: player={} request={} transaction={} status={} apply={} worldRevision={} questRevision={} broadcastRecipients={}",
+        "PartyQuestProtocol transaction: campaign={:016X}{:016X} party={} player={} request={} transaction={} status={} apply={} worldRevision={} questRevision={} broadcastRecipients={}",
+        m_campaignId.High,
+        m_campaignId.Low,
+        partyId,
         pPlayer->GetId(),
         acMessage.Packet.RequestId,
         acMessage.Packet.Transaction.TransactionId,
@@ -289,7 +428,10 @@ void QuestService::OnPartyQuestReplicaReport(const PacketEvent<RequestPartyQuest
         pPlayer->Send(*dispatch.Response);
 
     spdlog::info(
-        "PartyQuestProtocol report: player={} report={} reconnect={} status={} clientWorldRevision={} plan={} planStatus={} items={}",
+        "PartyQuestProtocol report: campaign={:016X}{:016X} party={} player={} report={} reconnect={} status={} clientWorldRevision={} plan={} planStatus={} items={}",
+        m_campaignId.High,
+        m_campaignId.Low,
+        partyId,
         pPlayer->GetId(),
         acMessage.Packet.ReportId,
         acMessage.Packet.IsReconnect,
@@ -309,7 +451,10 @@ void QuestService::OnPartyQuestRepairAck(const PacketEvent<RequestPartyQuestRepa
 
     const auto result = m_partyQuestCoordinator.HandleRepairAck(pPlayer->GetId(), acMessage.Packet);
     spdlog::info(
-        "PartyQuestProtocol repair ack: player={} plan={} applyStatus={} status={} verification={}",
+        "PartyQuestProtocol repair ack: campaign={:016X}{:016X} party={} player={} plan={} applyStatus={} status={} verification={}",
+        m_campaignId.High,
+        m_campaignId.Low,
+        partyId,
         pPlayer->GetId(),
         acMessage.Packet.PlanId,
         static_cast<uint8_t>(acMessage.Packet.ApplyStatus),
@@ -345,7 +490,7 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
         if (!bEnableMiscQuestSync)
             return;
         spdlog::info("{}: syncing type none/misc quest to party, gameId {:X} questStage {} questStatus {} questType {}",
-                     __FUNCTION__, notify.Id.LogFormat(), notify.Stage, notify.Status, notify.ClientQuestType);
+                     __FUNCTION__, notify.Id.LogFormat(), message.Stage, message.Status, message.ClientQuestType);
     }
 
     if (message.Status == RequestQuestUpdate::Started || message.Status == RequestQuestUpdate::StageUpdate)
