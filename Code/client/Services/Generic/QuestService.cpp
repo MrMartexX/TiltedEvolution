@@ -68,26 +68,33 @@ void QuestService::OnConnected(const ConnectedEvent& acEvent) noexcept
     if (!samePlayer)
     {
         m_partyQuestSession.emplace(acEvent.PlayerId);
+        m_partyQuestSubmissions.Clear();
+        m_requestTransactions.clear();
         m_nextRequestSequence = 1;
         m_nextReportSequence = 1;
         m_nextTransactionSequence = 1;
     }
 
     spdlog::info(
-        "PartyQuestProtocol client connected: player={} generation={} retainedReplica={}",
+        "PartyQuestProtocol client connected: player={} generation={} retainedReplica={} queuedSubmissions={}",
         m_localPlayerId,
         m_connectionGeneration,
-        samePlayer);
+        samePlayer,
+        m_partyQuestSubmissions.GetQueuedCount());
 
     // The legacy quest-selection behavior remains intentionally disabled.
 }
 
 void QuestService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
+    m_partyQuestSubmissions.RequeueInFlight();
+    m_requestTransactions.clear();
+
     spdlog::info(
-        "PartyQuestProtocol client disconnected: player={} retainedWorldRevision={}",
+        "PartyQuestProtocol client disconnected: player={} retainedWorldRevision={} queuedSubmissions={}",
         m_localPlayerId,
-        m_partyQuestSession ? m_partyQuestSession->GetReplica().GetWorldRevision() : 0);
+        m_partyQuestSession ? m_partyQuestSession->GetReplica().GetWorldRevision() : 0,
+        m_partyQuestSubmissions.GetQueuedCount());
 }
 
 void QuestService::OnPartyJoined(const PartyJoinedEvent&) noexcept
@@ -97,10 +104,14 @@ void QuestService::OnPartyJoined(const PartyJoinedEvent&) noexcept
 
 void QuestService::OnPartyLeft(const PartyLeftEvent&) noexcept
 {
+    m_partyQuestSubmissions.RequeueInFlight();
+    m_requestTransactions.clear();
+
     spdlog::info(
-        "PartyQuestProtocol party left: player={} retainedWorldRevision={}",
+        "PartyQuestProtocol party left: player={} retainedWorldRevision={} queuedSubmissions={}",
         m_localPlayerId,
-        m_partyQuestSession ? m_partyQuestSession->GetReplica().GetWorldRevision() : 0);
+        m_partyQuestSession ? m_partyQuestSession->GetReplica().GetWorldRevision() : 0,
+        m_partyQuestSubmissions.GetQueuedCount());
 }
 
 void QuestService::SendPartyQuestReplicaReport(bool aReconnect, const char* acReason) noexcept
@@ -113,13 +124,73 @@ void QuestService::SendPartyQuestReplicaReport(bool aReconnect, const char* acRe
     m_world.GetTransport().Send(report);
 
     spdlog::info(
-        "PartyQuestProtocol report sent: reason={} player={} report={} reconnect={} worldRevision={} quests={}",
+        "PartyQuestProtocol report sent: reason={} player={} report={} reconnect={} worldRevision={} quests={} queuedSubmissions={}",
         acReason,
         m_localPlayerId,
         report.ReportId,
         report.IsReconnect,
         report.Report.WorldRevision,
-        report.Report.Quests.size());
+        report.Report.Quests.size(),
+        m_partyQuestSubmissions.GetQueuedCount());
+}
+
+void QuestService::SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, const char* acReason) noexcept
+{
+    if (!m_partyQuestSession || m_localPlayerId == 0 || !m_world.GetPartyService().IsInParty())
+        return;
+
+    const QuestSnapshot* pKnownSnapshot = m_partyQuestSession->GetReplica().FindQuest(acSnapshot.QuestId);
+
+    RequestPartyQuestTransaction request;
+    request.RequestId = AllocateScopedId(m_nextRequestSequence);
+    request.Transaction.TransactionId = AllocateScopedId(m_nextTransactionSequence);
+    request.Transaction.InitiatorPlayerId = m_localPlayerId;
+    request.Transaction.QuestId = acSnapshot.QuestId;
+    request.Transaction.ExpectedQuestRevision = pKnownSnapshot ? pKnownSnapshot->Revision : 0;
+    request.Transaction.ProposedSnapshot = acSnapshot;
+
+    if (!m_partyQuestSubmissions.MarkInFlight(request.Transaction.TransactionId, acSnapshot))
+    {
+        spdlog::warn(
+            "PartyQuestProtocol transaction not sent: quest={:016X} transaction={} already has an in-flight submission",
+            acSnapshot.QuestId.LogFormat(),
+            request.Transaction.TransactionId);
+        return;
+    }
+
+    m_requestTransactions.emplace(request.RequestId, request.Transaction.TransactionId);
+    m_world.GetTransport().Send(request);
+
+    spdlog::info(
+        "PartyQuestProtocol transaction sent: reason={} player={} request={} transaction={} quest={:016X} expectedRevision={} stage={} digest={:016X} inFlight={} queued={}",
+        acReason,
+        m_localPlayerId,
+        request.RequestId,
+        request.Transaction.TransactionId,
+        request.Transaction.QuestId.LogFormat(),
+        request.Transaction.ExpectedQuestRevision,
+        request.Transaction.ProposedSnapshot.CurrentStage,
+        request.Transaction.ProposedSnapshot.ComputeDigest(),
+        m_partyQuestSubmissions.GetInFlightCount(),
+        m_partyQuestSubmissions.GetQueuedCount());
+}
+
+void QuestService::FlushQueuedPartyQuestSnapshots(const char* acReason) noexcept
+{
+    if (!m_partyQuestSession || m_localPlayerId == 0 || !m_world.GetPartyService().IsInParty())
+        return;
+
+    auto ready = m_partyQuestSubmissions.TakeReady(m_partyQuestSession->GetReplica());
+    if (!ready.empty())
+    {
+        spdlog::info(
+            "PartyQuestProtocol flushing queued snapshots: reason={} count={}",
+            acReason,
+            ready.size());
+    }
+
+    for (const QuestSnapshot& snapshot : ready)
+        SubmitPartyQuestSnapshot(snapshot, acReason);
 }
 
 void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const char* acReason) noexcept
@@ -137,28 +208,36 @@ void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const
     if (!m_partyQuestSession || m_localPlayerId == 0 || !m_world.GetPartyService().IsInParty())
         return;
 
-    const QuestSnapshot* pKnownSnapshot = m_partyQuestSession->GetReplica().FindQuest(snapshot->QuestId);
+    const PartyQuestClientSubmissionDecision decision =
+        m_partyQuestSubmissions.Observe(*snapshot, m_partyQuestSession->GetReplica());
 
-    RequestPartyQuestTransaction request;
-    request.RequestId = AllocateScopedId(m_nextRequestSequence);
-    request.Transaction.TransactionId = AllocateScopedId(m_nextTransactionSequence);
-    request.Transaction.InitiatorPlayerId = m_localPlayerId;
-    request.Transaction.QuestId = snapshot->QuestId;
-    request.Transaction.ExpectedQuestRevision = pKnownSnapshot ? pKnownSnapshot->Revision : 0;
-    request.Transaction.ProposedSnapshot = *snapshot;
-
-    m_world.GetTransport().Send(request);
-
-    spdlog::info(
-        "PartyQuestProtocol transaction sent: reason={} player={} request={} transaction={} quest={:016X} expectedRevision={} stage={} digest={:016X}",
-        acReason,
-        m_localPlayerId,
-        request.RequestId,
-        request.Transaction.TransactionId,
-        request.Transaction.QuestId.LogFormat(),
-        request.Transaction.ExpectedQuestRevision,
-        request.Transaction.ProposedSnapshot.CurrentStage,
-        request.Transaction.ProposedSnapshot.ComputeDigest());
+    switch (decision.Status)
+    {
+    case PartyQuestClientSubmissionStatus::Ready:
+        if (decision.ReadySnapshot)
+            SubmitPartyQuestSnapshot(*decision.ReadySnapshot, acReason);
+        break;
+    case PartyQuestClientSubmissionStatus::Queued:
+    case PartyQuestClientSubmissionStatus::ReplacedQueued:
+        spdlog::info(
+            "PartyQuestProtocol snapshot coalesced: reason={} quest={:016X} stage={} status={} queued={}",
+            acReason,
+            snapshot->QuestId.LogFormat(),
+            snapshot->CurrentStage,
+            static_cast<unsigned>(decision.Status),
+            m_partyQuestSubmissions.GetQueuedCount());
+        break;
+    case PartyQuestClientSubmissionStatus::Duplicate:
+        spdlog::debug(
+            "PartyQuestProtocol duplicate snapshot suppressed: reason={} quest={:016X} stage={}",
+            acReason,
+            snapshot->QuestId.LogFormat(),
+            snapshot->CurrentStage);
+        break;
+    case PartyQuestClientSubmissionStatus::InvalidSnapshot:
+        spdlog::warn("PartyQuestProtocol invalid local snapshot suppressed: reason={}", acReason);
+        break;
+    }
 }
 
 void QuestService::OnPartyQuestTransactionResult(const NotifyPartyQuestTransactionResult& acResult) noexcept
@@ -172,12 +251,33 @@ void QuestService::OnPartyQuestTransactionResult(const NotifyPartyQuestTransacti
         acResult.Result.QuestRevision,
         acResult.CanonicalSnapshot.has_value());
 
+    uint64_t transactionId{};
+    const auto requestIt = m_requestTransactions.find(acResult.RequestId);
+    if (requestIt != m_requestTransactions.end())
+    {
+        transactionId = requestIt->second;
+        m_requestTransactions.erase(requestIt);
+    }
+
     if (!acResult.IsValid)
+    {
+        if (transactionId != 0)
+            m_partyQuestSubmissions.Reject(transactionId);
+        SendPartyQuestReplicaReport(false, "invalid-transaction-result");
+        return;
+    }
+
+    if (acResult.Result.Status == PartyQuestApplyStatus::Accepted)
         return;
 
-    if (acResult.Result.Status == PartyQuestApplyStatus::RevisionMismatch ||
+    if (transactionId != 0)
+        m_partyQuestSubmissions.Reject(transactionId);
+
+    if (acResult.Result.Status == PartyQuestApplyStatus::Duplicate ||
+        acResult.Result.Status == PartyQuestApplyStatus::RevisionMismatch ||
         acResult.Result.Status == PartyQuestApplyStatus::TransactionConflict ||
-        acResult.Result.Status == PartyQuestApplyStatus::QuestIdMismatch)
+        acResult.Result.Status == PartyQuestApplyStatus::QuestIdMismatch ||
+        acResult.Result.Status == PartyQuestApplyStatus::InvalidTransactionId)
     {
         SendPartyQuestReplicaReport(false, "transaction-rejected");
     }
@@ -202,6 +302,13 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
         static_cast<unsigned>(result.Status),
         static_cast<unsigned>(result.Ack.ApplyStatus),
         result.Ack.PostApplyReport.WorldRevision);
+
+    if (result.Ack.IsValid &&
+        (result.Ack.ApplyStatus == PartyQuestReplicaApplyStatus::Applied ||
+         result.Ack.ApplyStatus == PartyQuestReplicaApplyStatus::NoChanges))
+    {
+        FlushQueuedPartyQuestSnapshots("after-repair");
+    }
 }
 
 void QuestService::OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUpdate& acUpdate) noexcept
@@ -221,9 +328,22 @@ void QuestService::OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUp
         acUpdate.CanonicalSnapshot.CurrentStage,
         acUpdate.InitiatorPlayerId);
 
+    if (status == PartyQuestClientCanonicalStatus::Applied ||
+        status == PartyQuestClientCanonicalStatus::Duplicate)
+    {
+        const auto ready = m_partyQuestSubmissions.Complete(
+            acUpdate.TransactionId,
+            acUpdate.CanonicalSnapshot);
+        if (ready)
+            SubmitPartyQuestSnapshot(*ready, "coalesced-after-canonical");
+        return;
+    }
+
     if (status == PartyQuestClientCanonicalStatus::RevisionGap ||
         status == PartyQuestClientCanonicalStatus::TransactionConflict)
     {
+        m_partyQuestSubmissions.RequeueInFlight();
+        m_requestTransactions.clear();
         SendPartyQuestReplicaReport(false, "canonical-gap");
     }
 }
