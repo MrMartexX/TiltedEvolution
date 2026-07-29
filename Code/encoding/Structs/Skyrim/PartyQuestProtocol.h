@@ -2,6 +2,7 @@
 
 #include <Messages/PartyQuestMessages.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
@@ -195,4 +196,63 @@ private:
     PartyQuestReplica m_replica;
     std::unordered_map<uint64_t, CanonicalCacheEntry> m_canonicalUpdates;
     std::unordered_map<uint64_t, RepairCacheEntry> m_repairs;
+};
+
+enum class PartyQuestClientSubmissionStatus : uint8_t
+{
+    Ready,
+    Queued,
+    ReplacedQueued,
+    Duplicate,
+    InvalidSnapshot
+};
+
+struct PartyQuestClientSubmissionDecision
+{
+    PartyQuestClientSubmissionStatus Status{PartyQuestClientSubmissionStatus::InvalidSnapshot};
+    std::optional<QuestSnapshot> ReadySnapshot;
+};
+
+/**
+ * Client-side per-quest submission gate.
+ *
+ * At most one transaction per quest may be in flight. Newer observations are
+ * coalesced to the latest semantic snapshot, while equivalent start/stage
+ * events and snapshots already present in the canonical replica are suppressed.
+ */
+class PartyQuestClientSubmissionQueue final
+{
+public:
+    [[nodiscard]] PartyQuestClientSubmissionDecision Observe(
+        const QuestSnapshot& acSnapshot,
+        const PartyQuestReplica& acReplica);
+
+    bool MarkInFlight(uint64_t aTransactionId, const QuestSnapshot& acSnapshot);
+    [[nodiscard]] std::optional<QuestSnapshot> Complete(
+        uint64_t aTransactionId,
+        const QuestSnapshot& acCanonicalSnapshot);
+    bool Reject(uint64_t aTransactionId);
+
+    [[nodiscard]] std::vector<QuestSnapshot> TakeReady(const PartyQuestReplica& acReplica);
+    void RequeueInFlight();
+    void Clear() noexcept;
+
+    [[nodiscard]] size_t GetInFlightCount() const noexcept;
+    [[nodiscard]] size_t GetQueuedCount() const noexcept;
+
+private:
+    struct SubmissionSnapshot
+    {
+        QuestSnapshot Snapshot;
+        uint64_t SemanticDigest{};
+    };
+
+    struct QuestEntry
+    {
+        std::optional<SubmissionSnapshot> InFlight;
+        std::optional<SubmissionSnapshot> Queued;
+    };
+
+    std::unordered_map<GameId, QuestEntry> m_quests;
+    std::unordered_map<uint64_t, GameId> m_transactionQuests;
 };
