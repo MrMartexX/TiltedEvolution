@@ -6,6 +6,7 @@
 #include <Structs/Skyrim/PartyQuestProtocol.h>
 
 #include <optional>
+#include <unordered_map>
 
 struct NotifyQuestUpdate;
 struct NotifyPartyQuestTransactionResult;
@@ -52,6 +53,8 @@ private:
     void OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUpdate& acUpdate) noexcept;
 
     void CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const char* acReason) noexcept;
+    void SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, const char* acReason) noexcept;
+    void FlushQueuedPartyQuestSnapshots(const char* acReason) noexcept;
     void SendPartyQuestReplicaReport(bool aReconnect, const char* acReason) noexcept;
     [[nodiscard]] uint64_t AllocateScopedId(uint64_t& aSequence) noexcept;
 
@@ -63,6 +66,8 @@ private:
     uint64_t m_nextReportSequence{1};
     uint64_t m_nextTransactionSequence{1};
     std::optional<PartyQuestClientSession> m_partyQuestSession;
+    PartyQuestClientSubmissionQueue m_partyQuestSubmissions;
+    std::unordered_map<uint64_t, uint64_t> m_requestTransactions;
 
     entt::scoped_connection m_joinedConnection;
     entt::scoped_connection m_disconnectedConnection;
