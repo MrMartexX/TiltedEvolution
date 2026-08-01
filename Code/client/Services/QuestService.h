@@ -56,18 +56,16 @@ private:
     void SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, const char* acReason) noexcept;
     void FlushQueuedPartyQuestSnapshots(const char* acReason) noexcept;
     void SendPartyQuestReplicaReport(bool aReconnect, const char* acReason) noexcept;
-    [[nodiscard]] uint64_t AllocateScopedId(uint64_t& aSequence) noexcept;
 
     World& m_world;
 
     uint32_t m_localPlayerId{};
     uint64_t m_connectionGeneration{};
-    uint64_t m_nextRequestSequence{1};
-    uint64_t m_nextReportSequence{1};
-    uint64_t m_nextTransactionSequence{1};
+    PartyQuestClientIdAllocator m_partyQuestIds;
     std::optional<PartyQuestClientSession> m_partyQuestSession;
     PartyQuestClientSubmissionQueue m_partyQuestSubmissions;
     std::unordered_map<uint64_t, uint64_t> m_requestTransactions;
+    bool m_partyQuestProtocolVerified{};
 
     entt::scoped_connection m_joinedConnection;
     entt::scoped_connection m_disconnectedConnection;
