@@ -1,7 +1,10 @@
 #include <Structs/Skyrim/PartyQuestProtocol.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <limits>
+#include <random>
 #include <utility>
 
 namespace
@@ -234,7 +237,8 @@ PartyQuestReportDispatch PartyQuestProtocolCoordinator::HandleReplicaReport(
     const auto cachedIt = pSession->Reports.find(acRequest.ReportId);
     if (cachedIt != pSession->Reports.end())
     {
-        if (cachedIt->second.IsReconnect == acRequest.IsReconnect &&
+        if (cachedIt->second.CampaignId == acRequest.CampaignId &&
+            cachedIt->second.IsReconnect == acRequest.IsReconnect &&
             cachedIt->second.Report == acRequest.Report)
         {
             dispatch.Status = PartyQuestReportHandleStatus::DuplicateReport;
@@ -257,7 +261,7 @@ PartyQuestReportDispatch PartyQuestProtocolCoordinator::HandleReplicaReport(
 
     pSession->Reports.emplace(
         acRequest.ReportId,
-        ReportCacheEntry{acRequest.IsReconnect, acRequest.Report, response});
+        ReportCacheEntry{acRequest.CampaignId, acRequest.IsReconnect, acRequest.Report, response});
     pSession->Plans.emplace(
         response.PlanId,
         PlanCacheEntry{acRequest.ReportId, response.Plan, std::nullopt, {}});
@@ -325,10 +329,83 @@ const PartyQuestCoordinatorSessionInfo* PartyQuestProtocolCoordinator::FindSessi
     return it != m_sessions.end() ? &it->second.Info : nullptr;
 }
 
+uint64_t PartyQuestClientIdAllocator::Mix(uint64_t aValue) noexcept
+{
+    aValue ^= aValue >> 30;
+    aValue *= 0xBF58476D1CE4E5B9ull;
+    aValue ^= aValue >> 27;
+    aValue *= 0x94D049BB133111EBull;
+    aValue ^= aValue >> 31;
+    return aValue;
+}
+
+uint64_t PartyQuestClientIdAllocator::GenerateNamespace() noexcept
+{
+    static std::atomic<uint64_t> s_counter{1};
+
+    uint64_t seed = static_cast<uint64_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    seed ^= s_counter.fetch_add(1, std::memory_order_relaxed) * 0x9E3779B97F4A7C15ull;
+
+    try
+    {
+        std::random_device random;
+        seed ^= static_cast<uint64_t>(random()) << 32;
+        seed ^= static_cast<uint64_t>(random());
+    }
+    catch (...)
+    {
+        // The timestamp and process-local atomic counter still prevent the
+        // deterministic PlayerId-based reuse that this allocator replaces.
+    }
+
+    const uint64_t generated = Mix(seed);
+    return generated != 0 ? generated : 0xD1B54A32D192ED03ull;
+}
+
+PartyQuestClientIdAllocator::PartyQuestClientIdAllocator() noexcept
+    : m_namespace(GenerateNamespace())
+{
+}
+
+PartyQuestClientIdAllocator::PartyQuestClientIdAllocator(uint64_t aNamespace) noexcept
+    : m_namespace(aNamespace != 0 ? aNamespace : GenerateNamespace())
+{
+}
+
+uint64_t PartyQuestClientIdAllocator::Allocate() noexcept
+{
+    for (;;)
+    {
+        if (m_sequence == 0)
+        {
+            m_namespace = GenerateNamespace();
+            m_sequence = 1;
+        }
+
+        const uint64_t input = m_namespace + (m_sequence++ * 0x9E3779B97F4A7C15ull);
+        const uint64_t id = Mix(input);
+        if (id != 0)
+            return id;
+    }
+}
+
+bool PartyQuestClientSession::RebindClientId(uint32_t aClientId) noexcept
+{
+    if (aClientId == 0)
+        return false;
+
+    m_clientId = aClientId;
+    m_canonicalUpdates.clear();
+    m_repairs.clear();
+    return true;
+}
+
 RequestPartyQuestReplicaReport PartyQuestClientSession::BuildReplicaReport(uint64_t aReportId, bool aReconnect) const
 {
     RequestPartyQuestReplicaReport request;
     request.ReportId = aReportId;
+    request.CampaignId = m_campaignId;
     request.IsReconnect = aReconnect;
     request.Report = m_replica.BuildReport();
     request.IsValid = aReportId != 0;
@@ -372,6 +449,23 @@ PartyQuestClientRepairResult PartyQuestClientSession::HandleRepairPlan(const Not
     PartyQuestClientRepairResult result;
     result.Ack.PlanId = acPlan.PlanId;
 
+    if (!acPlan.IsValid || !acPlan.CampaignId.IsValid() || acPlan.ReportId == 0 || acPlan.PlanId == 0)
+    {
+        result.Ack.ApplyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
+        result.Ack.PostApplyReport = m_replica.BuildReport();
+        result.Ack.IsValid = false;
+        return result;
+    }
+
+    result.CampaignChanged = m_campaignId.IsValid() && m_campaignId != acPlan.CampaignId;
+    if (result.CampaignChanged)
+    {
+        m_replica = PartyQuestReplica{};
+        m_canonicalUpdates.clear();
+        m_repairs.clear();
+    }
+    m_campaignId = acPlan.CampaignId;
+
     const auto cachedIt = m_repairs.find(acPlan.PlanId);
     if (cachedIt != m_repairs.end())
     {
@@ -385,25 +479,20 @@ PartyQuestClientRepairResult PartyQuestClientSession::HandleRepairPlan(const Not
         result.Status = PartyQuestClientRepairStatus::PlanConflict;
         result.Ack.ApplyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
         result.Ack.PostApplyReport = m_replica.BuildReport();
-        result.Ack.IsValid = acPlan.PlanId != 0;
+        result.Ack.IsValid = true;
         return result;
     }
 
-    PartyQuestReplicaApplyStatus applyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
-    if (acPlan.IsValid && acPlan.ReportId != 0 && acPlan.PlanId != 0)
-        applyStatus = m_replica.Apply(acPlan.Plan);
+    const PartyQuestReplicaApplyStatus applyStatus = m_replica.Apply(acPlan.Plan);
 
     result.Status = ToClientRepairStatus(applyStatus);
     result.Ack.ApplyStatus = applyStatus;
     result.Ack.PostApplyReport = m_replica.BuildReport();
-    result.Ack.IsValid = acPlan.IsValid && acPlan.PlanId != 0;
+    result.Ack.IsValid = true;
 
-    if (acPlan.PlanId != 0)
-    {
-        m_repairs.emplace(
-            acPlan.PlanId,
-            RepairCacheEntry{acPlan, result.Ack, result.Status});
-    }
+    m_repairs.emplace(
+        acPlan.PlanId,
+        RepairCacheEntry{acPlan, result.Ack, result.Status});
 
     return result;
 }
