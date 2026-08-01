@@ -423,14 +423,37 @@ void QuestService::OnPartyQuestReplicaReport(const PacketEvent<RequestPartyQuest
     if (!PreparePartyQuestClient(pPlayer, partyId))
         return;
 
-    const auto dispatch = m_partyQuestCoordinator.HandleReplicaReport(pPlayer->GetId(), acMessage.Packet);
+    const PartyQuestCampaignId clientCampaignId = acMessage.Packet.CampaignId;
+    const bool campaignMismatch = clientCampaignId.IsValid() && clientCampaignId != m_campaignId;
+
+    RequestPartyQuestReplicaReport request = acMessage.Packet;
+    if (campaignMismatch)
+    {
+        spdlog::warn(
+            "PartyQuestProtocol report campaign mismatch: player={} clientCampaign={:016X}{:016X} serverCampaign={:016X}{:016X}; planning repair from an empty replica",
+            pPlayer->GetId(),
+            clientCampaignId.High,
+            clientCampaignId.Low,
+            m_campaignId.High,
+            m_campaignId.Low);
+        request.CampaignId = m_campaignId;
+        request.Report = {};
+    }
+
+    auto dispatch = m_partyQuestCoordinator.HandleReplicaReport(pPlayer->GetId(), request);
     if (dispatch.Response)
+    {
+        dispatch.Response->CampaignId = m_campaignId;
         pPlayer->Send(*dispatch.Response);
+    }
 
     spdlog::info(
-        "PartyQuestProtocol report: campaign={:016X}{:016X} party={} player={} report={} reconnect={} status={} clientWorldRevision={} plan={} planStatus={} items={}",
+        "PartyQuestProtocol report: campaign={:016X}{:016X} clientCampaign={:016X}{:016X} campaignMismatch={} party={} player={} report={} reconnect={} status={} clientWorldRevision={} plan={} planStatus={} items={}",
         m_campaignId.High,
         m_campaignId.Low,
+        clientCampaignId.High,
+        clientCampaignId.Low,
+        campaignMismatch,
         partyId,
         pPlayer->GetId(),
         acMessage.Packet.ReportId,
