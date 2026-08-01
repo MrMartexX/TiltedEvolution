@@ -4,6 +4,7 @@
 #include <TiltedCore/Serialization.hpp>
 
 #include <optional>
+#include <unordered_set>
 
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
@@ -109,6 +110,7 @@ TEST_CASE("Coordinator correlates transaction requests and emits one canonical b
 
 TEST_CASE("Reconnect report repair and acknowledgement are cached and verified", "[quest.party-state.coordinator]")
 {
+    const PartyQuestCampaignId campaignId{0x1010101010101010ull, 0x2020202020202020ull};
     PartyQuestProtocolCoordinator coordinator;
     REQUIRE(coordinator.ConnectClient(1));
     REQUIRE(coordinator.ConnectClient(2));
@@ -149,14 +151,18 @@ TEST_CASE("Reconnect report repair and acknowledgement are cached and verified",
     REQUIRE(coordinator.HandleReplicaReport(2, conflictingReport).Status ==
             PartyQuestReportHandleStatus::ReportIdConflict);
 
-    const auto repair = client2.HandleRepairPlan(*planDispatch.Response);
+    NotifyPartyQuestRepairPlan deliveredPlan = *planDispatch.Response;
+    deliveredPlan.CampaignId = campaignId;
+    const auto repair = client2.HandleRepairPlan(deliveredPlan);
     REQUIRE(repair.Status == PartyQuestClientRepairStatus::Applied);
+    REQUIRE_FALSE(repair.CampaignChanged);
     REQUIRE(repair.Ack.ApplyStatus == PartyQuestReplicaApplyStatus::Applied);
 
     const auto verification = coordinator.HandleRepairAck(2, repair.Ack);
     REQUIRE(verification.Status == PartyQuestAckHandleStatus::Verified);
     REQUIRE(verification.VerificationStatus == PartyQuestRepairPlanStatus::UpToDate);
     REQUIRE(client2.GetReplica().GetWorldRevision() == coordinator.GetCanonicalState().GetWorldRevision());
+    REQUIRE(client2.GetCampaignId() == campaignId);
 
     const PartyQuestCoordinatorSessionInfo* pSession = coordinator.FindSession(2);
     REQUIRE(pSession);
@@ -173,17 +179,18 @@ TEST_CASE("Reconnect report repair and acknowledgement are cached and verified",
     conflictingAck.PostApplyReport.WorldRevision = 1;
     REQUIRE(coordinator.HandleRepairAck(2, conflictingAck).Status == PartyQuestAckHandleStatus::AckConflict);
 
-    const auto duplicatePlan = client2.HandleRepairPlan(*planDispatch.Response);
+    const auto duplicatePlan = client2.HandleRepairPlan(deliveredPlan);
     REQUIRE(duplicatePlan.Status == PartyQuestClientRepairStatus::Duplicate);
     REQUIRE(duplicatePlan.Ack == repair.Ack);
 
-    auto conflictingPlan = *planDispatch.Response;
+    auto conflictingPlan = deliveredPlan;
     ++conflictingPlan.Plan.TargetWorldRevision;
     REQUIRE(client2.HandleRepairPlan(conflictingPlan).Status == PartyQuestClientRepairStatus::PlanConflict);
 }
 
 TEST_CASE("Coordinator rejects spoofed initiators and repairs a client after a broadcast gap", "[quest.party-state.coordinator]")
 {
+    const PartyQuestCampaignId campaignId{0x3030303030303030ull, 0x4040404040404040ull};
     PartyQuestProtocolCoordinator coordinator;
     REQUIRE(coordinator.ConnectClient(7));
     REQUIRE(coordinator.ConnectClient(8));
@@ -213,7 +220,9 @@ TEST_CASE("Coordinator rejects spoofed initiators and repairs a client after a b
     REQUIRE(repairPlan.Response.has_value());
     REQUIRE(repairPlan.Response->Plan.Status == PartyQuestRepairPlanStatus::RepairRequired);
 
-    const auto repair = client8.HandleRepairPlan(*repairPlan.Response);
+    NotifyPartyQuestRepairPlan deliveredPlan = *repairPlan.Response;
+    deliveredPlan.CampaignId = campaignId;
+    const auto repair = client8.HandleRepairPlan(deliveredPlan);
     REQUIRE(repair.Status == PartyQuestClientRepairStatus::Applied);
     REQUIRE(coordinator.HandleRepairAck(8, repair.Ack).Status == PartyQuestAckHandleStatus::Verified);
     REQUIRE(client8.GetReplica().GetWorldRevision() == 2);
@@ -329,5 +338,95 @@ TEST_CASE("Rejected and disconnected submissions wait for replica repair before 
     const auto retry = queue.TakeReady(replica);
     REQUIRE(retry.size() == 1);
     REQUIRE(retry.front().CurrentStage == 30);
+    REQUIRE(queue.GetQueuedCount() == 0);
+}
+
+TEST_CASE("Client protocol ids survive transient PlayerId reuse without deterministic collisions", "[quest.party-state.coordinator.reconnect]")
+{
+    PartyQuestClientIdAllocator allocator(0xA5A5A5A5A5A5A5A5ull);
+    std::unordered_set<uint64_t> issued;
+
+    for (size_t i = 0; i < 4096; ++i)
+    {
+        const uint64_t id = allocator.Allocate();
+        REQUIRE(id != 0);
+        REQUIRE(issued.insert(id).second);
+    }
+
+    PartyQuestClientIdAllocator secondProcess(0x5A5A5A5A5A5A5A5Aull);
+    for (size_t i = 0; i < 256; ++i)
+        REQUIRE_FALSE(issued.contains(secondProcess.Allocate()));
+}
+
+TEST_CASE("Client replica survives PlayerId rebind and resets only when CampaignId changes", "[quest.party-state.coordinator.reconnect]")
+{
+    const PartyQuestCampaignId campaignA{0xAAAA, 0x1111};
+    const PartyQuestCampaignId campaignB{0xBBBB, 0x2222};
+    const GameId questA(8, 0x7000);
+    const GameId questB(9, 0x8000);
+
+    PartyQuestState serverA;
+    REQUIRE(serverA.Apply(BuildCoordinatorRequest(1, 100, 1, questA, 0, 20).Transaction).Status ==
+            PartyQuestApplyStatus::Accepted);
+
+    PartyQuestClientSession client(1);
+    NotifyPartyQuestRepairPlan initialPlan;
+    initialPlan.ReportId = 1;
+    initialPlan.PlanId = 1;
+    initialPlan.CampaignId = campaignA;
+    initialPlan.Plan = PartyQuestRepairPlanner::Build(serverA, client.GetReplica().BuildReport());
+
+    const auto initialRepair = client.HandleRepairPlan(initialPlan);
+    REQUIRE(initialRepair.Status == PartyQuestClientRepairStatus::Applied);
+    REQUIRE_FALSE(initialRepair.CampaignChanged);
+    REQUIRE(client.GetCampaignId() == campaignA);
+    REQUIRE(client.GetReplica().GetWorldRevision() == 1);
+    REQUIRE(client.GetReplica().FindQuest(questA));
+
+    REQUIRE(client.RebindClientId(2));
+    REQUIRE(client.GetClientId() == 2);
+    REQUIRE(client.GetCampaignId() == campaignA);
+    REQUIRE(client.GetReplica().GetWorldRevision() == 1);
+    REQUIRE(client.BuildReplicaReport(55, true).CampaignId == campaignA);
+
+    PartyQuestState serverB;
+    REQUIRE(serverB.Apply(BuildCoordinatorRequest(2, 200, 2, questB, 0, 30).Transaction).Status ==
+            PartyQuestApplyStatus::Accepted);
+
+    NotifyPartyQuestRepairPlan replacementPlan;
+    replacementPlan.ReportId = 2;
+    replacementPlan.PlanId = 1; // Reused server-local plan id after reconnect is valid.
+    replacementPlan.CampaignId = campaignB;
+    replacementPlan.Plan = PartyQuestRepairPlanner::Build(serverB, PartyQuestReplicaReport{});
+
+    const auto replacementRepair = client.HandleRepairPlan(replacementPlan);
+    REQUIRE(replacementRepair.Status == PartyQuestClientRepairStatus::Applied);
+    REQUIRE(replacementRepair.CampaignChanged);
+    REQUIRE(client.GetCampaignId() == campaignB);
+    REQUIRE(client.GetReplica().GetWorldRevision() == 1);
+    REQUIRE_FALSE(client.GetReplica().FindQuest(questA));
+    REQUIRE(client.GetReplica().FindQuest(questB));
+}
+
+TEST_CASE("Snapshots observed before campaign verification stay coalesced and unsent", "[quest.party-state.coordinator.submission]")
+{
+    PartyQuestClientSubmissionQueue queue;
+    PartyQuestReplica replica;
+    const GameId questId(10, 0x9000);
+
+    const QuestSnapshot first = BuildCoordinatorSnapshot(questId, 10);
+    const QuestSnapshot second = BuildCoordinatorSnapshot(questId, 20);
+    const QuestSnapshot latest = BuildCoordinatorSnapshot(questId, 40);
+
+    REQUIRE(queue.QueueLatest(first) == PartyQuestClientSubmissionStatus::Queued);
+    REQUIRE(queue.QueueLatest(second) == PartyQuestClientSubmissionStatus::ReplacedQueued);
+    REQUIRE(queue.QueueLatest(latest) == PartyQuestClientSubmissionStatus::ReplacedQueued);
+    REQUIRE(queue.QueueLatest(latest) == PartyQuestClientSubmissionStatus::Duplicate);
+    REQUIRE(queue.GetInFlightCount() == 0);
+    REQUIRE(queue.GetQueuedCount() == 1);
+
+    const auto ready = queue.TakeReady(replica);
+    REQUIRE(ready.size() == 1);
+    REQUIRE(ready.front().CurrentStage == 40);
     REQUIRE(queue.GetQueuedCount() == 0);
 }
