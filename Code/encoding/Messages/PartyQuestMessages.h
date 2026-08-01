@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Messages/Message.h>
+#include <Structs/Skyrim/PartyQuestCampaign.h>
 #include <Structs/Skyrim/PartyQuestWireCodec.h>
 
 #include <optional>
@@ -41,6 +42,7 @@ struct RequestPartyQuestReplicaReport final : ClientMessage
     bool operator==(const RequestPartyQuestReplicaReport& acRhs) const noexcept;
 
     uint64_t ReportId{};
+    PartyQuestCampaignId CampaignId;
     bool IsReconnect{};
     PartyQuestReplicaReport Report;
     bool IsValid{true};
@@ -105,6 +107,7 @@ struct NotifyPartyQuestRepairPlan final : ServerMessage
 
     uint64_t ReportId{};
     uint64_t PlanId{};
+    PartyQuestCampaignId CampaignId;
     PartyQuestRepairPlan Plan;
     bool IsValid{true};
 };
