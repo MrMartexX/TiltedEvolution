@@ -81,6 +81,33 @@ PartyQuestClientSubmissionDecision PartyQuestClientSubmissionQueue::Observe(
     return decision;
 }
 
+PartyQuestClientSubmissionStatus PartyQuestClientSubmissionQueue::QueueLatest(const QuestSnapshot& acSnapshot)
+{
+    if (!acSnapshot.QuestId)
+        return PartyQuestClientSubmissionStatus::InvalidSnapshot;
+
+    SubmissionSnapshot observed;
+    observed.Snapshot = acSnapshot;
+    observed.Snapshot.Canonicalize();
+    observed.SemanticDigest = ComputeSemanticDigest(observed.Snapshot);
+
+    QuestEntry& entry = m_quests[observed.Snapshot.QuestId];
+    if (entry.InFlight && entry.InFlight->SemanticDigest == observed.SemanticDigest)
+        return PartyQuestClientSubmissionStatus::Duplicate;
+
+    if (entry.Queued)
+    {
+        if (entry.Queued->SemanticDigest == observed.SemanticDigest)
+            return PartyQuestClientSubmissionStatus::Duplicate;
+
+        entry.Queued = std::move(observed);
+        return PartyQuestClientSubmissionStatus::ReplacedQueued;
+    }
+
+    entry.Queued = std::move(observed);
+    return PartyQuestClientSubmissionStatus::Queued;
+}
+
 bool PartyQuestClientSubmissionQueue::MarkInFlight(
     uint64_t aTransactionId,
     const QuestSnapshot& acSnapshot)
