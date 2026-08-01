@@ -94,6 +94,7 @@ UniquePtr<T> RoundTripServerMessage(const T& acMessage)
 
 TEST_CASE("Party quest protocol messages round-trip through the real factories", "[quest.party-state.protocol]")
 {
+    const PartyQuestCampaignId campaignId{0x1111222233334444ull, 0xAAAABBBBCCCCDDDDull};
     const GameId questId(3, 0x1000);
     PartyQuestState server;
     REQUIRE(server.Apply(BuildProtocolTransaction(1001, 41, questId, 0, 20)).Status == PartyQuestApplyStatus::Accepted);
@@ -107,6 +108,7 @@ TEST_CASE("Party quest protocol messages round-trip through the real factories",
 
     RequestPartyQuestReplicaReport reportRequest;
     reportRequest.ReportId = 7002;
+    reportRequest.CampaignId = campaignId;
     reportRequest.IsReconnect = true;
     reportRequest.Report = PartyQuestReplica::FromCanonical(server).BuildReport();
     auto decodedReportRequest = RoundTripClientMessage(reportRequest);
@@ -116,6 +118,7 @@ TEST_CASE("Party quest protocol messages round-trip through the real factories",
     NotifyPartyQuestRepairPlan repairMessage;
     repairMessage.ReportId = reportRequest.ReportId;
     repairMessage.PlanId = 8001;
+    repairMessage.CampaignId = campaignId;
     repairMessage.Plan = PartyQuestRepairPlanner::Build(server, reportRequest.Report);
     auto decodedRepairMessage = RoundTripServerMessage(repairMessage);
     REQUIRE(decodedRepairMessage->IsValid);
@@ -144,6 +147,7 @@ TEST_CASE("Party quest protocol messages round-trip through the real factories",
 
 TEST_CASE("Reconnect report repair and acknowledgement converge without a second game client", "[quest.party-state.protocol]")
 {
+    const PartyQuestCampaignId campaignId{0x1234, 0x5678};
     const GameId questId(4, 0x2000);
     PartyQuestState server;
     REQUIRE(server.Apply(BuildProtocolTransaction(2001, 12, questId, 0, 10)).Status == PartyQuestApplyStatus::Accepted);
@@ -154,6 +158,7 @@ TEST_CASE("Reconnect report repair and acknowledgement converge without a second
 
     RequestPartyQuestReplicaReport reportRequest;
     reportRequest.ReportId = 9001;
+    reportRequest.CampaignId = campaignId;
     reportRequest.IsReconnect = true;
     reportRequest.Report = reconnectingClient.BuildReport();
     auto decodedReport = RoundTripClientMessage(reportRequest);
@@ -162,6 +167,7 @@ TEST_CASE("Reconnect report repair and acknowledgement converge without a second
     NotifyPartyQuestRepairPlan repairMessage;
     repairMessage.ReportId = decodedReport->ReportId;
     repairMessage.PlanId = 9002;
+    repairMessage.CampaignId = campaignId;
     repairMessage.Plan = PartyQuestRepairPlanner::Build(server, decodedReport->Report);
     REQUIRE(repairMessage.Plan.Status == PartyQuestRepairPlanStatus::RepairRequired);
     REQUIRE(repairMessage.Plan.Items.size() == 1);
