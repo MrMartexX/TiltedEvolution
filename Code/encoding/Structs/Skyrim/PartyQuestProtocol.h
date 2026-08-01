@@ -117,6 +117,7 @@ private:
 
     struct ReportCacheEntry
     {
+        PartyQuestCampaignId CampaignId;
         bool IsReconnect{};
         PartyQuestReplicaReport Report;
         NotifyPartyQuestRepairPlan Response;
@@ -172,6 +173,7 @@ struct PartyQuestClientRepairResult
 {
     PartyQuestClientRepairStatus Status{PartyQuestClientRepairStatus::InvalidPlan};
     RequestPartyQuestRepairAck Ack;
+    bool CampaignChanged{};
 };
 
 /** In-memory client replica/session used before Skyrim runtime repair is enabled. */
@@ -184,8 +186,12 @@ public:
     }
 
     [[nodiscard]] uint32_t GetClientId() const noexcept { return m_clientId; }
+    [[nodiscard]] const PartyQuestCampaignId& GetCampaignId() const noexcept { return m_campaignId; }
     [[nodiscard]] const PartyQuestReplica& GetReplica() const noexcept { return m_replica; }
     [[nodiscard]] PartyQuestReplica& GetReplica() noexcept { return m_replica; }
+
+    /** Rebinds a retained replica to a newly assigned transient PlayerId. */
+    bool RebindClientId(uint32_t aClientId) noexcept;
 
     [[nodiscard]] RequestPartyQuestReplicaReport BuildReplicaReport(uint64_t aReportId, bool aReconnect) const;
     [[nodiscard]] PartyQuestClientCanonicalStatus HandleCanonicalUpdate(const NotifyPartyQuestCanonicalUpdate& acUpdate);
@@ -205,9 +211,32 @@ private:
     };
 
     uint32_t m_clientId{};
+    PartyQuestCampaignId m_campaignId;
     PartyQuestReplica m_replica;
     std::unordered_map<uint64_t, CanonicalCacheEntry> m_canonicalUpdates;
     std::unordered_map<uint64_t, RepairCacheEntry> m_repairs;
+};
+
+/**
+ * Allocates non-zero 64-bit client-origin protocol ids from a per-process random
+ * namespace. The allocator survives transient PlayerId changes and server
+ * reconnects, avoiding deterministic reuse of old campaign transaction ids.
+ */
+class PartyQuestClientIdAllocator final
+{
+public:
+    PartyQuestClientIdAllocator() noexcept;
+    explicit PartyQuestClientIdAllocator(uint64_t aNamespace) noexcept;
+
+    [[nodiscard]] uint64_t Allocate() noexcept;
+    [[nodiscard]] uint64_t GetNamespace() const noexcept { return m_namespace; }
+
+private:
+    [[nodiscard]] static uint64_t GenerateNamespace() noexcept;
+    [[nodiscard]] static uint64_t Mix(uint64_t aValue) noexcept;
+
+    uint64_t m_namespace{};
+    uint64_t m_sequence{1};
 };
 
 enum class PartyQuestClientSubmissionStatus : uint8_t
@@ -238,6 +267,9 @@ public:
     [[nodiscard]] PartyQuestClientSubmissionDecision Observe(
         const QuestSnapshot& acSnapshot,
         const PartyQuestReplica& acReplica);
+
+    /** Stores the newest snapshot without making it sendable before campaign verification. */
+    [[nodiscard]] PartyQuestClientSubmissionStatus QueueLatest(const QuestSnapshot& acSnapshot);
 
     bool MarkInFlight(uint64_t aTransactionId, const QuestSnapshot& acSnapshot);
     [[nodiscard]] std::optional<QuestSnapshot> Complete(
