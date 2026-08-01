@@ -30,6 +30,18 @@ bool ReadBool(TiltedPhoques::Buffer::Reader& aReader, bool& aValue) noexcept
     aValue = value == 1;
     return true;
 }
+
+void WriteCampaignId(TiltedPhoques::Buffer::Writer& aWriter, const PartyQuestCampaignId& acCampaignId) noexcept
+{
+    Serialization::WriteVarInt(aWriter, acCampaignId.High);
+    Serialization::WriteVarInt(aWriter, acCampaignId.Low);
+}
+
+void ReadCampaignId(TiltedPhoques::Buffer::Reader& aReader, PartyQuestCampaignId& aCampaignId) noexcept
+{
+    aCampaignId.High = Serialization::ReadVarInt(aReader);
+    aCampaignId.Low = Serialization::ReadVarInt(aReader);
+}
 } // namespace
 
 void RequestPartyQuestTransaction::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
@@ -57,6 +69,7 @@ void RequestPartyQuestReplicaReport::SerializeRaw(TiltedPhoques::Buffer::Writer&
 {
     WriteProtocolHeader(aWriter);
     Serialization::WriteVarInt(aWriter, ReportId);
+    WriteCampaignId(aWriter, CampaignId);
     WriteBool(aWriter, IsReconnect);
     PartyQuestWireCodec::SerializeReplicaReport(aWriter, Report);
 }
@@ -66,6 +79,7 @@ void RequestPartyQuestReplicaReport::DeserializeRaw(TiltedPhoques::Buffer::Reade
     ClientMessage::DeserializeRaw(aReader);
     IsValid = ReadProtocolHeader(aReader);
     ReportId = Serialization::ReadVarInt(aReader);
+    ReadCampaignId(aReader, CampaignId);
     bool reconnect{};
     IsValid = IsValid && ReportId != 0 && ReadBool(aReader, reconnect) &&
               PartyQuestWireCodec::DeserializeReplicaReport(aReader, Report);
@@ -75,7 +89,8 @@ void RequestPartyQuestReplicaReport::DeserializeRaw(TiltedPhoques::Buffer::Reade
 bool RequestPartyQuestReplicaReport::operator==(const RequestPartyQuestReplicaReport& acRhs) const noexcept
 {
     return GetOpcode() == acRhs.GetOpcode() && ReportId == acRhs.ReportId &&
-           IsReconnect == acRhs.IsReconnect && Report == acRhs.Report && IsValid == acRhs.IsValid;
+           CampaignId == acRhs.CampaignId && IsReconnect == acRhs.IsReconnect &&
+           Report == acRhs.Report && IsValid == acRhs.IsValid;
 }
 
 void RequestPartyQuestRepairAck::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
@@ -154,6 +169,7 @@ void NotifyPartyQuestRepairPlan::SerializeRaw(TiltedPhoques::Buffer::Writer& aWr
     WriteProtocolHeader(aWriter);
     Serialization::WriteVarInt(aWriter, ReportId);
     Serialization::WriteVarInt(aWriter, PlanId);
+    WriteCampaignId(aWriter, CampaignId);
     PartyQuestWireCodec::SerializeRepairPlan(aWriter, Plan);
 }
 
@@ -163,14 +179,16 @@ void NotifyPartyQuestRepairPlan::DeserializeRaw(TiltedPhoques::Buffer::Reader& a
     IsValid = ReadProtocolHeader(aReader);
     ReportId = Serialization::ReadVarInt(aReader);
     PlanId = Serialization::ReadVarInt(aReader);
-    IsValid = IsValid && ReportId != 0 && PlanId != 0 &&
+    ReadCampaignId(aReader, CampaignId);
+    IsValid = IsValid && ReportId != 0 && PlanId != 0 && CampaignId.IsValid() &&
               PartyQuestWireCodec::DeserializeRepairPlan(aReader, Plan);
 }
 
 bool NotifyPartyQuestRepairPlan::operator==(const NotifyPartyQuestRepairPlan& acRhs) const noexcept
 {
     return GetOpcode() == acRhs.GetOpcode() && ReportId == acRhs.ReportId &&
-           PlanId == acRhs.PlanId && Plan == acRhs.Plan && IsValid == acRhs.IsValid;
+           PlanId == acRhs.PlanId && CampaignId == acRhs.CampaignId &&
+           Plan == acRhs.Plan && IsValid == acRhs.IsValid;
 }
 
 void NotifyPartyQuestCanonicalUpdate::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
