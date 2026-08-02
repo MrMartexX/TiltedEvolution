@@ -194,3 +194,33 @@ TEST_CASE("Repair can advance only replica metadata when quest digests already m
     REQUIRE(replica.Apply(plan) == PartyQuestReplicaApplyStatus::Applied);
     REQUIRE(replica.GetWorldRevision() == server.GetWorldRevision());
 }
+
+TEST_CASE("Repair summary separates missing revision digest and client-only divergence", "[quest.party-state.repair]")
+{
+    const GameId revisionQuest(10, 0x100);
+    const GameId digestQuest(10, 0x200);
+    const GameId missingQuest(10, 0x300);
+    const GameId clientOnlyQuest(99, 0xDEAD);
+
+    PartyQuestState server;
+    REQUIRE(server.Apply(BuildRepairTransaction(9001, 1, revisionQuest, 0, 10)).Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(server.Apply(BuildRepairTransaction(9002, 1, digestQuest, 0, 20)).Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(server.Apply(BuildRepairTransaction(9003, 1, missingQuest, 0, 30)).Status == PartyQuestApplyStatus::Accepted);
+
+    PartyQuestReplicaReport report;
+    report.WorldRevision = server.GetWorldRevision();
+    report.Quests.emplace(revisionQuest, PartyQuestReplicaEntry{0, server.FindQuest(revisionQuest)->ComputeDigest()});
+    report.Quests.emplace(digestQuest, PartyQuestReplicaEntry{1, server.FindQuest(digestQuest)->ComputeDigest() ^ 1ull});
+    report.Quests.emplace(clientOnlyQuest, PartyQuestReplicaEntry{1, 0x1234});
+
+    const auto plan = PartyQuestRepairPlanner::Build(server, report);
+    const auto summary = PartyQuestRepairPlanner::Summarize(server, report, plan);
+
+    REQUIRE(plan.Status == PartyQuestRepairPlanStatus::RepairRequired);
+    REQUIRE(plan.Items.size() == 3);
+    REQUIRE(summary.MissingQuestCount == 1);
+    REQUIRE(summary.RevisionMismatchCount == 1);
+    REQUIRE(summary.DigestMismatchCount == 1);
+    REQUIRE(summary.ClientOnlyQuestCount == 1);
+    REQUIRE(summary.RepairItemCount() == plan.Items.size());
+}
