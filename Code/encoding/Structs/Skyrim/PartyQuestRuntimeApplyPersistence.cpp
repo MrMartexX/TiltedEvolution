@@ -180,6 +180,9 @@ bool WriteFile(const std::filesystem::path& acPath, const std::vector<uint8_t>& 
 std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
     const PartyQuestRuntimeRecoveryState& acState)
 {
+    if (!acState.CampaignId.IsValid())
+        return {};
+
     std::vector<PartyQuestRuntimeCommittedRecord> committed = acState.Committed;
     std::sort(committed.begin(), committed.end(), [](const auto& acLeft, const auto& acRight)
     {
@@ -190,6 +193,8 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
     transactionIds.reserve(committed.size() + (acState.Active ? 1 : 0));
 
     std::vector<uint8_t> payload;
+    WriteInteger(payload, acState.CampaignId.High);
+    WriteInteger(payload, acState.CampaignId.Low);
     WriteInteger<uint64_t>(payload, committed.size());
     for (const PartyQuestRuntimeCommittedRecord& record : committed)
     {
@@ -270,9 +275,9 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
     offset += kMagic.size();
 
     uint16_t version{};
-    uint64_t payloadSize{};
+    uint64_t payloadSize64{};
     if (!ReadInteger(acBytes, offset, acBytes.size(), version) ||
-        !ReadInteger(acBytes, offset, acBytes.size(), payloadSize))
+        !ReadInteger(acBytes, offset, acBytes.size(), payloadSize64))
     {
         result.Status = PartyQuestRuntimeApplyPersistenceStatus::Truncated;
         return result;
@@ -282,16 +287,37 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
         result.Status = PartyQuestRuntimeApplyPersistenceStatus::UnsupportedVersion;
         return result;
     }
-    if (payloadSize > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) ||
-        offset > acBytes.size() ||
-        acBytes.size() - offset < static_cast<size_t>(payloadSize) + sizeof(uint64_t))
+    if (payloadSize64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    {
+        result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
+        return result;
+    }
+    if (offset > acBytes.size())
     {
         result.Status = PartyQuestRuntimeApplyPersistenceStatus::Truncated;
         return result;
     }
 
+    const size_t payloadSize = static_cast<size_t>(payloadSize64);
+    const size_t remaining = acBytes.size() - offset;
+    if (payloadSize > remaining)
+    {
+        result.Status = PartyQuestRuntimeApplyPersistenceStatus::Truncated;
+        return result;
+    }
+    if (remaining - payloadSize < sizeof(uint64_t))
+    {
+        result.Status = PartyQuestRuntimeApplyPersistenceStatus::Truncated;
+        return result;
+    }
+    if (remaining - payloadSize != sizeof(uint64_t))
+    {
+        result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
+        return result;
+    }
+
     const size_t payloadOffset = offset;
-    const size_t payloadEnd = payloadOffset + static_cast<size_t>(payloadSize);
+    const size_t payloadEnd = payloadOffset + payloadSize;
     size_t checksumOffset = payloadEnd;
     uint64_t storedChecksum{};
     if (!ReadInteger(acBytes, checksumOffset, acBytes.size(), storedChecksum) || checksumOffset != acBytes.size())
@@ -299,13 +325,25 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
         result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
         return result;
     }
-    if (storedChecksum != ComputeChecksum(acBytes.data() + payloadOffset, static_cast<size_t>(payloadSize)))
+    if (storedChecksum != ComputeChecksum(acBytes.data() + payloadOffset, payloadSize))
     {
         result.Status = PartyQuestRuntimeApplyPersistenceStatus::ChecksumMismatch;
         return result;
     }
 
     PartyQuestRuntimeRecoveryState state;
+    if (!ReadInteger(acBytes, offset, payloadEnd, state.CampaignId.High) ||
+        !ReadInteger(acBytes, offset, payloadEnd, state.CampaignId.Low))
+    {
+        result.Status = PartyQuestRuntimeApplyPersistenceStatus::Truncated;
+        return result;
+    }
+    if (!state.CampaignId.IsValid())
+    {
+        result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
+        return result;
+    }
+
     uint64_t committedCount{};
     if (!ReadInteger(acBytes, offset, payloadEnd, committedCount))
     {
