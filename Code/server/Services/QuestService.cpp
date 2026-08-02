@@ -38,6 +38,11 @@ Console::Setting bEnablePartyQuestStatePersistence{
     "Persists equal-party canonical quest state before accepted transactions are published.",
     true};
 
+Console::Setting bEnablePartyQuestShadowPeerTest{
+    "Gameplay:bEnablePartyQuestShadowPeerTest",
+    "Runs an automatic server-local second replica test for missed-update and digest repair. Requires party quest diagnostics.",
+    false};
+
 Console::StringSetting sPartyQuestStatePath{
     "Gameplay:sPartyQuestStatePath",
     "Path to the equal-party canonical quest-state archive, relative to the server working directory unless absolute.",
@@ -73,6 +78,25 @@ const char* CampaignPersistenceStatusName(PartyQuestCampaignPersistenceStatus aS
     case PartyQuestCampaignPersistenceStatus::Truncated: return "truncated";
     case PartyQuestCampaignPersistenceStatus::ChecksumMismatch: return "checksum-mismatch";
     case PartyQuestCampaignPersistenceStatus::InvalidData: return "invalid-data";
+    }
+
+    return "unknown";
+}
+
+const char* ShadowPeerFailureName(PartyQuestShadowPeerFailure aFailure) noexcept
+{
+    switch (aFailure)
+    {
+    case PartyQuestShadowPeerFailure::None: return "none";
+    case PartyQuestShadowPeerFailure::InvalidCampaign: return "invalid-campaign";
+    case PartyQuestShadowPeerFailure::ConnectFailed: return "connect-failed";
+    case PartyQuestShadowPeerFailure::InitialSyncFailed: return "initial-sync-failed";
+    case PartyQuestShadowPeerFailure::BaselineApplyFailed: return "baseline-apply-failed";
+    case PartyQuestShadowPeerFailure::DisconnectFailed: return "disconnect-failed";
+    case PartyQuestShadowPeerFailure::ReconnectFailed: return "reconnect-failed";
+    case PartyQuestShadowPeerFailure::MissedUpdateRepairFailed: return "missed-update-repair-failed";
+    case PartyQuestShadowPeerFailure::DigestMutationFailed: return "digest-mutation-failed";
+    case PartyQuestShadowPeerFailure::DigestRepairFailed: return "digest-repair-failed";
     }
 
     return "unknown";
@@ -304,6 +328,99 @@ bool QuestService::IsPartyActive(uint32_t aPartyId) const noexcept
     return false;
 }
 
+void QuestService::MaybeStartPartyQuestShadowPeer() noexcept
+{
+    if (!bEnablePartyQuestShadowPeerTest ||
+        m_partyQuestShadowPeer.GetState() != PartyQuestShadowPeerState::Idle)
+    {
+        return;
+    }
+
+    if (!m_partyQuestShadowPeer.Start(m_partyQuestCoordinator, m_campaignId))
+    {
+        spdlog::error(
+            "PartyQuestShadowPeer TEST FAIL during startup: campaign={:016X}{:016X} failure={}",
+            m_campaignId.High,
+            m_campaignId.Low,
+            ShadowPeerFailureName(m_partyQuestShadowPeer.GetFailure()));
+        return;
+    }
+
+    const auto& metrics = m_partyQuestShadowPeer.GetMetrics();
+    spdlog::info(
+        "PartyQuestShadowPeer TEST START: campaign={:016X}{:016X} syntheticPlayer={} worldRevision={} initialRepairItems={} missing={} revisionMismatch={} digestMismatch={} clientOnly={}; advance quests normally, the test will finish automatically after two accepted canonical updates",
+        m_campaignId.High,
+        m_campaignId.Low,
+        PartyQuestShadowPeerHarness::kClientId,
+        metrics.StartWorldRevision,
+        metrics.InitialSyncSummary.RepairItemCount(),
+        metrics.InitialSyncSummary.MissingQuestCount,
+        metrics.InitialSyncSummary.RevisionMismatchCount,
+        metrics.InitialSyncSummary.DigestMismatchCount,
+        metrics.InitialSyncSummary.ClientOnlyQuestCount);
+}
+
+void QuestService::HandlePartyQuestShadowPeerCanonicalUpdate(
+    const NotifyPartyQuestCanonicalUpdate& acUpdate) noexcept
+{
+    if (!bEnablePartyQuestShadowPeerTest)
+        return;
+
+    const PartyQuestShadowPeerState before = m_partyQuestShadowPeer.GetState();
+    if (before == PartyQuestShadowPeerState::Idle ||
+        before == PartyQuestShadowPeerState::Passed ||
+        before == PartyQuestShadowPeerState::Failed)
+    {
+        return;
+    }
+
+    m_partyQuestShadowPeer.HandleCanonicalUpdate(m_partyQuestCoordinator, acUpdate);
+    const PartyQuestShadowPeerState after = m_partyQuestShadowPeer.GetState();
+    const auto& metrics = m_partyQuestShadowPeer.GetMetrics();
+
+    if (after == PartyQuestShadowPeerState::Failed)
+    {
+        spdlog::error(
+            "PartyQuestShadowPeer TEST FAIL: campaign={:016X}{:016X} failure={} baselineWorldRevision={} missedWorldRevision={} canonicalWorldRevision={}",
+            m_campaignId.High,
+            m_campaignId.Low,
+            ShadowPeerFailureName(m_partyQuestShadowPeer.GetFailure()),
+            metrics.BaselineWorldRevision,
+            metrics.MissedWorldRevision,
+            m_partyQuestCoordinator.GetCanonicalState().GetWorldRevision());
+        return;
+    }
+
+    if (before == PartyQuestShadowPeerState::WaitingForBaseline &&
+        after == PartyQuestShadowPeerState::WaitingForMissedUpdate)
+    {
+        spdlog::info(
+            "PartyQuestShadowPeer STEP 1 PASS: baseline canonical update applied at worldRevision={}; synthetic peer is now deliberately disconnected so the next accepted update is missed",
+            metrics.BaselineWorldRevision);
+        return;
+    }
+
+    if (after == PartyQuestShadowPeerState::Passed)
+    {
+        const auto& missed = metrics.MissedUpdateRepairSummary;
+        const auto& digest = metrics.DigestRepairSummary;
+        spdlog::info(
+            "PartyQuestShadowPeer TEST PASS: campaign={:016X}{:016X} baselineWorldRevision={} missedWorldRevision={} finalWorldRevision={} missedRepairItems={} missing={} revisionMismatch={} digestMismatch={} digestRepairItems={} digestRepairDigestMismatch={} shadowPeerDisconnected={}",
+            m_campaignId.High,
+            m_campaignId.Low,
+            metrics.BaselineWorldRevision,
+            metrics.MissedWorldRevision,
+            metrics.FinalWorldRevision,
+            missed.RepairItemCount(),
+            missed.MissingQuestCount,
+            missed.RevisionMismatchCount,
+            missed.DigestMismatchCount,
+            digest.RepairItemCount(),
+            digest.DigestMismatchCount,
+            !m_partyQuestCoordinator.IsClientConnected(PartyQuestShadowPeerHarness::kClientId));
+    }
+}
+
 bool QuestService::PreparePartyQuestClient(Player* apPlayer, uint32_t& aPartyId) noexcept
 {
     if (!bEnablePartyQuestProtocolDiagnostics || !apPlayer)
@@ -363,6 +480,7 @@ bool QuestService::PreparePartyQuestClient(Player* apPlayer, uint32_t& aPartyId)
     if (!m_partyQuestCoordinator.IsClientConnected(apPlayer->GetId()))
         m_partyQuestCoordinator.ConnectClient(apPlayer->GetId());
 
+    MaybeStartPartyQuestShadowPeer();
     return true;
 }
 
@@ -399,7 +517,10 @@ void QuestService::OnPartyQuestTransaction(const PacketEvent<RequestPartyQuestTr
         pPlayer->Send(dispatch.Response);
 
     if (dispatch.Broadcast)
+    {
         SendCanonicalUpdateToCampaign(*dispatch.Broadcast, dispatch.Recipients, partyId);
+        HandlePartyQuestShadowPeerCanonicalUpdate(*dispatch.Broadcast);
+    }
 
     spdlog::info(
         "PartyQuestProtocol transaction: campaign={:016X}{:016X} party={} player={} request={} transaction={} status={} apply={} worldRevision={} questRevision={} broadcastRecipients={}",
