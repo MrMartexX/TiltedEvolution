@@ -302,9 +302,11 @@ bool PartyQuestRuntimeApplyCoordinator::Abort(uint64_t aTransactionId) noexcept
     return true;
 }
 
-PartyQuestRuntimeRecoveryState PartyQuestRuntimeApplyCoordinator::ExportRecoveryState() const
+PartyQuestRuntimeRecoveryState PartyQuestRuntimeApplyCoordinator::ExportRecoveryState(
+    const PartyQuestCampaignId& acCampaignId) const
 {
     PartyQuestRuntimeRecoveryState state;
+    state.CampaignId = acCampaignId;
     state.Committed.reserve(m_committed.size());
 
     for (const auto& [transactionId, fingerprint] : m_committed)
@@ -331,10 +333,17 @@ PartyQuestRuntimeRecoveryState PartyQuestRuntimeApplyCoordinator::ExportRecovery
 }
 
 PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplyCoordinator::RestoreRecoveryState(
-    const PartyQuestRuntimeRecoveryState& acState) noexcept
+    const PartyQuestRuntimeRecoveryState& acState,
+    const PartyQuestCampaignId& acExpectedCampaignId) noexcept
 {
     if (m_active || m_recoveryRecord || !m_committed.empty() || m_recoveryBlocked)
         return PartyQuestRuntimeRecoveryDisposition::InvalidState;
+
+    if (!acExpectedCampaignId.IsValid() || !acState.CampaignId.IsValid())
+        return PartyQuestRuntimeRecoveryDisposition::InvalidState;
+
+    if (acState.CampaignId != acExpectedCampaignId)
+        return PartyQuestRuntimeRecoveryDisposition::CampaignMismatch;
 
     std::unordered_set<uint64_t> transactionIds;
     transactionIds.reserve(acState.Committed.size() + (acState.Active ? 1 : 0));
