@@ -26,6 +26,55 @@ enum class QuestObjectiveState : uint8_t
     Failed
 };
 
+/**
+ * Diagnostic admission classification for a live Skyrim quest.
+ *
+ * This metadata is deliberately not part of QuestSnapshot, its digest, the wire
+ * format, or persisted canonical state. It helps us separate likely gameplay
+ * quests from hidden service/controller quests before a later manifest-backed
+ * admission policy becomes authoritative.
+ */
+enum class PartyQuestSyncClass : uint8_t
+{
+    SharedCandidate,
+    ServiceCandidate,
+    LocalOnly
+};
+
+enum class PartyQuestSyncReason : uint8_t
+{
+    GameplayQuestType,
+    UserFacingMiscellaneous,
+    UserFacingUntyped,
+    HiddenMiscellaneous,
+    HiddenUntyped,
+    NoStages
+};
+
+struct PartyQuestSyncFacts
+{
+    uint8_t QuestType{};
+    bool HasStages{};
+    bool IsDisplayedInHud{};
+    bool HasDisplayName{};
+};
+
+struct PartyQuestSyncClassification
+{
+    PartyQuestSyncClass Class{PartyQuestSyncClass::ServiceCandidate};
+    PartyQuestSyncReason Reason{PartyQuestSyncReason::HiddenUntyped};
+
+    bool operator==(const PartyQuestSyncClassification&) const noexcept = default;
+};
+
+/**
+ * Conservative, game-independent first-pass classifier for diagnostic logging.
+ * It does not grant runtime repair authority and does not alter the canonical
+ * snapshot contract.
+ */
+[[nodiscard]] PartyQuestSyncClassification ClassifyPartyQuestSync(
+    const PartyQuestSyncFacts& acFacts) noexcept;
+
 struct QuestObjectiveSnapshot
 {
     uint16_t Index{};
