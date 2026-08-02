@@ -42,7 +42,8 @@ enum class PartyQuestApplyStatus : uint8_t
     InvalidTransactionId,
     QuestIdMismatch,
     RevisionMismatch,
-    TransactionConflict
+    TransactionConflict,
+    AdmissionRejected
 };
 
 struct PartyQuestApplyResult
