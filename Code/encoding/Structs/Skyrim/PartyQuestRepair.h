@@ -63,12 +63,33 @@ struct PartyQuestRepairPlan
     bool operator==(const PartyQuestRepairPlan&) const noexcept = default;
 };
 
+/** Diagnostic-only breakdown used by live multi-client validation logs. */
+struct PartyQuestRepairSummary
+{
+    size_t MissingQuestCount{};
+    size_t RevisionMismatchCount{};
+    size_t DigestMismatchCount{};
+    size_t ClientOnlyQuestCount{};
+
+    [[nodiscard]] size_t RepairItemCount() const noexcept
+    {
+        return MissingQuestCount + RevisionMismatchCount + DigestMismatchCount;
+    }
+
+    bool operator==(const PartyQuestRepairSummary&) const noexcept = default;
+};
+
 class PartyQuestRepairPlanner final
 {
 public:
     [[nodiscard]] static PartyQuestRepairPlan Build(
         const PartyQuestState& acCanonicalState,
         const PartyQuestReplicaReport& acClientReport);
+
+    [[nodiscard]] static PartyQuestRepairSummary Summarize(
+        const PartyQuestState& acCanonicalState,
+        const PartyQuestReplicaReport& acClientReport,
+        const PartyQuestRepairPlan& acPlan);
 };
 
 enum class PartyQuestReplicaApplyStatus : uint8_t
