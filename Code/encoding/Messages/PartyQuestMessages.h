@@ -23,6 +23,8 @@ struct RequestPartyQuestTransaction final : ClientMessage
 
     uint64_t RequestId{};
     PartyQuestTransaction Transaction;
+    /** Raw runtime facts reclassified by the server admission policy. */
+    PartyQuestSyncFacts SyncFacts;
     bool IsValid{true};
 };
 
