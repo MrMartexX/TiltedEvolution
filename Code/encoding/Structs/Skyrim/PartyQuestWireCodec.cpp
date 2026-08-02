@@ -244,7 +244,7 @@ void SerializeApplyResult(TiltedPhoques::Buffer::Writer& aWriter, const PartyQue
 bool DeserializeApplyResult(TiltedPhoques::Buffer::Reader& aReader, PartyQuestApplyResult& aResult) noexcept
 {
     const uint64_t status = Serialization::ReadVarInt(aReader);
-    if (status > static_cast<uint8_t>(PartyQuestApplyStatus::TransactionConflict))
+    if (status > static_cast<uint8_t>(PartyQuestApplyStatus::AdmissionRejected))
         return false;
 
     aResult.Status = static_cast<PartyQuestApplyStatus>(status);
@@ -317,6 +317,10 @@ void SerializeRepairPlan(TiltedPhoques::Buffer::Writer& aWriter, const PartyQues
         Serialization::WriteVarInt(aWriter, static_cast<uint8_t>(item.Reason));
         SerializeQuestSnapshot(aWriter, item.CanonicalSnapshot);
     }
+
+    Serialization::WriteVarInt(aWriter, acPlan.RemovedQuestIds.size());
+    for (const GameId& questId : acPlan.RemovedQuestIds)
+        questId.Serialize(aWriter);
 }
 
 bool DeserializeRepairPlan(TiltedPhoques::Buffer::Reader& aReader, PartyQuestRepairPlan& aPlan) noexcept
@@ -354,6 +358,21 @@ bool DeserializeRepairPlan(TiltedPhoques::Buffer::Reader& aReader, PartyQuestRep
         }
 
         plan.Items.push_back(std::move(item));
+    }
+
+    size_t removalCount{};
+    if (!ReadCount(aReader, kMaxQuestEntries, removalCount))
+        return false;
+    plan.RemovedQuestIds.reserve(removalCount);
+    seenQuestIds.reserve(seenQuestIds.size() + removalCount);
+
+    for (size_t i = 0; i < removalCount; ++i)
+    {
+        GameId questId;
+        questId.Deserialize(aReader);
+        if (!questId || !seenQuestIds.emplace(questId).second)
+            return false;
+        plan.RemovedQuestIds.push_back(questId);
     }
 
     if (plan.TargetWorldRevision < plan.BaseClientWorldRevision &&
