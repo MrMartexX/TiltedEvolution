@@ -60,6 +60,8 @@ The divergence/service-classification code milestone was validated at commit `fe
 - Equal party PoC diagnostics: passed;
 - `TPTests`: built and executed successfully.
 
+Later commits touching only this validation document do not alter the validated code.
+
 ## Next live validation
 
 Use two connected game clients with the same build and campaign:
