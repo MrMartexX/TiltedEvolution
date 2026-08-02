@@ -13,6 +13,7 @@
 #include <Messages/NotifyQuestUpdate.h>
 #include <Messages/PartyQuestMessages.h>
 
+#include <Structs/Skyrim/PartyQuestAdmission.h>
 #include <Structs/Skyrim/PartyQuestCampaignPersistence.h>
 #include <Structs/Skyrim/PartyQuestStatePersistence.h>
 
@@ -97,6 +98,19 @@ const char* ShadowPeerFailureName(PartyQuestShadowPeerFailure aFailure) noexcept
     case PartyQuestShadowPeerFailure::MissedUpdateRepairFailed: return "missed-update-repair-failed";
     case PartyQuestShadowPeerFailure::DigestMutationFailed: return "digest-mutation-failed";
     case PartyQuestShadowPeerFailure::DigestRepairFailed: return "digest-repair-failed";
+    }
+
+    return "unknown";
+}
+
+const char* AdmissionStatusName(PartyQuestAdmissionStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestAdmissionStatus::SharedProvisional: return "shared-provisional";
+    case PartyQuestAdmissionStatus::BlockedServiceCandidate: return "blocked-service-candidate";
+    case PartyQuestAdmissionStatus::BlockedLocalOnly: return "blocked-local-only";
+    case PartyQuestAdmissionStatus::BlockedConfirmedServiceQuest: return "blocked-confirmed-service";
     }
 
     return "unknown";
@@ -186,6 +200,13 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
             }
         }
 
+        size_t quarantinedQuestCount = 0;
+        for (const GameId& questId : PartyQuestAdmissionPolicy::GetConfirmedServiceQuestIds())
+        {
+            if (restoredState.FindQuest(questId))
+                ++quarantinedQuestCount;
+        }
+
         if (!m_partyQuestCoordinator.RestoreCanonicalState(std::move(restoredState)))
         {
             spdlog::error("PartyQuestProtocol could not restore canonical state before session initialization");
@@ -199,6 +220,17 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
             questCount,
             journalEntries,
             loadResult.UsedBackup);
+
+        if (quarantinedQuestCount != 0)
+        {
+            spdlog::info(
+                "PartyQuestProtocol admission migration: worldRevision={} storedQuests={} quarantinedConfirmedService={} sharedRepairSurface={} journalEntries={} historyPreserved=true",
+                worldRevision,
+                questCount,
+                quarantinedQuestCount,
+                questCount - quarantinedQuestCount,
+                journalEntries);
+        }
     }
 
     if (!InitializePartyQuestCampaignIdentity(hadStateArchive))
@@ -348,12 +380,13 @@ void QuestService::MaybeStartPartyQuestShadowPeer() noexcept
 
     const auto& metrics = m_partyQuestShadowPeer.GetMetrics();
     spdlog::info(
-        "PartyQuestShadowPeer TEST START: campaign={:016X}{:016X} syntheticPlayer={} worldRevision={} initialRepairItems={} missing={} revisionMismatch={} digestMismatch={} clientOnly={}; advance quests normally, the test will finish automatically after two accepted canonical updates",
+        "PartyQuestShadowPeer TEST START: campaign={:016X}{:016X} syntheticPlayer={} worldRevision={} initialRepairItems={} initialRemovals={} missing={} revisionMismatch={} digestMismatch={} clientOnly={}; advance quests normally, the test will finish automatically after two accepted canonical updates",
         m_campaignId.High,
         m_campaignId.Low,
         PartyQuestShadowPeerHarness::kClientId,
         metrics.StartWorldRevision,
         metrics.InitialSyncSummary.RepairItemCount(),
+        metrics.InitialSyncSummary.QuarantinedQuestRemovalCount,
         metrics.InitialSyncSummary.MissingQuestCount,
         metrics.InitialSyncSummary.RevisionMismatchCount,
         metrics.InitialSyncSummary.DigestMismatchCount,
@@ -405,17 +438,19 @@ void QuestService::HandlePartyQuestShadowPeerCanonicalUpdate(
         const auto& missed = metrics.MissedUpdateRepairSummary;
         const auto& digest = metrics.DigestRepairSummary;
         spdlog::info(
-            "PartyQuestShadowPeer TEST PASS: campaign={:016X}{:016X} baselineWorldRevision={} missedWorldRevision={} finalWorldRevision={} missedRepairItems={} missing={} revisionMismatch={} digestMismatch={} digestRepairItems={} digestRepairDigestMismatch={} shadowPeerDisconnected={}",
+            "PartyQuestShadowPeer TEST PASS: campaign={:016X}{:016X} baselineWorldRevision={} missedWorldRevision={} finalWorldRevision={} missedRepairItems={} missedRemovals={} missing={} revisionMismatch={} digestMismatch={} digestRepairItems={} digestRepairRemovals={} digestRepairDigestMismatch={} shadowPeerDisconnected={}",
             m_campaignId.High,
             m_campaignId.Low,
             metrics.BaselineWorldRevision,
             metrics.MissedWorldRevision,
             metrics.FinalWorldRevision,
             missed.RepairItemCount(),
+            missed.QuarantinedQuestRemovalCount,
             missed.MissingQuestCount,
             missed.RevisionMismatchCount,
             missed.DigestMismatchCount,
             digest.RepairItemCount(),
+            digest.QuarantinedQuestRemovalCount,
             digest.DigestMismatchCount,
             !m_partyQuestCoordinator.IsClientConnected(PartyQuestShadowPeerHarness::kClientId));
     }
@@ -511,6 +546,46 @@ void QuestService::OnPartyQuestTransaction(const PacketEvent<RequestPartyQuestTr
     if (!PreparePartyQuestClient(pPlayer, partyId))
         return;
 
+    PartyQuestAdmissionDecision admission;
+    bool hasAdmissionDecision = false;
+    if (acMessage.Packet.IsValid)
+    {
+        admission = PartyQuestAdmissionPolicy::Evaluate(
+            acMessage.Packet.Transaction.QuestId,
+            acMessage.Packet.SyncFacts);
+        hasAdmissionDecision = true;
+
+        if (!admission.IsAdmitted())
+        {
+            NotifyPartyQuestTransactionResult response;
+            response.RequestId = acMessage.Packet.RequestId;
+            response.Result = {
+                PartyQuestApplyStatus::AdmissionRejected,
+                m_partyQuestCoordinator.GetCanonicalState().GetWorldRevision(),
+                0};
+            pPlayer->Send(response);
+
+            spdlog::info(
+                "PartyQuestProtocol admission rejected: campaign={:016X}{:016X} party={} player={} request={} transaction={} quest={:016X} admission={} syncClass={} syncReason={} questType={} hasStages={} hud={} named={} worldRevision={}",
+                m_campaignId.High,
+                m_campaignId.Low,
+                partyId,
+                pPlayer->GetId(),
+                acMessage.Packet.RequestId,
+                acMessage.Packet.Transaction.TransactionId,
+                acMessage.Packet.Transaction.QuestId.LogFormat(),
+                AdmissionStatusName(admission.Status),
+                static_cast<uint8_t>(admission.Classification.Class),
+                static_cast<uint8_t>(admission.Classification.Reason),
+                acMessage.Packet.SyncFacts.QuestType,
+                acMessage.Packet.SyncFacts.HasStages,
+                acMessage.Packet.SyncFacts.IsDisplayedInHud,
+                acMessage.Packet.SyncFacts.HasDisplayName,
+                response.Result.WorldRevision);
+            return;
+        }
+    }
+
     const auto dispatch = m_partyQuestCoordinator.HandleTransaction(pPlayer->GetId(), acMessage.Packet);
 
     if (dispatch.Response.RequestId != 0)
@@ -523,7 +598,7 @@ void QuestService::OnPartyQuestTransaction(const PacketEvent<RequestPartyQuestTr
     }
 
     spdlog::info(
-        "PartyQuestProtocol transaction: campaign={:016X}{:016X} party={} player={} request={} transaction={} status={} apply={} worldRevision={} questRevision={} broadcastRecipients={}",
+        "PartyQuestProtocol transaction: campaign={:016X}{:016X} party={} player={} request={} transaction={} status={} apply={} admission={} worldRevision={} questRevision={} broadcastRecipients={}",
         m_campaignId.High,
         m_campaignId.Low,
         partyId,
@@ -532,6 +607,7 @@ void QuestService::OnPartyQuestTransaction(const PacketEvent<RequestPartyQuestTr
         acMessage.Packet.Transaction.TransactionId,
         static_cast<uint8_t>(dispatch.Status),
         static_cast<uint8_t>(dispatch.Response.Result.Status),
+        hasAdmissionDecision ? AdmissionStatusName(admission.Status) : "invalid-message",
         dispatch.Response.Result.WorldRevision,
         dispatch.Response.Result.QuestRevision,
         dispatch.Recipients.size());
@@ -569,7 +645,7 @@ void QuestService::OnPartyQuestReplicaReport(const PacketEvent<RequestPartyQuest
     }
 
     spdlog::info(
-        "PartyQuestProtocol report: campaign={:016X}{:016X} clientCampaign={:016X}{:016X} campaignMismatch={} party={} player={} report={} reconnect={} status={} clientWorldRevision={} plan={} planStatus={} items={}",
+        "PartyQuestProtocol report: campaign={:016X}{:016X} clientCampaign={:016X}{:016X} campaignMismatch={} party={} player={} report={} reconnect={} status={} clientWorldRevision={} plan={} planStatus={} items={} removals={}",
         m_campaignId.High,
         m_campaignId.Low,
         clientCampaignId.High,
@@ -583,7 +659,8 @@ void QuestService::OnPartyQuestReplicaReport(const PacketEvent<RequestPartyQuest
         acMessage.Packet.Report.WorldRevision,
         dispatch.Response ? dispatch.Response->PlanId : 0,
         dispatch.Response ? static_cast<uint8_t>(dispatch.Response->Plan.Status) : 0,
-        dispatch.Response ? dispatch.Response->Plan.Items.size() : 0);
+        dispatch.Response ? dispatch.Response->Plan.Items.size() : 0,
+        dispatch.Response ? dispatch.Response->Plan.RemovedQuestIds.size() : 0);
 }
 
 void QuestService::OnPartyQuestRepairAck(const PacketEvent<RequestPartyQuestRepairAck>& acMessage) noexcept
