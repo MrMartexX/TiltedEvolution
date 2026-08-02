@@ -51,6 +51,15 @@ A restart/reconnect campaign test confirmed:
 - removal of the previous historical transaction-ID conflict storm;
 - continued accepted canonical transactions after restart.
 
+## Current CI validation
+
+The divergence/service-classification code milestone was validated at commit `fe2f1570a17b37f3445f9826f8b9b4445f61ef6a`:
+
+- Build Windows: passed;
+- Build Linux: passed;
+- Equal party PoC diagnostics: passed;
+- `TPTests`: built and executed successfully.
+
 ## Next live validation
 
 Use two connected game clients with the same build and campaign:
