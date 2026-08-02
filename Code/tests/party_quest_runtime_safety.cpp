@@ -167,21 +167,34 @@ TEST_CASE("Complex controller-like alias topology is not treated as generic stag
     REQUIRE(decision.Facts.ReferenceAliasCount == PartyQuestRuntimeSafetyPolicy::kComplexAliasThreshold);
 }
 
-TEST_CASE("Terminal quest state is never generically replayed", "[quest.party-state.runtime-safety]")
+TEST_CASE("Inactive and terminal quest state are never generically replayed", "[quest.party-state.runtime-safety]")
 {
     const auto admission = BuildAdmittedDecision();
 
-    for (QuestSnapshotStatus status : {
-             QuestSnapshotStatus::Stopped,
-             QuestSnapshotStatus::Completed,
-             QuestSnapshotStatus::Failed})
+    SECTION("inactive target")
     {
         QuestSnapshot snapshot = BuildSafetySnapshot();
-        snapshot.Status = status;
+        snapshot.Status = QuestSnapshotStatus::Inactive;
         const auto decision = PartyQuestRuntimeSafetyPolicy::Evaluate(admission, snapshot);
         REQUIRE(decision.Status == PartyQuestRuntimeSafetyStatus::RequiresAdapter);
-        REQUIRE(decision.Reason == PartyQuestRuntimeSafetyReason::TerminalQuestState);
-        REQUIRE(decision.Facts.IsTerminalState);
+        REQUIRE(decision.Reason == PartyQuestRuntimeSafetyReason::InactiveQuestState);
+        REQUIRE(decision.Facts.IsInactiveState);
+    }
+
+    SECTION("terminal targets")
+    {
+        for (QuestSnapshotStatus status : {
+                 QuestSnapshotStatus::Stopped,
+                 QuestSnapshotStatus::Completed,
+                 QuestSnapshotStatus::Failed})
+        {
+            QuestSnapshot snapshot = BuildSafetySnapshot();
+            snapshot.Status = status;
+            const auto decision = PartyQuestRuntimeSafetyPolicy::Evaluate(admission, snapshot);
+            REQUIRE(decision.Status == PartyQuestRuntimeSafetyStatus::RequiresAdapter);
+            REQUIRE(decision.Reason == PartyQuestRuntimeSafetyReason::TerminalQuestState);
+            REQUIRE(decision.Facts.IsTerminalState);
+        }
     }
 }
 
