@@ -182,6 +182,18 @@ bool PartyQuestClientSubmissionQueue::Reject(uint64_t aTransactionId)
     return true;
 }
 
+bool PartyQuestClientSubmissionQueue::Discard(uint64_t aTransactionId)
+{
+    const auto transactionIt = m_transactionQuests.find(aTransactionId);
+    if (transactionIt == m_transactionQuests.end())
+        return false;
+
+    const GameId questId = transactionIt->second;
+    m_transactionQuests.erase(transactionIt);
+    m_quests.erase(questId);
+    return true;
+}
+
 std::vector<QuestSnapshot> PartyQuestClientSubmissionQueue::TakeReady(const PartyQuestReplica& acReplica)
 {
     std::vector<std::pair<GameId, QuestSnapshot>> sorted;
