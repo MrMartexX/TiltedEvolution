@@ -4,6 +4,7 @@
 #include <Structs/GameId.h>
 #include <Structs/Skyrim/PartyQuestCampaign.h>
 #include <Structs/Skyrim/PartyQuestProtocol.h>
+#include <Structs/Skyrim/PartyQuestShadowPeer.h>
 
 #include <filesystem>
 #include <optional>
@@ -43,6 +44,9 @@ private:
     [[nodiscard]] bool PersistPartyQuestState(const PartyQuestState& acState) noexcept;
     [[nodiscard]] bool PreparePartyQuestClient(Player* apPlayer, uint32_t& aPartyId) noexcept;
     [[nodiscard]] bool IsPartyActive(uint32_t aPartyId) const noexcept;
+    void MaybeStartPartyQuestShadowPeer() noexcept;
+    void HandlePartyQuestShadowPeerCanonicalUpdate(
+        const NotifyPartyQuestCanonicalUpdate& acUpdate) noexcept;
     void SendCanonicalUpdateToCampaign(
         const NotifyPartyQuestCanonicalUpdate& acUpdate,
         const std::vector<uint32_t>& acRecipients,
@@ -50,6 +54,7 @@ private:
 
     World& m_world;
     PartyQuestProtocolCoordinator m_partyQuestCoordinator;
+    PartyQuestShadowPeerHarness m_partyQuestShadowPeer;
     PartyQuestCampaignId m_campaignId;
     std::optional<uint32_t> m_campaignPartyId;
     std::filesystem::path m_partyQuestStatePath;
