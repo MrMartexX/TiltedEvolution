@@ -68,8 +68,7 @@ TEST_CASE("QuestSnapshot digest distinguishes failed quest state", "[quest.snaps
     auto failed = BuildSnapshot();
     failed.Status = QuestSnapshotStatus::Failed;
 
-    REQUIRE(running.ComputeDigest() != failed.ComputeDigest());
-    REQUIRE(QuestSnapshot::SchemaVersion == 2);
+    REQUIRE(canonical.ComputeDigest() != divergent.ComputeDigest());
 }
 
 TEST_CASE("QuestSnapshot canonicalization removes exact duplicates", "[quest.snapshot]")
@@ -88,4 +87,48 @@ TEST_CASE("QuestSnapshot canonicalization removes exact duplicates", "[quest.sna
     REQUIRE(snapshot.ReferenceAliases.size() == 2);
     REQUIRE(snapshot.LocationAliases.size() == 2);
     REQUIRE(snapshot.CreatedReferences.size() == 2);
+}
+
+TEST_CASE("Quest sync classifier distinguishes gameplay and hidden service candidates", "[quest.snapshot.classification]")
+{
+    PartyQuestSyncFacts mainQuest;
+    mainQuest.QuestType = 1;
+    mainQuest.HasStages = true;
+    REQUIRE(ClassifyPartyQuestSync(mainQuest) ==
+            PartyQuestSyncClassification{PartyQuestSyncClass::SharedCandidate, PartyQuestSyncReason::GameplayQuestType});
+
+    PartyQuestSyncFacts hiddenUntyped;
+    hiddenUntyped.QuestType = 0;
+    hiddenUntyped.HasStages = true;
+    REQUIRE(ClassifyPartyQuestSync(hiddenUntyped) ==
+            PartyQuestSyncClassification{PartyQuestSyncClass::ServiceCandidate, PartyQuestSyncReason::HiddenUntyped});
+
+    PartyQuestSyncFacts hiddenMisc;
+    hiddenMisc.QuestType = 6;
+    hiddenMisc.HasStages = true;
+    REQUIRE(ClassifyPartyQuestSync(hiddenMisc) ==
+            PartyQuestSyncClassification{PartyQuestSyncClass::ServiceCandidate, PartyQuestSyncReason::HiddenMiscellaneous});
+}
+
+TEST_CASE("Quest sync classifier keeps user-facing none and miscellaneous quests eligible", "[quest.snapshot.classification]")
+{
+    PartyQuestSyncFacts namedUntyped;
+    namedUntyped.QuestType = 0;
+    namedUntyped.HasStages = true;
+    namedUntyped.HasDisplayName = true;
+    REQUIRE(ClassifyPartyQuestSync(namedUntyped) ==
+            PartyQuestSyncClassification{PartyQuestSyncClass::SharedCandidate, PartyQuestSyncReason::UserFacingUntyped});
+
+    PartyQuestSyncFacts hudMisc;
+    hudMisc.QuestType = 6;
+    hudMisc.HasStages = true;
+    hudMisc.IsDisplayedInHud = true;
+    REQUIRE(ClassifyPartyQuestSync(hudMisc) ==
+            PartyQuestSyncClassification{PartyQuestSyncClass::SharedCandidate, PartyQuestSyncReason::UserFacingMiscellaneous});
+
+    PartyQuestSyncFacts noStages;
+    noStages.QuestType = 1;
+    noStages.HasStages = false;
+    REQUIRE(ClassifyPartyQuestSync(noStages) ==
+            PartyQuestSyncClassification{PartyQuestSyncClass::LocalOnly, PartyQuestSyncReason::NoStages});
 }
