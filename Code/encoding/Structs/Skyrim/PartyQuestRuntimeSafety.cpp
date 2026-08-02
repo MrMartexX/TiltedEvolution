@@ -19,6 +19,7 @@ PartyQuestRuntimeSafetyFacts PartyQuestRuntimeSafetyPolicy::Inspect(
     facts.CreatedReferenceCount = acSnapshot.CreatedReferences.size();
     facts.ObjectiveCount = acSnapshot.Objectives.size();
     facts.HasSceneParticipant = acSnapshot.SceneParticipantPlayerId.has_value();
+    facts.IsInactiveState = acSnapshot.Status == QuestSnapshotStatus::Inactive;
     facts.IsTerminalState = IsTerminalState(acSnapshot.Status);
 
     for (const QuestReferenceAliasSnapshot& alias : acSnapshot.ReferenceAliases)
@@ -53,6 +54,15 @@ PartyQuestRuntimeSafetyDecision PartyQuestRuntimeSafetyPolicy::Evaluate(
     {
         decision.Status = PartyQuestRuntimeSafetyStatus::RuntimeSafe;
         decision.Reason = PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;
+        return decision;
+    }
+
+    // Replaying an inactive target would imply undo/reset semantics. Generic
+    // SetStage cannot safely roll a running local quest back to inactive.
+    if (decision.Facts.IsInactiveState)
+    {
+        decision.Status = PartyQuestRuntimeSafetyStatus::RequiresAdapter;
+        decision.Reason = PartyQuestRuntimeSafetyReason::InactiveQuestState;
         return decision;
     }
 
