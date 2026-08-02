@@ -8,6 +8,8 @@ namespace
 {
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
+constexpr uint8_t kUntypedQuestType = 0;
+constexpr uint8_t kMiscellaneousQuestType = 6;
 
 template <class T, bool = std::is_enum_v<T>>
 struct UnderlyingOrSelf
@@ -95,6 +97,30 @@ void SortAndUnique(std::vector<T>& aValues)
     aValues.erase(std::unique(aValues.begin(), aValues.end()), aValues.end());
 }
 } // namespace
+
+PartyQuestSyncClassification ClassifyPartyQuestSync(const PartyQuestSyncFacts& acFacts) noexcept
+{
+    if (!acFacts.HasStages)
+        return {PartyQuestSyncClass::LocalOnly, PartyQuestSyncReason::NoStages};
+
+    const bool userFacing = acFacts.IsDisplayedInHud || acFacts.HasDisplayName;
+
+    if (acFacts.QuestType == kUntypedQuestType)
+    {
+        return userFacing
+            ? PartyQuestSyncClassification{PartyQuestSyncClass::SharedCandidate, PartyQuestSyncReason::UserFacingUntyped}
+            : PartyQuestSyncClassification{PartyQuestSyncClass::ServiceCandidate, PartyQuestSyncReason::HiddenUntyped};
+    }
+
+    if (acFacts.QuestType == kMiscellaneousQuestType)
+    {
+        return userFacing
+            ? PartyQuestSyncClassification{PartyQuestSyncClass::SharedCandidate, PartyQuestSyncReason::UserFacingMiscellaneous}
+            : PartyQuestSyncClassification{PartyQuestSyncClass::ServiceCandidate, PartyQuestSyncReason::HiddenMiscellaneous};
+    }
+
+    return {PartyQuestSyncClass::SharedCandidate, PartyQuestSyncReason::GameplayQuestType};
+}
 
 void QuestSnapshot::Canonicalize()
 {
