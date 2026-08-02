@@ -4,7 +4,7 @@ The PoC remains diagnostic-only. Canonical repair state is not applied back into
 
 ## Automated validation
 
-`TPTests` exercises the game-independent canonical state, persistence, protocol, repair, reconnect and divergence layers.
+`TPTests` exercises the game-independent canonical state, persistence, protocol, repair, reconnect, divergence, admission and quarantine layers.
 
 Current coverage includes:
 
@@ -24,21 +24,51 @@ Current coverage includes:
 - missed canonical update detected by quest revision;
 - client-only quest state preserved locally and never admitted into canonical campaign state by repair;
 - repair ACK correlation isolated per authenticated client session;
-- repair divergence summaries split into missing, revision mismatch, digest mismatch and client-only counts;
-- diagnostic quest admission classification for user-facing gameplay candidates versus hidden service candidates;
-- automatic one-PC shadow-peer scenario that performs initial convergence, applies one baseline update, deliberately disconnects for the next accepted update, reconnects and repairs the missed update, then injects a same-revision digest divergence and repairs it.
+- repair divergence summaries split into missing, revision mismatch, digest mismatch, client-only and quarantined-removal counts;
+- server-side admission reclassification from raw runtime facts;
+- explicit admission rejection without retry/repair storms;
+- logical quarantine migration for confirmed legacy service quests while preserving journal/world revision history;
+- automatic one-PC shadow-peer scenario for missed-update and digest-divergence repair.
 
-## Diagnostic quest classification
+## Enforced quest admission
 
-The live collector labels each observed quest with one of:
+The collector still classifies observed quests as:
 
 - `shared-candidate` — ordinary gameplay quest types, plus user-facing `None`/`Miscellaneous` quests;
-- `service-candidate` — hidden `None`/`Miscellaneous` quests that may be controllers, trackers or helper quests;
+- `service-candidate` — hidden `None`/`Miscellaneous` controller/tracker/helper candidates;
 - `local-only` — currently used for quests without stages.
 
-The classifier also logs a reason code such as `gameplay-type`, `user-facing-misc`, `hidden-misc`, or `hidden-untyped`.
+The new admission layer converts those observations into server-side policy results:
 
-This classification is intentionally observational in the current milestone. `service-candidate` quests are still allowed through the diagnostic canonical protocol so real evidence can be collected before an admission filter becomes authoritative. Classification metadata is not part of `QuestSnapshot`, its digest, the wire format, or persisted campaign state.
+- `SharedProvisional` — admitted to the diagnostic canonical campaign, but **not** approved for future Skyrim runtime mutation;
+- `BlockedServiceCandidate` — excluded from canonical transactions;
+- `BlockedLocalOnly` — excluded from canonical transactions;
+- `BlockedConfirmedServiceQuest` — an identity-level override for service quests confirmed by live evidence.
+
+Raw `QuestType`, stage-presence, HUD-display and display-name facts travel with protocol-v3 transaction requests. The client suppresses obvious service/local-only observations early, but the server independently reclassifies every valid request. Known service identities override client-supplied facts.
+
+The first confirmed-service identity set comes directly from the validated live session:
+
+- `WIGreeting` — `GameId(0, 0x000C7919)`;
+- `CRHoldExpansion` — `GameId(0, 0x000F9075)`;
+- `DLC1ScrollHandlingChangeLoc` — `GameId(2, 0x00012F92)` for the validated vanilla/DLC network mod mapping.
+
+`gameplay-type` remains provisional. Controller-like quests such as `CWResetGarrison1` are intentionally **not** declared runtime-safe merely because their Skyrim quest type is non-zero/non-miscellaneous.
+
+## Legacy campaign quarantine migration
+
+Existing persisted campaigns may already contain service snapshots and journal events from earlier diagnostic builds. The migration deliberately does not rewrite that history because doing so would invalidate world revisions, replay verification, transaction-id idempotency and recovery semantics.
+
+Instead:
+
+1. historical checkpoint/journal data remains intact;
+2. confirmed service quest snapshots are excluded from the shared repair surface;
+3. fresh replicas never receive those service snapshots;
+4. replicas that still contain a confirmed service quest receive an explicit `RemovedQuestIds` repair operation;
+5. the removal does not roll back or renumber `WorldRevision`;
+6. future observations of those quests cannot create new canonical transactions.
+
+This is a logical quarantine migration, not destructive journal pruning.
 
 ## One-PC shadow peer live mode
 
@@ -56,53 +86,36 @@ sPartyQuestStatePath=state/party_quest_campaign.bin
 
 The shadow peer is server-local and never mutates Skyrim. It uses synthetic client id `0xFFFFFFFE` only inside `PartyQuestProtocolCoordinator`.
 
-The live sequence is automatic:
-
-1. synchronize the shadow replica to the current persisted campaign;
-2. consume the first accepted canonical update as a baseline;
-3. disconnect the shadow peer before the next update;
-4. deliberately miss the second accepted canonical update;
-5. reconnect and verify report → repair → ACK convergence;
-6. alter one local snapshot payload while keeping its quest/world revision unchanged;
-7. verify that the next report detects `DigestMismatch` and repairs it;
-8. disconnect the synthetic peer and emit `PartyQuestShadowPeer TEST PASS`.
-
-The server emits `TEST START`, `STEP 1 PASS`, and a final `TEST PASS`/`TEST FAIL` line, so the user does not need to manually operate a second client or deliberately time disconnects.
-
 ## Live validation completed
 
-A restart/reconnect campaign test confirmed:
+The one-PC shadow-peer session starting from persisted `WorldRevision=269` confirmed:
 
 - stable `CampaignId=A0C27D9E9A1E822D3EE502D620B25F94`;
-- canonical persistence restoration from world revision 182 with 33 quests and 182 journal entries;
-- retained client replica for the same campaign across server restart;
-- reconnect report at the retained world revision with no unnecessary full repair;
-- first post-restart transaction accepted immediately;
-- removal of the previous historical transaction-ID conflict storm;
-- continued accepted canonical transactions after restart.
+- initial shadow convergence;
+- baseline canonical update at revision 270;
+- deliberate missed update at revision 271;
+- missed-update repair with one revision mismatch;
+- deliberate same-revision payload corruption;
+- one `DigestMismatch` repair;
+- verified repair ACK and final convergence;
+- clean shadow-peer disconnect;
+- continued real-client progression after the test with accepted canonical transactions.
+
+The same live log produced the evidence used for the first service blocklist: 71 service-candidate observations were dominated by `DLC1ScrollHandlingChangeLoc`, `CRHoldExpansion`, and `WIGreeting`.
 
 ## Current CI validation
 
-The one-PC shadow-peer code milestone is commit `31d096c699b92be49ab9548267e0321d78ed92f2`.
+The admission/quarantine milestone is being validated from the branch head containing `party_quest_admission.cpp` tests. The required workflows are:
 
-At that commit:
+- Build Windows;
+- Build Linux;
+- Equal party PoC diagnostics;
+- `TPTests` execution.
 
-- Build Windows: passed;
-- Equal party PoC Windows runtime build: passed;
-- `TPTests`: built and executed successfully, including the shadow-peer missed-update + digest-divergence scenario;
-- the full Linux build is tracked by its normal workflow separately.
-
-This documentation commit does not alter the validated code.
+After all workflows pass, this section should be updated with the exact validated commit.
 
 ## Next live validation
 
-Use one real Skyrim client plus the server-local shadow peer:
+Use the existing persisted campaign, not a fresh state directory. The live check should confirm that startup reports known historical service quests as quarantined, fresh repair surfaces omit them, service observations no longer advance canonical `WorldRevision`, and ordinary visible quests still enter as `shared-provisional`.
 
-1. join the existing persisted campaign with the same client/server build;
-2. create/join the Party normally;
-3. allow at least two accepted quest transactions (ordinary play is sufficient);
-4. confirm `PartyQuestShadowPeer TEST PASS` in the server log;
-5. continue playing briefly to collect `syncClass`/`syncReason` evidence for service-quest classification;
-6. review the server/client logs before turning service classification into an authoritative admission filter.
-
-No canonical `SetStage`, alias restoration, inventory mutation or save-file mutation should be enabled until this validation is reviewed.
+Canonical `SetStage`, alias restoration, inventory mutation and save-file mutation remain disabled until admission behavior is validated and stronger per-quest runtime-safety rules are implemented.
