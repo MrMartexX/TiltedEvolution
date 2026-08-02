@@ -42,6 +42,41 @@ void ReadCampaignId(TiltedPhoques::Buffer::Reader& aReader, PartyQuestCampaignId
     aCampaignId.High = Serialization::ReadVarInt(aReader);
     aCampaignId.Low = Serialization::ReadVarInt(aReader);
 }
+
+void WriteSyncFacts(TiltedPhoques::Buffer::Writer& aWriter, const PartyQuestSyncFacts& acFacts) noexcept
+{
+    Serialization::WriteVarInt(aWriter, acFacts.QuestType);
+    WriteBool(aWriter, acFacts.HasStages);
+    WriteBool(aWriter, acFacts.IsDisplayedInHud);
+    WriteBool(aWriter, acFacts.HasDisplayName);
+}
+
+bool ReadSyncFacts(TiltedPhoques::Buffer::Reader& aReader, PartyQuestSyncFacts& aFacts) noexcept
+{
+    const uint64_t questType = Serialization::ReadVarInt(aReader);
+    if (questType > 0xFF)
+        return false;
+
+    PartyQuestSyncFacts facts;
+    facts.QuestType = static_cast<uint8_t>(questType);
+    if (!ReadBool(aReader, facts.HasStages) ||
+        !ReadBool(aReader, facts.IsDisplayedInHud) ||
+        !ReadBool(aReader, facts.HasDisplayName))
+    {
+        return false;
+    }
+
+    aFacts = facts;
+    return true;
+}
+
+bool SyncFactsEqual(const PartyQuestSyncFacts& acLeft, const PartyQuestSyncFacts& acRight) noexcept
+{
+    return acLeft.QuestType == acRight.QuestType &&
+        acLeft.HasStages == acRight.HasStages &&
+        acLeft.IsDisplayedInHud == acRight.IsDisplayedInHud &&
+        acLeft.HasDisplayName == acRight.HasDisplayName;
+}
 } // namespace
 
 void RequestPartyQuestTransaction::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
@@ -49,6 +84,7 @@ void RequestPartyQuestTransaction::SerializeRaw(TiltedPhoques::Buffer::Writer& a
     WriteProtocolHeader(aWriter);
     Serialization::WriteVarInt(aWriter, RequestId);
     PartyQuestWireCodec::SerializeTransaction(aWriter, Transaction);
+    WriteSyncFacts(aWriter, SyncFacts);
 }
 
 void RequestPartyQuestTransaction::DeserializeRaw(TiltedPhoques::Buffer::Reader& aReader) noexcept
@@ -56,13 +92,16 @@ void RequestPartyQuestTransaction::DeserializeRaw(TiltedPhoques::Buffer::Reader&
     ClientMessage::DeserializeRaw(aReader);
     IsValid = ReadProtocolHeader(aReader);
     RequestId = Serialization::ReadVarInt(aReader);
-    IsValid = IsValid && RequestId != 0 && PartyQuestWireCodec::DeserializeTransaction(aReader, Transaction);
+    IsValid = IsValid && RequestId != 0 &&
+        PartyQuestWireCodec::DeserializeTransaction(aReader, Transaction) &&
+        ReadSyncFacts(aReader, SyncFacts);
 }
 
 bool RequestPartyQuestTransaction::operator==(const RequestPartyQuestTransaction& acRhs) const noexcept
 {
     return GetOpcode() == acRhs.GetOpcode() && RequestId == acRhs.RequestId &&
-           Transaction == acRhs.Transaction && IsValid == acRhs.IsValid;
+           Transaction == acRhs.Transaction && SyncFactsEqual(SyncFacts, acRhs.SyncFacts) &&
+           IsValid == acRhs.IsValid;
 }
 
 void RequestPartyQuestReplicaReport::SerializeRaw(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
