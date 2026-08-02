@@ -52,6 +52,43 @@ const char* GetStatusName(QuestSnapshotStatus aStatus) noexcept
     }
 }
 
+const char* GetSyncClassName(PartyQuestSyncClass aClass) noexcept
+{
+    switch (aClass)
+    {
+    case PartyQuestSyncClass::SharedCandidate: return "shared-candidate";
+    case PartyQuestSyncClass::ServiceCandidate: return "service-candidate";
+    case PartyQuestSyncClass::LocalOnly: return "local-only";
+    default: return "unknown";
+    }
+}
+
+const char* GetSyncReasonName(PartyQuestSyncReason aReason) noexcept
+{
+    switch (aReason)
+    {
+    case PartyQuestSyncReason::GameplayQuestType: return "gameplay-type";
+    case PartyQuestSyncReason::UserFacingMiscellaneous: return "user-facing-misc";
+    case PartyQuestSyncReason::UserFacingUntyped: return "user-facing-untyped";
+    case PartyQuestSyncReason::HiddenMiscellaneous: return "hidden-misc";
+    case PartyQuestSyncReason::HiddenUntyped: return "hidden-untyped";
+    case PartyQuestSyncReason::NoStages: return "no-stages";
+    default: return "unknown";
+    }
+}
+
+PartyQuestSyncClassification GetSyncClassification(const TESQuest& acQuest) noexcept
+{
+    const char* pDisplayName = acQuest.fullName.value.AsAscii();
+
+    PartyQuestSyncFacts facts;
+    facts.QuestType = static_cast<uint8_t>(acQuest.type);
+    facts.HasStages = !acQuest.stages.Empty();
+    facts.IsDisplayedInHud = (acQuest.flags & TESQuest::Flags::DisplayedInHUD) != 0;
+    facts.HasDisplayName = pDisplayName && *pDisplayName != '\0';
+    return ClassifyPartyQuestSync(facts);
+}
+
 bool IsAliasType(const BGSBaseAlias& acAlias, const char* acType) noexcept
 {
     const char* pType = acAlias.QType().AsAscii();
@@ -147,11 +184,17 @@ void QuestSnapshotCollector::Log(TESQuest* apQuest, const QuestSnapshot& acSnaps
     if (!apQuest)
         return;
 
+    const PartyQuestSyncClassification classification = GetSyncClassification(*apQuest);
     spdlog::info(
-        "QuestSnapshot[{}]: form={:08X} gameId={:016X} editorId='{}' status={} stage={} digest={:016X} completedStages={} objectives={} refAliases={} locAliases={} createdRefs={}",
+        "QuestSnapshot[{}]: form={:08X} gameId={:016X} editorId='{}' status={} stage={} digest={:016X} completedStages={} objectives={} refAliases={} locAliases={} createdRefs={} syncClass={} syncReason={} questType={}",
         acReason ? acReason : "unknown", apQuest->formID, acSnapshot.QuestId.LogFormat(), apQuest->idName.AsAscii(), GetStatusName(acSnapshot.Status),
         acSnapshot.CurrentStage, acSnapshot.ComputeDigest(), acSnapshot.CompletedStages.size(), acSnapshot.Objectives.size(),
-        acSnapshot.ReferenceAliases.size(), acSnapshot.LocationAliases.size(), acSnapshot.CreatedReferences.size());
+        acSnapshot.ReferenceAliases.size(), acSnapshot.LocationAliases.size(), acSnapshot.CreatedReferences.size(),
+        GetSyncClassName(classification.Class), GetSyncReasonName(classification.Reason), static_cast<uint8_t>(apQuest->type));
+
+    // ServiceCandidate is intentionally observational in this milestone. It is
+    // still submitted through the diagnostic canonical protocol so two-client
+    // evidence can be collected before an admission filter becomes authoritative.
 
     // These detail lines intentionally use info during the runtime PoC. The
     // production client logger filters debug messages, and two-client validation
