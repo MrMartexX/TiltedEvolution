@@ -150,6 +150,15 @@ void QuestService::SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, con
         return;
     }
 
+    const auto factsIt = m_partyQuestSyncFacts.find(acSnapshot.QuestId);
+    if (factsIt == m_partyQuestSyncFacts.end())
+    {
+        spdlog::warn(
+            "PartyQuestProtocol transaction not sent: quest={:016X} has no admission facts; failing closed",
+            acSnapshot.QuestId.LogFormat());
+        return;
+    }
+
     const QuestSnapshot* pKnownSnapshot = m_partyQuestSession->GetReplica().FindQuest(acSnapshot.QuestId);
 
     RequestPartyQuestTransaction request;
@@ -159,6 +168,7 @@ void QuestService::SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, con
     request.Transaction.QuestId = acSnapshot.QuestId;
     request.Transaction.ExpectedQuestRevision = pKnownSnapshot ? pKnownSnapshot->Revision : 0;
     request.Transaction.ProposedSnapshot = acSnapshot;
+    request.SyncFacts = factsIt->second;
 
     if (!m_partyQuestSubmissions.MarkInFlight(request.Transaction.TransactionId, acSnapshot))
     {
@@ -173,7 +183,7 @@ void QuestService::SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, con
     m_world.GetTransport().Send(request);
 
     spdlog::info(
-        "PartyQuestProtocol transaction sent: reason={} player={} request={} transaction={} quest={:016X} expectedRevision={} stage={} digest={:016X} inFlight={} queued={}",
+        "PartyQuestProtocol transaction sent: reason={} player={} request={} transaction={} quest={:016X} expectedRevision={} stage={} digest={:016X} questType={} hasStages={} hud={} named={} inFlight={} queued={}",
         acReason,
         m_localPlayerId,
         request.RequestId,
@@ -182,6 +192,10 @@ void QuestService::SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, con
         request.Transaction.ExpectedQuestRevision,
         request.Transaction.ProposedSnapshot.CurrentStage,
         request.Transaction.ProposedSnapshot.ComputeDigest(),
+        request.SyncFacts.QuestType,
+        request.SyncFacts.HasStages,
+        request.SyncFacts.IsDisplayedInHud,
+        request.SyncFacts.HasDisplayName,
         m_partyQuestSubmissions.GetInFlightCount(),
         m_partyQuestSubmissions.GetQueuedCount());
 }
@@ -217,7 +231,23 @@ void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const
     if (!snapshot)
         return;
 
+    const PartyQuestSyncFacts syncFacts = QuestSnapshotCollector::CollectSyncFacts(pQuest);
+    const PartyQuestSyncClassification classification = ClassifyPartyQuestSync(syncFacts);
+    m_partyQuestSyncFacts[snapshot->QuestId] = syncFacts;
+
     QuestSnapshotCollector::Log(pQuest, *snapshot, acReason);
+
+    if (classification.Class != PartyQuestSyncClass::SharedCandidate)
+    {
+        spdlog::info(
+            "PartyQuestProtocol admission suppressed locally: reason={} quest={:016X} syncClass={} syncReason={} questType={}",
+            acReason,
+            snapshot->QuestId.LogFormat(),
+            static_cast<unsigned>(classification.Class),
+            static_cast<unsigned>(classification.Reason),
+            syncFacts.QuestType);
+        return;
+    }
 
     if (!m_partyQuestSession || m_localPlayerId == 0 || !m_world.GetPartyService().IsInParty())
         return;
@@ -301,6 +331,17 @@ void QuestService::OnPartyQuestTransactionResult(const NotifyPartyQuestTransacti
     if (acResult.Result.Status == PartyQuestApplyStatus::Accepted)
         return;
 
+    if (acResult.Result.Status == PartyQuestApplyStatus::AdmissionRejected)
+    {
+        if (transactionId != 0)
+            m_partyQuestSubmissions.Discard(transactionId);
+        spdlog::info(
+            "PartyQuestProtocol admission rejection acknowledged without repair: request={} transaction={}",
+            acResult.RequestId,
+            transactionId);
+        return;
+    }
+
     if (transactionId != 0)
         m_partyQuestSubmissions.Reject(transactionId);
 
@@ -331,7 +372,7 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
         m_world.GetTransport().Send(result.Ack);
 
     spdlog::info(
-        "PartyQuestProtocol repair plan: report={} plan={} campaign={:016X}{:016X} campaignChanged={} valid={} planStatus={} items={} clientStatus={} ackStatus={} worldRevision={}",
+        "PartyQuestProtocol repair plan: report={} plan={} campaign={:016X}{:016X} campaignChanged={} valid={} planStatus={} items={} removals={} clientStatus={} ackStatus={} worldRevision={}",
         acPlan.ReportId,
         acPlan.PlanId,
         acPlan.CampaignId.High,
@@ -340,6 +381,7 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
         acPlan.IsValid,
         static_cast<unsigned>(acPlan.Plan.Status),
         acPlan.Plan.Items.size(),
+        acPlan.Plan.RemovedQuestIds.size(),
         static_cast<unsigned>(result.Status),
         static_cast<unsigned>(result.Ack.ApplyStatus),
         result.Ack.PostApplyReport.WorldRevision);
