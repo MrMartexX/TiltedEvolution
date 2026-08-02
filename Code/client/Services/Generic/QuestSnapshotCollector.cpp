@@ -8,6 +8,9 @@
 #include <Forms/TESQuest.h>
 #include <TESObjectREFR.h>
 
+#include <Structs/Skyrim/PartyQuestAdmission.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSafety.h>
+
 namespace
 {
 QuestSnapshotStatus GetQuestStatus(const TESQuest& acQuest) noexcept
@@ -73,6 +76,39 @@ const char* GetSyncReasonName(PartyQuestSyncReason aReason) noexcept
     case PartyQuestSyncReason::HiddenMiscellaneous: return "hidden-misc";
     case PartyQuestSyncReason::HiddenUntyped: return "hidden-untyped";
     case PartyQuestSyncReason::NoStages: return "no-stages";
+    default: return "unknown";
+    }
+}
+
+const char* GetRuntimeSafetyName(PartyQuestRuntimeSafetyStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestRuntimeSafetyStatus::Blocked: return "blocked";
+    case PartyQuestRuntimeSafetyStatus::StageOnly: return "stage-only";
+    case PartyQuestRuntimeSafetyStatus::Deferred: return "deferred";
+    case PartyQuestRuntimeSafetyStatus::RequiresAdapter: return "requires-adapter";
+    case PartyQuestRuntimeSafetyStatus::RuntimeSafe: return "runtime-safe";
+    default: return "unknown";
+    }
+}
+
+const char* GetRuntimeSafetyReasonName(PartyQuestRuntimeSafetyReason aReason) noexcept
+{
+    switch (aReason)
+    {
+    case PartyQuestRuntimeSafetyReason::AdmissionBlocked: return "admission-blocked";
+    case PartyQuestRuntimeSafetyReason::SimpleStageTransition: return "simple-stage-transition";
+    case PartyQuestRuntimeSafetyReason::ReferenceAliasesNeedWorld: return "reference-aliases-need-world";
+    case PartyQuestRuntimeSafetyReason::SceneParticipantActive: return "scene-participant-active";
+    case PartyQuestRuntimeSafetyReason::InactiveQuestState: return "inactive-quest-state";
+    case PartyQuestRuntimeSafetyReason::TerminalQuestState: return "terminal-quest-state";
+    case PartyQuestRuntimeSafetyReason::CreatedReferences: return "created-references";
+    case PartyQuestRuntimeSafetyReason::LocationAliases: return "location-aliases";
+    case PartyQuestRuntimeSafetyReason::QuestObjectAliases: return "quest-object-aliases";
+    case PartyQuestRuntimeSafetyReason::UnresolvedReferenceAliases: return "unresolved-reference-aliases";
+    case PartyQuestRuntimeSafetyReason::ComplexAliasTopology: return "complex-alias-topology";
+    case PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter: return "verified-native-adapter";
     default: return "unknown";
     }
 }
@@ -191,16 +227,22 @@ void QuestSnapshotCollector::Log(TESQuest* apQuest, const QuestSnapshot& acSnaps
     if (!apQuest)
         return;
 
-    const PartyQuestSyncClassification classification = Classify(apQuest);
+    const PartyQuestSyncFacts syncFacts = CollectSyncFacts(apQuest);
+    const PartyQuestSyncClassification classification = ClassifyPartyQuestSync(syncFacts);
+    const PartyQuestAdmissionDecision admission = PartyQuestAdmissionPolicy::Evaluate(acSnapshot.QuestId, syncFacts);
+    const PartyQuestApplyPlan applyPlan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(admission, acSnapshot);
+
     spdlog::info(
-        "QuestSnapshot[{}]: form={:08X} gameId={:016X} editorId='{}' status={} stage={} digest={:016X} completedStages={} objectives={} refAliases={} locAliases={} createdRefs={} syncClass={} syncReason={} questType={}",
+        "QuestSnapshot[{}]: form={:08X} gameId={:016X} editorId='{}' status={} stage={} digest={:016X} completedStages={} objectives={} refAliases={} locAliases={} createdRefs={} syncClass={} syncReason={} questType={} runtimeSafety={} runtimeReason={} applyActions=0x{:X} dryRunOnly={}",
         acReason ? acReason : "unknown", apQuest->formID, acSnapshot.QuestId.LogFormat(), apQuest->idName.AsAscii(), GetStatusName(acSnapshot.Status),
         acSnapshot.CurrentStage, acSnapshot.ComputeDigest(), acSnapshot.CompletedStages.size(), acSnapshot.Objectives.size(),
         acSnapshot.ReferenceAliases.size(), acSnapshot.LocationAliases.size(), acSnapshot.CreatedReferences.size(),
-        GetSyncClassName(classification.Class), GetSyncReasonName(classification.Reason), static_cast<uint8_t>(apQuest->type));
+        GetSyncClassName(classification.Class), GetSyncReasonName(classification.Reason), static_cast<uint8_t>(apQuest->type),
+        GetRuntimeSafetyName(applyPlan.Safety.Status), GetRuntimeSafetyReasonName(applyPlan.Safety.Reason),
+        static_cast<uint32_t>(applyPlan.Actions), applyPlan.DryRunOnly);
 
-    // Classification is enforced before the diagnostic transaction is sent.
-    // These details remain observational and never mutate the local quest.
+    // Classification and runtime-safety planning are observational here. The
+    // canonical protocol still does not execute these apply actions in Skyrim.
     for (const auto& objective : acSnapshot.Objectives)
         spdlog::info("QuestSnapshotDetail objective: index={} state={}", objective.Index, static_cast<uint8_t>(objective.State));
 
