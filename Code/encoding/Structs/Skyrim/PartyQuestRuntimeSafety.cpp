@@ -48,9 +48,9 @@ PartyQuestRuntimeSafetyDecision PartyQuestRuntimeSafetyPolicy::Evaluate(
         return decision;
     }
 
-    // A verified native adapter is the only generic escape hatch to RuntimeSafe.
-    // No live adapter is registered in this milestone.
-    if (acProfile.HasVerifiedNativeAdapter)
+    // A compatibility-authorized native adapter is the only generic escape
+    // hatch to RuntimeSafe. The token cannot be created by ordinary callers.
+    if (acProfile.HasVerifiedNativeAdapter())
     {
         decision.Status = PartyQuestRuntimeSafetyStatus::RuntimeSafe;
         decision.Reason = PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;
