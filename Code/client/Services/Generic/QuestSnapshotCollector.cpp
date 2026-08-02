@@ -77,7 +77,7 @@ const char* GetSyncReasonName(PartyQuestSyncReason aReason) noexcept
     }
 }
 
-PartyQuestSyncClassification GetSyncClassification(const TESQuest& acQuest) noexcept
+PartyQuestSyncClassification GetSyncClassification(TESQuest& acQuest) noexcept
 {
     const char* pDisplayName = acQuest.fullName.value.AsAscii();
 
