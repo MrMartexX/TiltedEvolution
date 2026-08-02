@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestShadowPeer.h>
 
 #include <limits>
+#include <utility>
 
 bool PartyQuestShadowPeerHarness::Synchronize(
     PartyQuestProtocolCoordinator& aCoordinator,
