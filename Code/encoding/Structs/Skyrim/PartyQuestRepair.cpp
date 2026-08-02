@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRepair.h>
+#include <Structs/Skyrim/PartyQuestAdmission.h>
 
 #include <algorithm>
 #include <unordered_set>
@@ -32,7 +33,9 @@ PartyQuestRepairPlan PartyQuestRepairPlanner::Build(
     orderedSnapshots.reserve(acCanonicalState.GetQuestCount());
     for (const auto& [questId, snapshot] : acCanonicalState.GetQuests())
     {
-        (void)questId;
+        if (PartyQuestAdmissionPolicy::IsConfirmedServiceQuest(questId))
+            continue;
+
         orderedSnapshots.push_back(&snapshot);
     }
 
@@ -68,10 +71,23 @@ PartyQuestRepairPlan PartyQuestRepairPlanner::Build(
             plan.Items.push_back({reason, *pCanonicalSnapshot});
     }
 
-    if (!plan.Items.empty() || acClientReport.WorldRevision != acCanonicalState.GetWorldRevision())
+    for (const auto& [questId, entry] : acClientReport.Quests)
+    {
+        (void)entry;
+        if (PartyQuestAdmissionPolicy::IsConfirmedServiceQuest(questId))
+            plan.RemovedQuestIds.push_back(questId);
+    }
+    std::sort(plan.RemovedQuestIds.begin(), plan.RemovedQuestIds.end(), GameIdLess);
+
+    if (!plan.Items.empty() || !plan.RemovedQuestIds.empty() ||
+        acClientReport.WorldRevision != acCanonicalState.GetWorldRevision())
+    {
         plan.Status = PartyQuestRepairPlanStatus::RepairRequired;
+    }
     else
+    {
         plan.Status = PartyQuestRepairPlanStatus::UpToDate;
+    }
 
     return plan;
 }
@@ -99,9 +115,14 @@ PartyQuestRepairSummary PartyQuestRepairPlanner::Summarize(
         }
     }
 
+    summary.QuarantinedQuestRemovalCount = acPlan.RemovedQuestIds.size();
+
     for (const auto& [questId, entry] : acClientReport.Quests)
     {
         (void)entry;
+        if (PartyQuestAdmissionPolicy::IsConfirmedServiceQuest(questId))
+            continue;
+
         if (!acCanonicalState.FindQuest(questId))
             ++summary.ClientOnlyQuestCount;
     }
@@ -113,7 +134,11 @@ PartyQuestReplica PartyQuestReplica::FromCanonical(const PartyQuestState& acCano
 {
     PartyQuestReplica replica;
     replica.m_worldRevision = acCanonicalState.GetWorldRevision();
-    replica.m_quests = acCanonicalState.GetQuests();
+    for (const auto& [questId, snapshot] : acCanonicalState.GetQuests())
+    {
+        if (!PartyQuestAdmissionPolicy::IsConfirmedServiceQuest(questId))
+            replica.m_quests.emplace(questId, snapshot);
+    }
     return replica;
 }
 
@@ -147,7 +172,7 @@ PartyQuestReplicaApplyStatus PartyQuestReplica::Apply(const PartyQuestRepairPlan
         return PartyQuestReplicaApplyStatus::InvalidPlan;
 
     std::unordered_set<GameId> seenQuestIds;
-    seenQuestIds.reserve(acPlan.Items.size());
+    seenQuestIds.reserve(acPlan.Items.size() + acPlan.RemovedQuestIds.size());
 
     for (const auto& item : acPlan.Items)
     {
@@ -158,13 +183,28 @@ PartyQuestReplicaApplyStatus PartyQuestReplica::Apply(const PartyQuestRepairPlan
             return PartyQuestReplicaApplyStatus::InvalidPlan;
     }
 
+    for (const GameId& questId : acPlan.RemovedQuestIds)
+    {
+        if (!questId || !PartyQuestAdmissionPolicy::IsConfirmedServiceQuest(questId) ||
+            !seenQuestIds.emplace(questId).second)
+        {
+            return PartyQuestReplicaApplyStatus::InvalidPlan;
+        }
+    }
+
     if (acPlan.Status == PartyQuestRepairPlanStatus::UpToDate)
     {
-        if (!acPlan.Items.empty() || acPlan.TargetWorldRevision != m_worldRevision)
+        if (!acPlan.Items.empty() || !acPlan.RemovedQuestIds.empty() ||
+            acPlan.TargetWorldRevision != m_worldRevision)
+        {
             return PartyQuestReplicaApplyStatus::InvalidPlan;
+        }
 
         return PartyQuestReplicaApplyStatus::NoChanges;
     }
+
+    for (const GameId& questId : acPlan.RemovedQuestIds)
+        m_quests.erase(questId);
 
     for (auto item : acPlan.Items)
     {
@@ -172,7 +212,8 @@ PartyQuestReplicaApplyStatus PartyQuestReplica::Apply(const PartyQuestRepairPlan
         m_quests[item.CanonicalSnapshot.QuestId] = std::move(item.CanonicalSnapshot);
     }
 
-    const bool changed = !acPlan.Items.empty() || m_worldRevision != acPlan.TargetWorldRevision;
+    const bool changed = !acPlan.Items.empty() || !acPlan.RemovedQuestIds.empty() ||
+        m_worldRevision != acPlan.TargetWorldRevision;
     m_worldRevision = acPlan.TargetWorldRevision;
     return changed ? PartyQuestReplicaApplyStatus::Applied : PartyQuestReplicaApplyStatus::NoChanges;
 }
