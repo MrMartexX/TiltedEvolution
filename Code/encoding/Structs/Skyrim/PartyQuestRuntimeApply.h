@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 enum class PartyQuestRuntimeApplyState : uint8_t
 {
@@ -24,6 +25,7 @@ enum class PartyQuestRuntimeApplyBeginStatus : uint8_t
     DuplicateCommitted,
     TransactionConflict,
     Busy,
+    RecoveryBlocked,
     InvalidRequest,
     UnsafePlan
 };
@@ -34,6 +36,15 @@ enum class PartyQuestRuntimeVerificationStatus : uint8_t
     Diverged,
     NeedsStableSample,
     Stable
+};
+
+enum class PartyQuestRuntimeRecoveryDisposition : uint8_t
+{
+    InvalidState,
+    Clean,
+    DeferredRestored,
+    PreMutationRestartRequired,
+    CheckpointRestoreRequired
 };
 
 struct PartyQuestRuntimeApplyRequest
@@ -57,6 +68,27 @@ struct PartyQuestRuntimeApplyEntry
     bool RuntimeMutationMayHaveOccurred{};
     uint64_t LastObservedDigest{};
     uint32_t StableCanonicalSamples{};
+
+    bool operator==(const PartyQuestRuntimeApplyEntry&) const noexcept = default;
+};
+
+struct PartyQuestRuntimeCommittedRecord
+{
+    uint64_t TransactionId{};
+    uint64_t TargetWorldRevision{};
+    GameId QuestId{};
+    uint64_t CanonicalDigest{};
+    PartyQuestApplyAction Actions{PartyQuestApplyAction::None};
+
+    bool operator==(const PartyQuestRuntimeCommittedRecord&) const noexcept = default;
+};
+
+struct PartyQuestRuntimeRecoveryState
+{
+    std::vector<PartyQuestRuntimeCommittedRecord> Committed;
+    std::optional<PartyQuestRuntimeApplyEntry> Active;
+
+    bool operator==(const PartyQuestRuntimeRecoveryState&) const noexcept = default;
 };
 
 /**
@@ -96,9 +128,29 @@ public:
     /** Aborts the active repair and releases the save guard. */
     bool Abort(uint64_t aTransactionId) noexcept;
 
+    /** Exports committed-id journal plus any in-progress recovery marker. */
+    [[nodiscard]] PartyQuestRuntimeRecoveryState ExportRecoveryState() const;
+
+    /**
+     * Restores durable metadata into a fresh coordinator. Deferred work may be
+     * resumed. Pre-mutation work is intentionally restarted. Any record where
+     * mutation may have occurred blocks new work until checkpoint restoration
+     * is explicitly acknowledged.
+     */
+    [[nodiscard]] PartyQuestRuntimeRecoveryDisposition RestoreRecoveryState(
+        const PartyQuestRuntimeRecoveryState& acState) noexcept;
+
+    /** Clears a crash-recovery barrier after the external checkpoint is restored. */
+    bool AcknowledgeCheckpointRestored(uint64_t aTransactionId) noexcept;
+
     [[nodiscard]] const PartyQuestRuntimeApplyEntry* GetActive() const noexcept;
     [[nodiscard]] bool IsCommitted(uint64_t aTransactionId) const noexcept;
     [[nodiscard]] bool IsSaveGuardActive() const noexcept;
+    [[nodiscard]] bool IsRecoveryBlocked() const noexcept { return m_recoveryBlocked; }
+    [[nodiscard]] const PartyQuestRuntimeApplyEntry* GetRecoveryRecord() const noexcept
+    {
+        return m_recoveryRecord ? &*m_recoveryRecord : nullptr;
+    }
     [[nodiscard]] bool LastAbortRequiresCheckpointRestore() const noexcept
     {
         return m_lastAbortRequiresCheckpointRestore;
@@ -119,8 +171,12 @@ private:
         const PartyQuestRuntimeApplyRequest& acRequest) noexcept;
     [[nodiscard]] static Fingerprint FingerprintActive(
         const PartyQuestRuntimeApplyEntry& acEntry) noexcept;
+    [[nodiscard]] static bool ValidateRecoveryEntry(
+        const PartyQuestRuntimeApplyEntry& acEntry) noexcept;
 
     std::optional<PartyQuestRuntimeApplyEntry> m_active;
+    std::optional<PartyQuestRuntimeApplyEntry> m_recoveryRecord;
     std::unordered_map<uint64_t, Fingerprint> m_committed;
+    bool m_recoveryBlocked{};
     bool m_lastAbortRequiresCheckpointRestore{};
 };
