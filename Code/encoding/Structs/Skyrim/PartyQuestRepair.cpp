@@ -31,7 +31,10 @@ PartyQuestRepairPlan PartyQuestRepairPlanner::Build(
     std::vector<const QuestSnapshot*> orderedSnapshots;
     orderedSnapshots.reserve(acCanonicalState.GetQuestCount());
     for (const auto& [questId, snapshot] : acCanonicalState.GetQuests())
+    {
+        (void)questId;
         orderedSnapshots.push_back(&snapshot);
+    }
 
     std::sort(orderedSnapshots.begin(), orderedSnapshots.end(), [](const QuestSnapshot* apLeft, const QuestSnapshot* apRight)
     {
@@ -71,6 +74,39 @@ PartyQuestRepairPlan PartyQuestRepairPlanner::Build(
         plan.Status = PartyQuestRepairPlanStatus::UpToDate;
 
     return plan;
+}
+
+PartyQuestRepairSummary PartyQuestRepairPlanner::Summarize(
+    const PartyQuestState& acCanonicalState,
+    const PartyQuestReplicaReport& acClientReport,
+    const PartyQuestRepairPlan& acPlan)
+{
+    PartyQuestRepairSummary summary;
+
+    for (const PartyQuestRepairItem& item : acPlan.Items)
+    {
+        switch (item.Reason)
+        {
+        case PartyQuestRepairReason::MissingQuest:
+            ++summary.MissingQuestCount;
+            break;
+        case PartyQuestRepairReason::RevisionMismatch:
+            ++summary.RevisionMismatchCount;
+            break;
+        case PartyQuestRepairReason::DigestMismatch:
+            ++summary.DigestMismatchCount;
+            break;
+        }
+    }
+
+    for (const auto& [questId, entry] : acClientReport.Quests)
+    {
+        (void)entry;
+        if (!acCanonicalState.FindQuest(questId))
+            ++summary.ClientOnlyQuestCount;
+    }
+
+    return summary;
 }
 
 PartyQuestReplica PartyQuestReplica::FromCanonical(const PartyQuestState& acCanonicalState)
