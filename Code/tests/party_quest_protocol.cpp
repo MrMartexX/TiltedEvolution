@@ -102,6 +102,10 @@ TEST_CASE("Party quest protocol messages round-trip through the real factories",
     RequestPartyQuestTransaction transactionRequest;
     transactionRequest.RequestId = 7001;
     transactionRequest.Transaction = BuildProtocolTransaction(1002, 41, questId, 1, 30);
+    transactionRequest.SyncFacts.QuestType = 4;
+    transactionRequest.SyncFacts.HasStages = true;
+    transactionRequest.SyncFacts.IsDisplayedInHud = true;
+    transactionRequest.SyncFacts.HasDisplayName = true;
     auto decodedTransactionRequest = RoundTripClientMessage(transactionRequest);
     REQUIRE(decodedTransactionRequest->IsValid);
     REQUIRE(*decodedTransactionRequest == transactionRequest);
@@ -120,6 +124,8 @@ TEST_CASE("Party quest protocol messages round-trip through the real factories",
     repairMessage.PlanId = 8001;
     repairMessage.CampaignId = campaignId;
     repairMessage.Plan = PartyQuestRepairPlanner::Build(server, reportRequest.Report);
+    repairMessage.Plan.Status = PartyQuestRepairPlanStatus::RepairRequired;
+    repairMessage.Plan.RemovedQuestIds = {GameId(0, 0x000C7919)};
     auto decodedRepairMessage = RoundTripServerMessage(repairMessage);
     REQUIRE(decodedRepairMessage->IsValid);
     REQUIRE(*decodedRepairMessage == repairMessage);
@@ -143,6 +149,13 @@ TEST_CASE("Party quest protocol messages round-trip through the real factories",
     auto decodedTransactionResult = RoundTripServerMessage(transactionResult);
     REQUIRE(decodedTransactionResult->IsValid);
     REQUIRE(*decodedTransactionResult == transactionResult);
+
+    NotifyPartyQuestTransactionResult admissionRejected;
+    admissionRejected.RequestId = 7010;
+    admissionRejected.Result = {PartyQuestApplyStatus::AdmissionRejected, 2, 0};
+    auto decodedAdmissionRejected = RoundTripServerMessage(admissionRejected);
+    REQUIRE(decodedAdmissionRejected->IsValid);
+    REQUIRE(*decodedAdmissionRejected == admissionRejected);
 }
 
 TEST_CASE("Reconnect report repair and acknowledgement converge without a second game client", "[quest.party-state.protocol]")
@@ -189,6 +202,7 @@ TEST_CASE("Reconnect report repair and acknowledgement converge without a second
     const auto verification = PartyQuestRepairPlanner::Build(server, decodedAck->PostApplyReport);
     REQUIRE(verification.Status == PartyQuestRepairPlanStatus::UpToDate);
     REQUIRE(verification.Items.empty());
+    REQUIRE(verification.RemovedQuestIds.empty());
     REQUIRE(reconnectingClient.GetWorldRevision() == server.GetWorldRevision());
     REQUIRE(*reconnectingClient.FindQuest(questId) == *server.FindQuest(questId));
 }
@@ -201,6 +215,7 @@ TEST_CASE("Duplicate network delivery stays idempotent after decoding", "[quest.
     RequestPartyQuestTransaction request;
     request.RequestId = 10001;
     request.Transaction = BuildProtocolTransaction(3001, 33, questId, 0, 20);
+    request.SyncFacts = {4, true, true, true};
 
     auto firstDelivery = RoundTripClientMessage(request);
     auto repeatedDelivery = RoundTripClientMessage(request);
