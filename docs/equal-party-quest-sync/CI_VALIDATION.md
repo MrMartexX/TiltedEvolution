@@ -38,14 +38,14 @@ The collector still classifies observed quests as:
 - `service-candidate` — hidden `None`/`Miscellaneous` controller/tracker/helper candidates;
 - `local-only` — currently used for quests without stages.
 
-The new admission layer converts those observations into server-side policy results:
+The admission layer converts those observations into server-side policy results:
 
 - `SharedProvisional` — admitted to the diagnostic canonical campaign, but **not** approved for future Skyrim runtime mutation;
 - `BlockedServiceCandidate` — excluded from canonical transactions;
 - `BlockedLocalOnly` — excluded from canonical transactions;
 - `BlockedConfirmedServiceQuest` — an identity-level override for service quests confirmed by live evidence.
 
-Raw `QuestType`, stage-presence, HUD-display and display-name facts travel with protocol-v3 transaction requests. The client suppresses obvious service/local-only observations early, but the server independently reclassifies every valid request. Known service identities override client-supplied facts.
+Raw `QuestType`, stage-presence, HUD-display and display-name facts travel with protocol-v3 transaction requests. The client suppresses obvious service/local-only observations early, but the server independently reclassifies requests. Known service identities override client-supplied facts.
 
 The first confirmed-service identity set comes directly from the validated live session:
 
@@ -105,14 +105,17 @@ The same live log produced the evidence used for the first service blocklist: 71
 
 ## Current CI validation
 
-The admission/quarantine milestone is being validated from the branch head containing `party_quest_admission.cpp` tests. The required workflows are:
+Admission/quarantine code was validated at commit `2aea537ec8e1636feb03bbee6069b55f0bea3eae`.
 
-- Build Windows;
-- Build Linux;
-- Equal party PoC diagnostics;
-- `TPTests` execution.
+At that commit:
 
-After all workflows pass, this section should be updated with the exact validated commit.
+- Build Windows: passed;
+- Build Linux: passed;
+- Equal party PoC diagnostics: passed;
+- PoC Windows runtime build: passed;
+- `TPTests`: built and executed successfully, including admission decisions, known-service identity override, quarantine removal, client-only preservation, wire-v3 metadata/removals, submission discard and the existing divergence/shadow-peer coverage.
+
+Later `[skip ci]` documentation-only commits do not alter the validated code.
 
 ## Next live validation
 
