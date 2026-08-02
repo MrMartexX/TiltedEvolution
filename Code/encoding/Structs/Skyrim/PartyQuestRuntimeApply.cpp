@@ -1,5 +1,8 @@
 #include <Structs/Skyrim/PartyQuestRuntimeApply.h>
 
+#include <algorithm>
+#include <unordered_set>
+
 namespace
 {
 bool RequiresWorldTargets(const PartyQuestApplyPlan& acPlan) noexcept
@@ -50,10 +53,62 @@ PartyQuestRuntimeApplyCoordinator::FingerprintActive(
     return fingerprint;
 }
 
+bool PartyQuestRuntimeApplyCoordinator::ValidateRecoveryEntry(
+    const PartyQuestRuntimeApplyEntry& acEntry) noexcept
+{
+    if (acEntry.TransactionId == 0 ||
+        acEntry.TargetWorldRevision == 0 ||
+        !acEntry.QuestId ||
+        acEntry.CanonicalDigest == 0 ||
+        acEntry.Actions == PartyQuestApplyAction::None)
+    {
+        return false;
+    }
+
+    switch (acEntry.State)
+    {
+    case PartyQuestRuntimeApplyState::DeferredWorld:
+        return !acEntry.SaveGuardActive &&
+            !acEntry.CheckpointCreated &&
+            !acEntry.RuntimeMutationMayHaveOccurred;
+
+    case PartyQuestRuntimeApplyState::AwaitingCheckpoint:
+        return acEntry.SaveGuardActive &&
+            !acEntry.CheckpointCreated &&
+            !acEntry.RuntimeMutationMayHaveOccurred;
+
+    case PartyQuestRuntimeApplyState::ReadyToApply:
+        return acEntry.SaveGuardActive &&
+            acEntry.CheckpointCreated &&
+            !acEntry.RuntimeMutationMayHaveOccurred;
+
+    case PartyQuestRuntimeApplyState::WaitingForPapyrus:
+        return acEntry.SaveGuardActive &&
+            acEntry.CheckpointCreated &&
+            acEntry.RuntimeMutationMayHaveOccurred;
+
+    case PartyQuestRuntimeApplyState::Verifying:
+        return acEntry.SaveGuardActive &&
+            acEntry.CheckpointCreated &&
+            acEntry.RuntimeMutationMayHaveOccurred;
+
+    case PartyQuestRuntimeApplyState::ReadyToCommit:
+        return acEntry.SaveGuardActive &&
+            acEntry.CheckpointCreated &&
+            acEntry.RuntimeMutationMayHaveOccurred &&
+            acEntry.StableCanonicalSamples >= 2;
+    }
+
+    return false;
+}
+
 PartyQuestRuntimeApplyBeginStatus PartyQuestRuntimeApplyCoordinator::Begin(
     const PartyQuestRuntimeApplyRequest& acRequest) noexcept
 {
     m_lastAbortRequiresCheckpointRestore = false;
+
+    if (m_recoveryBlocked)
+        return PartyQuestRuntimeApplyBeginStatus::RecoveryBlocked;
 
     if (acRequest.TransactionId == 0 ||
         acRequest.TargetWorldRevision == 0 ||
@@ -244,6 +299,109 @@ bool PartyQuestRuntimeApplyCoordinator::Abort(uint64_t aTransactionId) noexcept
     m_lastAbortRequiresCheckpointRestore =
         m_active->CheckpointCreated && m_active->RuntimeMutationMayHaveOccurred;
     m_active.reset();
+    return true;
+}
+
+PartyQuestRuntimeRecoveryState PartyQuestRuntimeApplyCoordinator::ExportRecoveryState() const
+{
+    PartyQuestRuntimeRecoveryState state;
+    state.Committed.reserve(m_committed.size());
+
+    for (const auto& [transactionId, fingerprint] : m_committed)
+    {
+        state.Committed.push_back({
+            transactionId,
+            fingerprint.TargetWorldRevision,
+            fingerprint.QuestId,
+            fingerprint.CanonicalDigest,
+            fingerprint.Actions});
+    }
+
+    std::sort(state.Committed.begin(), state.Committed.end(), [](const auto& acLeft, const auto& acRight)
+    {
+        return acLeft.TransactionId < acRight.TransactionId;
+    });
+
+    if (m_recoveryRecord)
+        state.Active = m_recoveryRecord;
+    else if (m_active)
+        state.Active = m_active;
+
+    return state;
+}
+
+PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplyCoordinator::RestoreRecoveryState(
+    const PartyQuestRuntimeRecoveryState& acState) noexcept
+{
+    if (m_active || m_recoveryRecord || !m_committed.empty() || m_recoveryBlocked)
+        return PartyQuestRuntimeRecoveryDisposition::InvalidState;
+
+    std::unordered_set<uint64_t> transactionIds;
+    transactionIds.reserve(acState.Committed.size() + (acState.Active ? 1 : 0));
+
+    for (const PartyQuestRuntimeCommittedRecord& record : acState.Committed)
+    {
+        if (record.TransactionId == 0 ||
+            record.TargetWorldRevision == 0 ||
+            !record.QuestId ||
+            record.CanonicalDigest == 0 ||
+            record.Actions == PartyQuestApplyAction::None ||
+            !transactionIds.emplace(record.TransactionId).second)
+        {
+            m_committed.clear();
+            return PartyQuestRuntimeRecoveryDisposition::InvalidState;
+        }
+
+        Fingerprint fingerprint;
+        fingerprint.QuestId = record.QuestId;
+        fingerprint.TargetWorldRevision = record.TargetWorldRevision;
+        fingerprint.CanonicalDigest = record.CanonicalDigest;
+        fingerprint.Actions = record.Actions;
+        m_committed.emplace(record.TransactionId, fingerprint);
+    }
+
+    if (!acState.Active)
+        return PartyQuestRuntimeRecoveryDisposition::Clean;
+
+    const PartyQuestRuntimeApplyEntry& active = *acState.Active;
+    if (!ValidateRecoveryEntry(active) || !transactionIds.emplace(active.TransactionId).second)
+    {
+        m_committed.clear();
+        return PartyQuestRuntimeRecoveryDisposition::InvalidState;
+    }
+
+    if (active.State == PartyQuestRuntimeApplyState::DeferredWorld)
+    {
+        m_active = active;
+        return PartyQuestRuntimeRecoveryDisposition::DeferredRestored;
+    }
+
+    if (active.RuntimeMutationMayHaveOccurred)
+    {
+        // After process restart the old in-memory save guard no longer exists.
+        // Fail closed and require the external checkpoint to be restored before
+        // any new canonical mutation is considered.
+        m_recoveryRecord = active;
+        m_recoveryBlocked = true;
+        return PartyQuestRuntimeRecoveryDisposition::CheckpointRestoreRequired;
+    }
+
+    // No runtime mutation was dispatched. Discard the stale pre-mutation entry
+    // and let the server produce a fresh current-canonical plan.
+    return PartyQuestRuntimeRecoveryDisposition::PreMutationRestartRequired;
+}
+
+bool PartyQuestRuntimeApplyCoordinator::AcknowledgeCheckpointRestored(uint64_t aTransactionId) noexcept
+{
+    if (!m_recoveryBlocked ||
+        !m_recoveryRecord ||
+        m_recoveryRecord->TransactionId != aTransactionId)
+    {
+        return false;
+    }
+
+    m_recoveryRecord.reset();
+    m_recoveryBlocked = false;
     return true;
 }
 
