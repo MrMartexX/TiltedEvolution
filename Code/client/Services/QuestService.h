@@ -65,6 +65,7 @@ private:
     std::optional<PartyQuestClientSession> m_partyQuestSession;
     PartyQuestClientSubmissionQueue m_partyQuestSubmissions;
     std::unordered_map<uint64_t, uint64_t> m_requestTransactions;
+    std::unordered_map<GameId, PartyQuestSyncFacts> m_partyQuestSyncFacts;
     bool m_partyQuestProtocolVerified{};
 
     entt::scoped_connection m_joinedConnection;
