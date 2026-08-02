@@ -27,6 +27,7 @@ enum class PartyQuestRuntimeSafetyReason : uint8_t
     SimpleStageTransition,
     ReferenceAliasesNeedWorld,
     SceneParticipantActive,
+    InactiveQuestState,
     TerminalQuestState,
     CreatedReferences,
     LocationAliases,
@@ -73,6 +74,7 @@ struct PartyQuestRuntimeSafetyFacts
     size_t UnresolvedReferenceAliasCount{};
     size_t QuestObjectAliasCount{};
     bool HasSceneParticipant{};
+    bool IsInactiveState{};
     bool IsTerminalState{};
 };
 
