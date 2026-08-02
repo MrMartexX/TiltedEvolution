@@ -276,6 +276,7 @@ public:
         uint64_t aTransactionId,
         const QuestSnapshot& acCanonicalSnapshot);
     bool Reject(uint64_t aTransactionId);
+    bool Discard(uint64_t aTransactionId);
 
     [[nodiscard]] std::vector<QuestSnapshot> TakeReady(const PartyQuestReplica& acReplica);
     void RequeueInFlight();
