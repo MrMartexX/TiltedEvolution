@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestCampaign.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSafety.h>
 
 #include <cstdint>
@@ -41,6 +42,7 @@ enum class PartyQuestRuntimeVerificationStatus : uint8_t
 enum class PartyQuestRuntimeRecoveryDisposition : uint8_t
 {
     InvalidState,
+    CampaignMismatch,
     Clean,
     DeferredRestored,
     PreMutationRestartRequired,
@@ -85,6 +87,7 @@ struct PartyQuestRuntimeCommittedRecord
 
 struct PartyQuestRuntimeRecoveryState
 {
+    PartyQuestCampaignId CampaignId;
     std::vector<PartyQuestRuntimeCommittedRecord> Committed;
     std::optional<PartyQuestRuntimeApplyEntry> Active;
 
@@ -129,16 +132,19 @@ public:
     bool Abort(uint64_t aTransactionId) noexcept;
 
     /** Exports committed-id journal plus any in-progress recovery marker. */
-    [[nodiscard]] PartyQuestRuntimeRecoveryState ExportRecoveryState() const;
+    [[nodiscard]] PartyQuestRuntimeRecoveryState ExportRecoveryState(
+        const PartyQuestCampaignId& acCampaignId) const;
 
     /**
      * Restores durable metadata into a fresh coordinator. Deferred work may be
      * resumed. Pre-mutation work is intentionally restarted. Any record where
      * mutation may have occurred blocks new work until checkpoint restoration
-     * is explicitly acknowledged.
+     * is explicitly acknowledged. Recovery data from another campaign is never
+     * accepted.
      */
     [[nodiscard]] PartyQuestRuntimeRecoveryDisposition RestoreRecoveryState(
-        const PartyQuestRuntimeRecoveryState& acState) noexcept;
+        const PartyQuestRuntimeRecoveryState& acState,
+        const PartyQuestCampaignId& acExpectedCampaignId) noexcept;
 
     /** Clears a crash-recovery barrier after the external checkpoint is restored. */
     bool AcknowledgeCheckpointRestored(uint64_t aTransactionId) noexcept;
