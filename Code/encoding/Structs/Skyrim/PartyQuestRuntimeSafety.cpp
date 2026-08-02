@@ -168,6 +168,13 @@ PartyQuestApplyPlan PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(
         plan.Actions = PartyQuestApplyAction::AdapterManaged |
             PartyQuestApplyAction::WaitForPapyrusQuiescence |
             PartyQuestApplyAction::ResnapshotAndVerify;
+        if (plan.Safety.Facts.ReferenceAliasCount != 0 ||
+            plan.Safety.Facts.LocationAliasCount != 0 ||
+            plan.Safety.Facts.CreatedReferenceCount != 0 ||
+            plan.Safety.Facts.HasSceneParticipant)
+        {
+            plan.Actions |= PartyQuestApplyAction::WaitForWorldTargets;
+        }
         if (plan.Safety.Facts.ObjectiveCount != 0)
             plan.Actions |= PartyQuestApplyAction::VerifyObjectives;
         break;
