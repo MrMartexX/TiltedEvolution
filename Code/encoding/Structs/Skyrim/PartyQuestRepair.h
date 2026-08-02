@@ -49,9 +49,10 @@ enum class PartyQuestRepairPlanStatus : uint8_t
 /**
  * Server-generated repair plan for one client replica.
  *
- * Client-only quests are deliberately ignored: only quests owned by the
- * canonical campaign are repaired. This keeps personal/local quests outside
- * the shared campaign unless they are explicitly admitted into PartyQuestState.
+ * Ordinary client-only quests are deliberately ignored: only quests owned by
+ * the canonical campaign are repaired. Confirmed service quests are different:
+ * they can be listed in RemovedQuestIds so replicas created before an admission
+ * migration drop them without rolling back WorldRevision.
  */
 struct PartyQuestRepairPlan
 {
@@ -59,6 +60,7 @@ struct PartyQuestRepairPlan
     uint64_t BaseClientWorldRevision{};
     uint64_t TargetWorldRevision{};
     std::vector<PartyQuestRepairItem> Items;
+    std::vector<GameId> RemovedQuestIds;
 
     bool operator==(const PartyQuestRepairPlan&) const noexcept = default;
 };
@@ -70,10 +72,16 @@ struct PartyQuestRepairSummary
     size_t RevisionMismatchCount{};
     size_t DigestMismatchCount{};
     size_t ClientOnlyQuestCount{};
+    size_t QuarantinedQuestRemovalCount{};
 
     [[nodiscard]] size_t RepairItemCount() const noexcept
     {
         return MissingQuestCount + RevisionMismatchCount + DigestMismatchCount;
+    }
+
+    [[nodiscard]] size_t TotalMutationCount() const noexcept
+    {
+        return RepairItemCount() + QuarantinedQuestRemovalCount;
     }
 
     bool operator==(const PartyQuestRepairSummary&) const noexcept = default;
