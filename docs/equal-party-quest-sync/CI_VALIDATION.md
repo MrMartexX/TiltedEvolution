@@ -25,7 +25,8 @@ Current coverage includes:
 - client-only quest state preserved locally and never admitted into canonical campaign state by repair;
 - repair ACK correlation isolated per authenticated client session;
 - repair divergence summaries split into missing, revision mismatch, digest mismatch and client-only counts;
-- diagnostic quest admission classification for user-facing gameplay candidates versus hidden service candidates.
+- diagnostic quest admission classification for user-facing gameplay candidates versus hidden service candidates;
+- automatic one-PC shadow-peer scenario that performs initial convergence, applies one baseline update, deliberately disconnects for the next accepted update, reconnects and repairs the missed update, then injects a same-revision digest divergence and repairs it.
 
 ## Diagnostic quest classification
 
@@ -37,7 +38,36 @@ The live collector labels each observed quest with one of:
 
 The classifier also logs a reason code such as `gameplay-type`, `user-facing-misc`, `hidden-misc`, or `hidden-untyped`.
 
-This classification is intentionally observational in the current milestone. `service-candidate` quests are still allowed through the diagnostic canonical protocol so real two-client evidence can be collected before an admission filter becomes authoritative. Classification metadata is not part of `QuestSnapshot`, its digest, the wire format, or persisted campaign state.
+This classification is intentionally observational in the current milestone. `service-candidate` quests are still allowed through the diagnostic canonical protocol so real evidence can be collected before an admission filter becomes authoritative. Classification metadata is not part of `QuestSnapshot`, its digest, the wire format, or persisted campaign state.
+
+## One-PC shadow peer live mode
+
+For a user with one Skyrim installation and one PC, the server can create a synthetic second protocol replica without launching another Skyrim process.
+
+Enable:
+
+```ini
+[Gameplay]
+bEnablePartyQuestProtocolDiagnostics=true
+bEnablePartyQuestStatePersistence=true
+bEnablePartyQuestShadowPeerTest=true
+sPartyQuestStatePath=state/party_quest_campaign.bin
+```
+
+The shadow peer is server-local and never mutates Skyrim. It uses synthetic client id `0xFFFFFFFE` only inside `PartyQuestProtocolCoordinator`.
+
+The live sequence is automatic:
+
+1. synchronize the shadow replica to the current persisted campaign;
+2. consume the first accepted canonical update as a baseline;
+3. disconnect the shadow peer before the next update;
+4. deliberately miss the second accepted canonical update;
+5. reconnect and verify report → repair → ACK convergence;
+6. alter one local snapshot payload while keeping its quest/world revision unchanged;
+7. verify that the next report detects `DigestMismatch` and repairs it;
+8. disconnect the synthetic peer and emit `PartyQuestShadowPeer TEST PASS`.
+
+The server emits `TEST START`, `STEP 1 PASS`, and a final `TEST PASS`/`TEST FAIL` line, so the user does not need to manually operate a second client or deliberately time disconnects.
 
 ## Live validation completed
 
@@ -53,23 +83,26 @@ A restart/reconnect campaign test confirmed:
 
 ## Current CI validation
 
-The divergence/service-classification code milestone was validated at commit `fe2f1570a17b37f3445f9826f8b9b4445f61ef6a`:
+The one-PC shadow-peer code milestone is commit `31d096c699b92be49ab9548267e0321d78ed92f2`.
+
+At that commit:
 
 - Build Windows: passed;
-- Build Linux: passed;
-- Equal party PoC diagnostics: passed;
-- `TPTests`: built and executed successfully.
+- Equal party PoC Windows runtime build: passed;
+- `TPTests`: built and executed successfully, including the shadow-peer missed-update + digest-divergence scenario;
+- the full Linux build is tracked by its normal workflow separately.
 
-Later commits touching only this validation document do not alter the validated code.
+This documentation commit does not alter the validated code.
 
 ## Next live validation
 
-Use two connected game clients with the same build and campaign:
+Use one real Skyrim client plus the server-local shadow peer:
 
-1. converge both protocol replicas on the same campaign;
-2. allow client A to advance a visible gameplay quest and confirm both replicas receive the canonical broadcast;
-3. disconnect client B, advance the campaign from A, then reconnect B and confirm deterministic repair;
-4. collect `syncClass`/`syncReason` evidence for high-churn service quests on both clients;
-5. compare hidden service-candidate behavior before turning classification into an authoritative admission policy.
+1. join the existing persisted campaign with the same client/server build;
+2. create/join the Party normally;
+3. allow at least two accepted quest transactions (ordinary play is sufficient);
+4. confirm `PartyQuestShadowPeer TEST PASS` in the server log;
+5. continue playing briefly to collect `syncClass`/`syncReason` evidence for service-quest classification;
+6. review the server/client logs before turning service classification into an authoritative admission filter.
 
-No canonical `SetStage`, alias restoration, inventory mutation or save-file mutation should be enabled until this two-client validation is reviewed.
+No canonical `SetStage`, alias restoration, inventory mutation or save-file mutation should be enabled until this validation is reviewed.
