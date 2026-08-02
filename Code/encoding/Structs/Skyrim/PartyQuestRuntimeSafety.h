@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 
+class PartyQuestRuntimeCompatibilityPolicy;
+
 /**
  * Structural runtime-safety disposition for a canonical quest snapshot.
  *
@@ -79,12 +81,32 @@ struct PartyQuestRuntimeSafetyFacts
 };
 
 /**
- * Quest-specific compatibility capability. No live code currently supplies a
- * verified adapter, so the default path can never become RuntimeSafe.
+ * Quest-specific mutation authorization token.
+ *
+ * Callers can construct only the unverified default. A verified token is issued
+ * exclusively by PartyQuestRuntimeCompatibilityPolicy after exact manifest
+ * fingerprint matching, preventing an arbitrary boolean from bypassing the
+ * structural safety gates.
  */
-struct PartyQuestRuntimeSafetyProfile
+class PartyQuestRuntimeSafetyProfile final
 {
-    bool HasVerifiedNativeAdapter{};
+public:
+    PartyQuestRuntimeSafetyProfile() noexcept = default;
+
+    [[nodiscard]] bool HasVerifiedNativeAdapter() const noexcept
+    {
+        return m_hasVerifiedNativeAdapter;
+    }
+
+private:
+    explicit PartyQuestRuntimeSafetyProfile(bool aHasVerifiedNativeAdapter) noexcept
+        : m_hasVerifiedNativeAdapter(aHasVerifiedNativeAdapter)
+    {
+    }
+
+    bool m_hasVerifiedNativeAdapter{};
+
+    friend class PartyQuestRuntimeCompatibilityPolicy;
 };
 
 struct PartyQuestRuntimeSafetyDecision
