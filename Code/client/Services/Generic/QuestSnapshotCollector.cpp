@@ -77,18 +77,6 @@ const char* GetSyncReasonName(PartyQuestSyncReason aReason) noexcept
     }
 }
 
-PartyQuestSyncClassification GetSyncClassification(TESQuest& acQuest) noexcept
-{
-    const char* pDisplayName = acQuest.fullName.value.AsAscii();
-
-    PartyQuestSyncFacts facts;
-    facts.QuestType = static_cast<uint8_t>(acQuest.type);
-    facts.HasStages = !acQuest.stages.Empty();
-    facts.IsDisplayedInHud = (acQuest.flags & TESQuest::Flags::DisplayedInHUD) != 0;
-    facts.HasDisplayName = pDisplayName && *pDisplayName != '\0';
-    return ClassifyPartyQuestSync(facts);
-}
-
 bool IsAliasType(const BGSBaseAlias& acAlias, const char* acType) noexcept
 {
     const char* pType = acAlias.QType().AsAscii();
@@ -179,12 +167,31 @@ std::optional<QuestSnapshot> QuestSnapshotCollector::Collect(TESQuest* apQuest, 
     return snapshot;
 }
 
+PartyQuestSyncFacts QuestSnapshotCollector::CollectSyncFacts(TESQuest* apQuest) noexcept
+{
+    PartyQuestSyncFacts facts;
+    if (!apQuest)
+        return facts;
+
+    const char* pDisplayName = apQuest->fullName.value.AsAscii();
+    facts.QuestType = static_cast<uint8_t>(apQuest->type);
+    facts.HasStages = !apQuest->stages.Empty();
+    facts.IsDisplayedInHud = (apQuest->flags & TESQuest::Flags::DisplayedInHUD) != 0;
+    facts.HasDisplayName = pDisplayName && *pDisplayName != '\0';
+    return facts;
+}
+
+PartyQuestSyncClassification QuestSnapshotCollector::Classify(TESQuest* apQuest) noexcept
+{
+    return ClassifyPartyQuestSync(CollectSyncFacts(apQuest));
+}
+
 void QuestSnapshotCollector::Log(TESQuest* apQuest, const QuestSnapshot& acSnapshot, const char* acReason) noexcept
 {
     if (!apQuest)
         return;
 
-    const PartyQuestSyncClassification classification = GetSyncClassification(*apQuest);
+    const PartyQuestSyncClassification classification = Classify(apQuest);
     spdlog::info(
         "QuestSnapshot[{}]: form={:08X} gameId={:016X} editorId='{}' status={} stage={} digest={:016X} completedStages={} objectives={} refAliases={} locAliases={} createdRefs={} syncClass={} syncReason={} questType={}",
         acReason ? acReason : "unknown", apQuest->formID, acSnapshot.QuestId.LogFormat(), apQuest->idName.AsAscii(), GetStatusName(acSnapshot.Status),
@@ -192,13 +199,8 @@ void QuestSnapshotCollector::Log(TESQuest* apQuest, const QuestSnapshot& acSnaps
         acSnapshot.ReferenceAliases.size(), acSnapshot.LocationAliases.size(), acSnapshot.CreatedReferences.size(),
         GetSyncClassName(classification.Class), GetSyncReasonName(classification.Reason), static_cast<uint8_t>(apQuest->type));
 
-    // ServiceCandidate is intentionally observational in this milestone. It is
-    // still submitted through the diagnostic canonical protocol so two-client
-    // evidence can be collected before an admission filter becomes authoritative.
-
-    // These detail lines intentionally use info during the runtime PoC. The
-    // production client logger filters debug messages, and two-client validation
-    // needs the exact objective and alias values in tp_client.log.
+    // Classification is enforced before the diagnostic transaction is sent.
+    // These details remain observational and never mutate the local quest.
     for (const auto& objective : acSnapshot.Objectives)
         spdlog::info("QuestSnapshotDetail objective: index={} state={}", objective.Index, static_cast<uint8_t>(objective.State));
 
