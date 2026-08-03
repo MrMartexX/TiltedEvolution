@@ -79,6 +79,7 @@ The clean-build audit exposed stale tests left behind by API hardening rather th
 
 - `party_quest_player_scope.cpp` lacked its direct TiltedCore buffer/serialization prerequisites; those includes are now explicit;
 - `party_quest_replica_copy_verifier.cpp` still targeted the removed `PartyQuestReplicaCopyVerifier` API. Verification responsibility has moved into the filesystem executor (`VerifyImport`, `VerifyCheckpoint`, and `VerifyRevisionCheckpoint`) with stronger real-file coverage, so the obsolete test was removed instead of resurrecting dead production API;
-- `party_quest_runtime_apply_persistence.cpp` still used the pre-`PlayerProfileId` recovery signatures. Every recovery export/restore test is now explicitly scoped by both `CampaignId` and `PlayerProfileId`, including manually constructed recovery state.
+- `party_quest_runtime_apply_persistence.cpp` still used the pre-`PlayerProfileId` recovery signatures. Every recovery export/restore test is now explicitly scoped by both `CampaignId` and `PlayerProfileId`, including manually constructed recovery state;
+- `party_quest_runtime_apply_session.cpp` still used the old two-argument session constructor and one-argument recovery export. Session tests now carry a stable `PlayerProfileId` through construction, durable capture, crash recovery, invalid-identity checks, and no-persistence checks.
 
 All intermediate repair and restore-journal commits use `[skip ci]`. This commit is the single full-CI trigger after the complete blocker audit/fix pass.
