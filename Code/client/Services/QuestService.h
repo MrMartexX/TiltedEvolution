@@ -56,11 +56,6 @@ private:
     void SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, const char* acReason) noexcept;
     void FlushQueuedPartyQuestSnapshots(const char* acReason) noexcept;
     void SendPartyQuestReplicaReport(bool aReconnect, const char* acReason) noexcept;
-    void LogPartyQuestCanonicalDryRun(
-        const QuestSnapshot& acSnapshot,
-        uint64_t aTransactionId,
-        uint64_t aTargetWorldRevision,
-        const char* acSource) noexcept;
 
     World& m_world;
 
