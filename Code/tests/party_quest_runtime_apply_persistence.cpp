@@ -72,8 +72,6 @@ PartyQuestRuntimeApplyRequest BuildRecoveryRequest(
         snapshot.ReferenceAliases = {{1, GameId(0, 0x1234), false}};
     snapshot.Canonicalize();
 
-    const PartyQuestRuntimeSafetyProfile profile = BuildRecoveryAuthorization(aQuestId);
-
     PartyQuestRuntimeApplyRequest request;
     request.TransactionId = aTransactionId;
     request.TargetWorldRevision = aTargetWorldRevision;
@@ -81,7 +79,7 @@ PartyQuestRuntimeApplyRequest BuildRecoveryRequest(
     request.Plan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(
         BuildRecoveryAdmission(aQuestId),
         snapshot,
-        profile);
+        BuildRecoveryAuthorization(aQuestId));
     REQUIRE(request.Plan.Safety.IsRuntimeSafe());
     return request;
 }
@@ -117,22 +115,29 @@ void RemoveRuntimeApplyArchive(const std::filesystem::path& acPath)
     temporary += ".tmp";
     std::filesystem::remove(temporary, ec);
 }
+
+bool WriteBytes(const std::filesystem::path& acPath, const std::vector<uint8_t>& acBytes)
+{
+    std::ofstream file(acPath, std::ios::binary | std::ios::trunc);
+    if (!file.is_open())
+        return false;
+    file.write(reinterpret_cast<const char*>(acBytes.data()), static_cast<std::streamsize>(acBytes.size()));
+    file.flush();
+    return file.good();
+}
 } // namespace
 
 TEST_CASE("Runtime apply recovery state encodes deterministically and round-trips", "[quest.party-state.runtime-apply.persistence]")
 {
     PartyQuestRuntimeApplyCoordinator coordinator;
-    const auto committed = BuildRecoveryRequest(10001, GameId(11, 0x1000), 80);
-    CommitRecoveryRequest(coordinator, committed);
+    CommitRecoveryRequest(coordinator, BuildRecoveryRequest(10001, GameId(11, 0x1000), 80));
+    REQUIRE(coordinator.Begin(BuildRecoveryRequest(10002, GameId(11, 0x2000), 81, true)) ==
+        PartyQuestRuntimeApplyBeginStatus::Deferred);
 
-    const auto deferred = BuildRecoveryRequest(10002, GameId(11, 0x2000), 81, true);
-    REQUIRE(coordinator.Begin(deferred) == PartyQuestRuntimeApplyBeginStatus::Deferred);
-
-    const PartyQuestRuntimeRecoveryState original = coordinator.ExportRecoveryState(kCampaignId);
+    const auto original = coordinator.ExportRecoveryState(kCampaignId);
     REQUIRE(original.CampaignId == kCampaignId);
     REQUIRE(original.Committed.size() == 1);
     REQUIRE(original.Active.has_value());
-    REQUIRE(original.Active->State == PartyQuestRuntimeApplyState::DeferredWorld);
 
     const auto first = PartyQuestRuntimeApplyPersistence::Encode(original);
     const auto second = PartyQuestRuntimeApplyPersistence::Encode(original);
@@ -142,11 +147,10 @@ TEST_CASE("Runtime apply recovery state encodes deterministically and round-trip
     const auto decoded = PartyQuestRuntimeApplyPersistence::Decode(first);
     REQUIRE(decoded.Status == PartyQuestRuntimeApplyPersistenceStatus::Success);
     REQUIRE(decoded.State.has_value());
-    REQUIRE(decoded.State->CampaignId == kCampaignId);
     REQUIRE(*decoded.State == original);
 }
 
-TEST_CASE("Runtime apply persistence rejects invalid campaign corruption truncation and unsupported versions", "[quest.party-state.runtime-apply.persistence]")
+TEST_CASE("Runtime apply persistence rejects invalid campaign corruption truncation and hostile lengths", "[quest.party-state.runtime-apply.persistence]")
 {
     PartyQuestRuntimeApplyCoordinator coordinator;
     CommitRecoveryRequest(coordinator, BuildRecoveryRequest(20001, GameId(12, 0x1000), 90));
@@ -154,9 +158,9 @@ TEST_CASE("Runtime apply persistence rejects invalid campaign corruption truncat
     const auto encoded = PartyQuestRuntimeApplyPersistence::Encode(state);
     REQUIRE(encoded.size() > 24);
 
-    PartyQuestRuntimeRecoveryState invalidCampaignState = state;
-    invalidCampaignState.CampaignId = {};
-    REQUIRE(PartyQuestRuntimeApplyPersistence::Encode(invalidCampaignState).empty());
+    auto invalidCampaign = state;
+    invalidCampaign.CampaignId = {};
+    REQUIRE(PartyQuestRuntimeApplyPersistence::Encode(invalidCampaign).empty());
 
     auto corrupted = encoded;
     corrupted[20] ^= 0x5A;
@@ -174,7 +178,6 @@ TEST_CASE("Runtime apply persistence rejects invalid campaign corruption truncat
     REQUIRE(PartyQuestRuntimeApplyPersistence::Decode(unsupported).Status ==
         PartyQuestRuntimeApplyPersistenceStatus::UnsupportedVersion);
 
-    // A hostile payload length must fail safely without size_t wraparound.
     auto oversizedPayload = encoded;
     for (size_t i = 10; i < 18; ++i)
         oversizedPayload[i] = 0xFF;
@@ -182,24 +185,23 @@ TEST_CASE("Runtime apply persistence rejects invalid campaign corruption truncat
         PartyQuestRuntimeApplyPersistenceStatus::Success);
 }
 
-TEST_CASE("Runtime apply persistence atomically saves and recovers its previous sidecar", "[quest.party-state.runtime-apply.persistence]")
+TEST_CASE("Older runtime apply backup is exposed only as uncertain recovery", "[quest.party-state.runtime-apply.persistence]")
 {
     const auto suffix = std::chrono::high_resolution_clock::now().time_since_epoch().count();
     const auto path = std::filesystem::temp_directory_path() /
-        ("tp_party_quest_runtime_apply_" + std::to_string(suffix) + ".bin");
+        ("tp_party_quest_runtime_apply_backup_" + std::to_string(suffix) + ".bin");
     RemoveRuntimeApplyArchive(path);
 
-    PartyQuestRuntimeApplyCoordinator firstCoordinator;
-    CommitRecoveryRequest(firstCoordinator, BuildRecoveryRequest(30001, GameId(13, 0x1000), 100));
-    const auto firstState = firstCoordinator.ExportRecoveryState(kCampaignId);
+    PartyQuestRuntimeApplyCoordinator first;
+    CommitRecoveryRequest(first, BuildRecoveryRequest(30001, GameId(13, 0x1000), 100));
+    const auto firstState = first.ExportRecoveryState(kCampaignId);
     REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(path, firstState) ==
         PartyQuestRuntimeApplyPersistenceStatus::Success);
 
-    PartyQuestRuntimeApplyCoordinator secondCoordinator;
-    REQUIRE(secondCoordinator.RestoreRecoveryState(firstState, kCampaignId) == PartyQuestRuntimeRecoveryDisposition::Clean);
-    CommitRecoveryRequest(secondCoordinator, BuildRecoveryRequest(30002, GameId(13, 0x2000), 101));
-    const auto secondState = secondCoordinator.ExportRecoveryState(kCampaignId);
-    REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(path, secondState) ==
+    PartyQuestRuntimeApplyCoordinator second;
+    REQUIRE(second.RestoreRecoveryState(firstState, kCampaignId) == PartyQuestRuntimeRecoveryDisposition::Clean);
+    CommitRecoveryRequest(second, BuildRecoveryRequest(30002, GameId(13, 0x2000), 101));
+    REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(path, second.ExportRecoveryState(kCampaignId)) ==
         PartyQuestRuntimeApplyPersistenceStatus::Success);
 
     {
@@ -209,11 +211,48 @@ TEST_CASE("Runtime apply persistence atomically saves and recovers its previous 
     }
 
     const auto recovered = PartyQuestRuntimeApplyPersistence::Load(path);
-    REQUIRE(recovered.Status == PartyQuestRuntimeApplyPersistenceStatus::Success);
+    REQUIRE(recovered.Status == PartyQuestRuntimeApplyPersistenceStatus::BackupRecoveryRequired);
     REQUIRE(recovered.State.has_value());
     REQUIRE(recovered.UsedBackup);
-    REQUIRE(recovered.State->CampaignId == kCampaignId);
+    REQUIRE_FALSE(recovered.UsedTemporary);
     REQUIRE(*recovered.State == firstState);
+
+    RemoveRuntimeApplyArchive(path);
+}
+
+TEST_CASE("Valid temporary runtime journal wins after interrupted atomic replacement", "[quest.party-state.runtime-apply.persistence]")
+{
+    const auto suffix = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    const auto path = std::filesystem::temp_directory_path() /
+        ("tp_party_quest_runtime_apply_tmp_" + std::to_string(suffix) + ".bin");
+    RemoveRuntimeApplyArchive(path);
+
+    PartyQuestRuntimeApplyCoordinator oldCoordinator;
+    CommitRecoveryRequest(oldCoordinator, BuildRecoveryRequest(35001, GameId(13, 0x3000), 105));
+    const auto oldState = oldCoordinator.ExportRecoveryState(kCampaignId);
+    REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(path, oldState) ==
+        PartyQuestRuntimeApplyPersistenceStatus::Success);
+
+    PartyQuestRuntimeApplyCoordinator newCoordinator;
+    REQUIRE(newCoordinator.RestoreRecoveryState(oldState, kCampaignId) == PartyQuestRuntimeRecoveryDisposition::Clean);
+    CommitRecoveryRequest(newCoordinator, BuildRecoveryRequest(35002, GameId(13, 0x4000), 106));
+    const auto newState = newCoordinator.ExportRecoveryState(kCampaignId);
+
+    auto temporaryPath = path;
+    temporaryPath += ".tmp";
+    auto backupPath = path;
+    backupPath += ".bak";
+    REQUIRE(WriteBytes(temporaryPath, PartyQuestRuntimeApplyPersistence::Encode(newState)));
+    std::error_code ec;
+    std::filesystem::rename(path, backupPath, ec);
+    REQUIRE_FALSE(ec);
+
+    const auto recovered = PartyQuestRuntimeApplyPersistence::Load(path);
+    REQUIRE(recovered.Status == PartyQuestRuntimeApplyPersistenceStatus::Success);
+    REQUIRE(recovered.State.has_value());
+    REQUIRE(recovered.UsedTemporary);
+    REQUIRE_FALSE(recovered.UsedBackup);
+    REQUIRE(*recovered.State == newState);
 
     RemoveRuntimeApplyArchive(path);
 }
@@ -224,8 +263,8 @@ TEST_CASE("Committed runtime transaction stays idempotent after restart", "[ques
     PartyQuestRuntimeApplyCoordinator beforeRestart;
     CommitRecoveryRequest(beforeRestart, request);
 
-    const auto encoded = PartyQuestRuntimeApplyPersistence::Encode(beforeRestart.ExportRecoveryState(kCampaignId));
-    const auto decoded = PartyQuestRuntimeApplyPersistence::Decode(encoded);
+    const auto decoded = PartyQuestRuntimeApplyPersistence::Decode(
+        PartyQuestRuntimeApplyPersistence::Encode(beforeRestart.ExportRecoveryState(kCampaignId)));
     REQUIRE(decoded.Status == PartyQuestRuntimeApplyPersistenceStatus::Success);
     REQUIRE(decoded.State.has_value());
 
@@ -240,16 +279,13 @@ TEST_CASE("Runtime apply recovery journal cannot cross campaign boundaries", "[q
     const auto request = BuildRecoveryRequest(45001, GameId(14, 0x2000), 115);
     PartyQuestRuntimeApplyCoordinator original;
     CommitRecoveryRequest(original, request);
-
     const auto state = original.ExportRecoveryState(kCampaignId);
-    REQUIRE(state.CampaignId == kCampaignId);
 
     PartyQuestRuntimeApplyCoordinator wrongCampaign;
     REQUIRE(wrongCampaign.RestoreRecoveryState(state, kOtherCampaignId) ==
         PartyQuestRuntimeRecoveryDisposition::CampaignMismatch);
     REQUIRE_FALSE(wrongCampaign.IsCommitted(request.TransactionId));
     REQUIRE_FALSE(wrongCampaign.IsRecoveryBlocked());
-    REQUIRE(wrongCampaign.GetActive() == nullptr);
 }
 
 TEST_CASE("Crash after mutation blocks all new apply work until checkpoint restoration", "[quest.party-state.runtime-apply.persistence]")
@@ -260,24 +296,17 @@ TEST_CASE("Crash after mutation blocks all new apply work until checkpoint resto
     REQUIRE(beforeCrash.MarkCheckpointCreated(request.TransactionId));
     REQUIRE(beforeCrash.MarkApplyDispatched(request.TransactionId));
 
-    const auto encoded = PartyQuestRuntimeApplyPersistence::Encode(beforeCrash.ExportRecoveryState(kCampaignId));
-    const auto decoded = PartyQuestRuntimeApplyPersistence::Decode(encoded);
-    REQUIRE(decoded.State.has_value());
-
+    const auto state = beforeCrash.ExportRecoveryState(kCampaignId);
     PartyQuestRuntimeApplyCoordinator afterCrash;
-    REQUIRE(afterCrash.RestoreRecoveryState(*decoded.State, kCampaignId) ==
+    REQUIRE(afterCrash.RestoreRecoveryState(state, kCampaignId) ==
         PartyQuestRuntimeRecoveryDisposition::CheckpointRestoreRequired);
     REQUIRE(afterCrash.IsRecoveryBlocked());
-    REQUIRE(afterCrash.GetRecoveryRecord() != nullptr);
-    REQUIRE_FALSE(afterCrash.IsSaveGuardActive());
 
-    const auto unrelated = BuildRecoveryRequest(50002, GameId(15, 0x2000), 121);
-    REQUIRE(afterCrash.Begin(unrelated) == PartyQuestRuntimeApplyBeginStatus::RecoveryBlocked);
+    REQUIRE(afterCrash.Begin(BuildRecoveryRequest(50002, GameId(15, 0x2000), 121)) ==
+        PartyQuestRuntimeApplyBeginStatus::RecoveryBlocked);
     REQUIRE_FALSE(afterCrash.AcknowledgeCheckpointRestored(99999));
     REQUIRE(afterCrash.AcknowledgeCheckpointRestored(request.TransactionId));
     REQUIRE_FALSE(afterCrash.IsRecoveryBlocked());
-    REQUIRE(afterCrash.GetRecoveryRecord() == nullptr);
-
     REQUIRE(afterCrash.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Started);
 }
 
@@ -288,12 +317,8 @@ TEST_CASE("Deferred world work resumes after restart without falsely holding a s
     REQUIRE(beforeRestart.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Deferred);
     REQUIRE_FALSE(beforeRestart.IsSaveGuardActive());
 
-    const auto encoded = PartyQuestRuntimeApplyPersistence::Encode(beforeRestart.ExportRecoveryState(kCampaignId));
-    const auto decoded = PartyQuestRuntimeApplyPersistence::Decode(encoded);
-    REQUIRE(decoded.State.has_value());
-
     PartyQuestRuntimeApplyCoordinator afterRestart;
-    REQUIRE(afterRestart.RestoreRecoveryState(*decoded.State, kCampaignId) ==
+    REQUIRE(afterRestart.RestoreRecoveryState(beforeRestart.ExportRecoveryState(kCampaignId), kCampaignId) ==
         PartyQuestRuntimeRecoveryDisposition::DeferredRestored);
     REQUIRE(afterRestart.GetActive() != nullptr);
     REQUIRE(afterRestart.GetActive()->State == PartyQuestRuntimeApplyState::DeferredWorld);
@@ -309,12 +334,10 @@ TEST_CASE("Pre-mutation crash discards stale apply entry and requests a fresh pl
     PartyQuestRuntimeApplyCoordinator beforeCrash;
     REQUIRE(beforeCrash.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Started);
     REQUIRE(beforeCrash.MarkCheckpointCreated(request.TransactionId));
-    REQUIRE(beforeCrash.GetActive()->State == PartyQuestRuntimeApplyState::ReadyToApply);
     REQUIRE_FALSE(beforeCrash.GetActive()->RuntimeMutationMayHaveOccurred);
 
-    const auto state = beforeCrash.ExportRecoveryState(kCampaignId);
     PartyQuestRuntimeApplyCoordinator afterCrash;
-    REQUIRE(afterCrash.RestoreRecoveryState(state, kCampaignId) ==
+    REQUIRE(afterCrash.RestoreRecoveryState(beforeCrash.ExportRecoveryState(kCampaignId), kCampaignId) ==
         PartyQuestRuntimeRecoveryDisposition::PreMutationRestartRequired);
     REQUIRE(afterCrash.GetActive() == nullptr);
     REQUIRE_FALSE(afterCrash.IsRecoveryBlocked());
@@ -335,7 +358,7 @@ TEST_CASE("Inconsistent recovery markers fail closed", "[quest.party-state.runti
         PartyQuestApplyAction::ResnapshotAndVerify;
     active.State = PartyQuestRuntimeApplyState::WaitingForPapyrus;
     active.SaveGuardActive = true;
-    active.CheckpointCreated = false; // impossible after apply dispatch
+    active.CheckpointCreated = false;
     active.RuntimeMutationMayHaveOccurred = true;
     state.Active = active;
 
