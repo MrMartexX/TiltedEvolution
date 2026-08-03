@@ -43,6 +43,23 @@ std::optional<std::filesystem::path> BuildReplicaDestination(
 
     return std::nullopt;
 }
+
+std::filesystem::path GetCheckpointRoot(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestReplicaManifest& acManifest)
+{
+    if (acManifest.SnapshotType == PartyQuestReplicaSnapshotType::RevisionCheckpoint)
+    {
+        return PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+            acPaths,
+            acManifest.CheckpointKind,
+            acManifest.CampaignWorldRevision);
+    }
+
+    return PartyQuestCoopSaveLayout::GetCheckpointDirectory(
+        acPaths,
+        acManifest.CheckpointKind);
+}
 } // namespace
 
 PartyQuestReplicaRestorePlan PartyQuestReplicaRestorePlanner::Build(
@@ -64,9 +81,16 @@ PartyQuestReplicaRestorePlan PartyQuestReplicaRestorePlanner::Build(
             return plan;
         }
 
-        if (acCheckpointManifest.SnapshotType != PartyQuestReplicaSnapshotType::Checkpoint)
+        if (acCheckpointManifest.SnapshotType != PartyQuestReplicaSnapshotType::Checkpoint &&
+            acCheckpointManifest.SnapshotType != PartyQuestReplicaSnapshotType::RevisionCheckpoint)
         {
             plan.Status = PartyQuestReplicaRestorePlanStatus::NotCheckpointManifest;
+            return plan;
+        }
+        if (acCheckpointManifest.SnapshotType == PartyQuestReplicaSnapshotType::RevisionCheckpoint &&
+            acCheckpointManifest.CampaignWorldRevision == 0)
+        {
+            plan.Status = PartyQuestReplicaRestorePlanStatus::InvalidCheckpointPath;
             return plan;
         }
 
@@ -81,9 +105,7 @@ PartyQuestReplicaRestorePlan PartyQuestReplicaRestorePlanner::Build(
         }
 
         const std::filesystem::path checkpointRoot =
-            PartyQuestCoopSaveLayout::GetCheckpointDirectory(
-                acPaths,
-                acCheckpointManifest.CheckpointKind).lexically_normal();
+            GetCheckpointRoot(acPaths, acCheckpointManifest).lexically_normal();
         const std::filesystem::path playerRoot = acPaths.PlayerDirectory.lexically_normal();
         if (checkpointRoot.empty() || playerRoot.empty())
         {
