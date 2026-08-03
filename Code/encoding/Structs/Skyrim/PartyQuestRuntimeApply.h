@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestCampaign.h>
+#include <Structs/Skyrim/PartyQuestPlayerProfile.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSafety.h>
 
 #include <cstdint>
@@ -43,6 +44,7 @@ enum class PartyQuestRuntimeRecoveryDisposition : uint8_t
 {
     InvalidState,
     CampaignMismatch,
+    PlayerProfileMismatch,
     Clean,
     DeferredRestored,
     PreMutationRestartRequired,
@@ -88,6 +90,7 @@ struct PartyQuestRuntimeCommittedRecord
 struct PartyQuestRuntimeRecoveryState
 {
     PartyQuestCampaignId CampaignId;
+    PartyQuestPlayerProfileId PlayerProfileId;
     std::vector<PartyQuestRuntimeCommittedRecord> Committed;
     std::optional<PartyQuestRuntimeApplyEntry> Active;
 
@@ -133,18 +136,20 @@ public:
 
     /** Exports committed-id journal plus any in-progress recovery marker. */
     [[nodiscard]] PartyQuestRuntimeRecoveryState ExportRecoveryState(
-        const PartyQuestCampaignId& acCampaignId) const;
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acPlayerProfileId) const;
 
     /**
      * Restores durable metadata into a fresh coordinator. Deferred work may be
      * resumed. Pre-mutation work is intentionally restarted. Any record where
      * mutation may have occurred blocks new work until checkpoint restoration
-     * is explicitly acknowledged. Recovery data from another campaign is never
-     * accepted.
+     * is explicitly acknowledged. Recovery data from another campaign or local
+     * player profile is never accepted.
      */
     [[nodiscard]] PartyQuestRuntimeRecoveryDisposition RestoreRecoveryState(
         const PartyQuestRuntimeRecoveryState& acState,
-        const PartyQuestCampaignId& acExpectedCampaignId) noexcept;
+        const PartyQuestCampaignId& acExpectedCampaignId,
+        const PartyQuestPlayerProfileId& acExpectedPlayerProfileId) noexcept;
 
     /** Clears a crash-recovery barrier after the external checkpoint is restored. */
     bool AcknowledgeCheckpointRestored(uint64_t aTransactionId) noexcept;
