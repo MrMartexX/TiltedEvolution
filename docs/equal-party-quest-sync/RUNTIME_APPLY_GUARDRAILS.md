@@ -1,12 +1,14 @@
 # Equal-party runtime apply guardrails
 
-This document describes the non-executing safety/control-plane work that must be validated before the new server-authoritative quest protocol is allowed to mutate Skyrim runtime state.
+This document tracks the protection/control-plane work required before the new server-authoritative quest protocol is allowed to mutate Skyrim runtime state.
 
 ## Current safety boundary
 
-No code in this milestone executes canonical `TESQuest::ScriptSetStage`, restores aliases, mutates inventories, changes quest objects, writes Skyrim `.ess` saves, or replaces co-saves.
+The canonical quest path still does not execute `TESQuest::ScriptSetStage`, restore aliases, mutate inventories, change quest objects, or apply canonical state to Skyrim.
 
 `PartyQuestApplyPlan::DryRunOnly` remains `true`.
+
+The branch now has game-independent filesystem code capable of copying explicitly supplied save/co-save/sidecar files into the isolated co-op replica tree. That code is not connected to Skyrim save/load hooks and never overwrites original solo saves.
 
 ## Admission is not mutation authority
 
@@ -30,12 +32,12 @@ Ordinary callers cannot construct a verified runtime-safety token.
 
 `RuntimeSafe` requires `PartyQuestRuntimeCompatibilityPolicy` to match a quest-specific compatibility requirement against local evidence for:
 
-- stable `QuestId`
-- compatibility profile version
-- resolved-record fingerprint
-- winning-override fingerprint
-- script fingerprint
-- native-adapter fingerprint
+- stable `QuestId`;
+- compatibility profile version;
+- resolved-record fingerprint;
+- winning-override fingerprint;
+- script fingerprint;
+- native-adapter fingerprint.
 
 Unknown or incomplete evidence blocks authorization.
 
@@ -56,28 +58,61 @@ Unknown or incomplete evidence blocks authorization.
 
 Duplicate transaction ids are idempotent when their fingerprints match. Reusing an id for different content is a conflict.
 
-## Crash recovery
+## Save guard policy
+
+`PartyQuestSaveGuard` now models a transaction-scoped critical-save lease.
+
+While held it denies:
+
+- manual save;
+- auto save;
+- quick save.
+
+It permits the controlled checkpoint path required by the repair system itself. The lease is idempotent for the same transaction and refuses a competing transaction.
+
+This is still policy-only. Skyrim save entry points are not intercepted yet.
+
+## Deferred world targets
+
+`PartyQuestDeferredWorldQueue` keeps canonical repairs that require loaded world/reference state out of the active mutation sequence until runtime hooks explicitly confirm their targets are ready.
+
+A newer canonical quest revision replaces older deferred work for the same quest. A stale repair is therefore not allowed to execute minutes later merely because its cell eventually loads.
+
+No existing runtime hook currently declares a real Skyrim cell/reference ready; that integration remains ahead.
+
+## Papyrus quiescence
+
+`PartyQuestPapyrusQuiescenceTracker` requires consecutive samples where:
+
+- the observed pending event count is zero;
+- the quest-event generation remains unchanged.
+
+Queued work or a newly observed quest event resets stability. This is the deterministic gate the future client hook must drive before post-apply resnapshot verification begins.
+
+The tracker exists, but real Papyrus/event-queue observations are not connected yet.
+
+## Crash recovery journal
 
 The runtime side-effect journal is separate from canonical campaign-state persistence.
 
 It stores:
 
-- `CampaignId`
-- stable local `PlayerProfileId`
-- committed runtime transaction fingerprints
-- optional in-progress critical-repair state
+- `CampaignId`;
+- stable local `PlayerProfileId`;
+- committed runtime transaction fingerprints;
+- optional in-progress critical-repair state.
 
-The journal is intentionally scoped to both campaign and local player profile. Copying another character's sidecar cannot suppress or replay this character's runtime application.
+The journal is scoped to both campaign and local player profile. Copying another character's sidecar cannot suppress or replay this character's runtime application.
 
 A crash after runtime mutation may have occurred blocks all new runtime application until the external pre-repair/LastKnownGood checkpoint has actually been restored.
 
-Pre-mutation stale work is discarded after restart so the client can request/build a fresh plan from the current canonical state. Deferred-world work may resume because no mutation or save guard was active yet.
+Pre-mutation stale work is discarded after restart so the client can request/build a fresh plan from current canonical state. Deferred-world work may resume because no mutation or save guard was active yet.
 
 ## Conservative sidecar recovery
 
 The runtime side-effect journal does **not** silently fall back to an older `.bak` file.
 
-That would be unsafe because the backup can predate a newer armed or committed runtime transaction, causing duplicate Skyrim side effects after restart.
+A backup can predate a newer armed or committed runtime transaction, so rolling the journal backward could allow duplicate Skyrim side effects.
 
 Load policy:
 
@@ -88,11 +123,9 @@ Load policy:
 
 The archive is checksum-protected, uses overflow-safe length parsing, and rejects recovery data belonging to another campaign or player profile.
 
-## Isolated co-op save layout
+## Isolated co-op replica filesystem
 
-`PartyQuestCoopSaveLayout` is a pure path planner. It performs no file writes.
-
-The planned tree is:
+The player tree is:
 
 ```text
 CoopCampaigns/
@@ -107,23 +140,67 @@ CoopCampaigns/
       saves/
       sidecars/
         party_quest_runtime_apply.bin
+        external/
       metadata/
+        replica_manifest.bin
 ```
 
-A stable `PartyQuestPlayerProfileId` has its own immutable metadata persistence with atomic replacement and safe backup recovery. The player profile identity is independent of transient network `PlayerId`.
+`PartyQuestReplicaFileExecutor` now performs verified create-only copies when explicitly invoked. It rechecks source bytes, stages the complete set into temporary siblings, verifies those temporary files and only then publishes final paths. Normal in-process publication failure rolls back files created by that call.
 
-Original solo saves are intentionally outside this layout.
+Import sources are required to be outside the player replica. Checkpoint sources are required to be inside the player replica but outside the checkpoint tree. Destination confinement is rechecked independently of the pure planner.
 
-## Remaining work before any canonical mutation
+The file checksum is a local integrity checksum, not an adversarial authentication primitive.
 
-The control plane still needs concrete client integrations for:
+## Durable replica/checkpoint completion
 
-- creation and copying of separate co-op saves plus relevant sidecars;
-- actual save blocking during a critical repair;
-- creation/restoration of PreRepair and LastKnownGood checkpoints;
-- unloaded-cell/world-target readiness callbacks;
-- observable Papyrus/event-queue quiescence;
-- real mod/script/native-adapter fingerprint collection and campaign manifest exchange;
-- one combined live diagnostic validation of admission/quarantine and runtime-safety classification.
+`PartyQuestReplicaManifestStore` treats copied files and a completed snapshot as different concepts.
 
-Only after those protections are implemented and validated should an executor be considered for the first narrowly scoped canonical runtime mutation.
+A multi-file snapshot becomes usable only after a checksum-protected manifest records:
+
+- campaign and player identity;
+- snapshot/checkpoint type;
+- campaign revision;
+- relative files;
+- expected sizes and digests.
+
+Future validation reloads the manifest and verifies the published files again. A valid interrupted `.tmp` wins over an older backup; backup-only state is surfaced as recovery-required.
+
+`PartyQuestReplicaSnapshotManager` composes copy, verification and manifest durability. It can safely finish one crash window where all exact files were already published but the manifest was not. Partial/conflicting orphan copies fail closed.
+
+## Checkpoint restore boundary
+
+`PartyQuestReplicaRestorePlanner` can now produce a restore plan only from a checkpoint whose manifest and bytes verify for the expected campaign/player.
+
+Restore destinations are restricted to the current co-op replica's `saves/` and `sidecars/external/`. The planner cannot target:
+
+- original solo saves;
+- checkpoint storage;
+- player metadata;
+- the runtime-apply recovery journal.
+
+The restore planner does not overwrite anything. A destructive restore executor still needs its own durable restore journal/rollback semantics before it may be implemented.
+
+## Immutable checkpoint revision path foundation
+
+The layout now exposes revision-scoped checkpoint directories such as:
+
+```text
+checkpoints/PreRepair/Revision_000000000000019A/
+```
+
+This is the intended direction for repeated checkpoints so a new LastKnownGood/PreRepair snapshot does not overwrite an older recovery point. Current checkpoint copy publication still targets the checkpoint-kind root; migration to the revision-scoped path primitive remains unfinished.
+
+## Remaining work before canonical Skyrim mutation
+
+The important remaining blockers are now narrower:
+
+- publish checkpoints into immutable revision directories and define retention/selection policy;
+- implement crash-resumable checkpoint restore execution;
+- wire actual Skyrim save blocking to `PartyQuestSaveGuard`;
+- wire save/checkpoint creation to the isolated co-op replica instead of the player's original solo save set;
+- wire unloaded-cell/reference readiness to `PartyQuestDeferredWorldQueue`;
+- wire observable Papyrus/event-queue activity to `PartyQuestPapyrusQuiescenceTracker`;
+- collect real mod/script/native-adapter fingerprints and exchange the campaign compatibility manifest;
+- run one combined live diagnostic validation of admission/quarantine, runtime-safety buckets and the new non-mutating guardrails.
+
+Only after those protections are implemented and validated should the first narrowly scoped canonical runtime mutation be considered.
