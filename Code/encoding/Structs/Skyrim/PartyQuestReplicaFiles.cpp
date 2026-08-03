@@ -50,10 +50,16 @@ std::filesystem::path BuildImportDestination(
 std::filesystem::path BuildCheckpointDestination(
     const PartyQuestCoopSavePaths& acPaths,
     PartyQuestCheckpointKind aKind,
+    bool aRevisionScoped,
+    uint64_t aCampaignWorldRevision,
     const PartyQuestReplicaFileSpec& acFile)
 {
-    const std::filesystem::path checkpointRoot =
-        PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, aKind);
+    const std::filesystem::path checkpointRoot = aRevisionScoped
+        ? PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+              acPaths,
+              aKind,
+              aCampaignWorldRevision)
+        : PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, aKind);
 
     switch (acFile.Kind)
     {
@@ -71,7 +77,9 @@ PartyQuestReplicaCopyPlan BuildPlan(
     const PartyQuestCoopSavePaths& acPaths,
     const std::vector<PartyQuestReplicaFileSpec>& acFiles,
     bool aCheckpoint,
-    PartyQuestCheckpointKind aCheckpointKind)
+    PartyQuestCheckpointKind aCheckpointKind,
+    bool aRevisionScoped,
+    uint64_t aCampaignWorldRevision)
 {
     PartyQuestReplicaCopyPlan plan;
 
@@ -81,6 +89,12 @@ PartyQuestReplicaCopyPlan BuildPlan(
         acPaths.CheckpointsDirectory.empty())
     {
         plan.Status = PartyQuestReplicaCopyPlanStatus::InvalidLayout;
+        return plan;
+    }
+
+    if (aCheckpoint && aRevisionScoped && aCampaignWorldRevision == 0)
+    {
+        plan.Status = PartyQuestReplicaCopyPlanStatus::InvalidWorldRevision;
         return plan;
     }
 
@@ -149,7 +163,12 @@ PartyQuestReplicaCopyPlan BuildPlan(
 
         const std::filesystem::path destination = (
             aCheckpoint
-                ? BuildCheckpointDestination(acPaths, aCheckpointKind, file)
+                ? BuildCheckpointDestination(
+                      acPaths,
+                      aCheckpointKind,
+                      aRevisionScoped,
+                      aCampaignWorldRevision,
+                      file)
                 : BuildImportDestination(acPaths, file)).lexically_normal();
 
         if (!PartyQuestReplicaFilePlanner::IsContainedBy(acPaths.PlayerDirectory, destination))
@@ -249,7 +268,13 @@ PartyQuestReplicaCopyPlan PartyQuestReplicaFilePlanner::BuildImportPlan(
     const PartyQuestCoopSavePaths& acPaths,
     const std::vector<PartyQuestReplicaFileSpec>& acFiles)
 {
-    return BuildPlan(acPaths, acFiles, false, PartyQuestCheckpointKind::PreJoin);
+    return BuildPlan(
+        acPaths,
+        acFiles,
+        false,
+        PartyQuestCheckpointKind::PreJoin,
+        false,
+        0);
 }
 
 PartyQuestReplicaCopyPlan PartyQuestReplicaFilePlanner::BuildCheckpointPlan(
@@ -257,7 +282,22 @@ PartyQuestReplicaCopyPlan PartyQuestReplicaFilePlanner::BuildCheckpointPlan(
     PartyQuestCheckpointKind aKind,
     const std::vector<PartyQuestReplicaFileSpec>& acReplicaFiles)
 {
-    return BuildPlan(acPaths, acReplicaFiles, true, aKind);
+    return BuildPlan(acPaths, acReplicaFiles, true, aKind, false, 0);
+}
+
+PartyQuestReplicaCopyPlan PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
+    const std::vector<PartyQuestReplicaFileSpec>& acReplicaFiles)
+{
+    return BuildPlan(
+        acPaths,
+        acReplicaFiles,
+        true,
+        aKind,
+        true,
+        aCampaignWorldRevision);
 }
 
 std::optional<PartyQuestReplicaCheckpointManifest>
