@@ -47,14 +47,27 @@ public:
     [[nodiscard]] static std::string FormatPlayerProfileId(
         const PartyQuestPlayerProfileId& acProfileId);
 
+    /** Fixed-width checkpoint revision directory component. */
+    [[nodiscard]] static std::string FormatWorldRevision(uint64_t aWorldRevision);
+
     [[nodiscard]] static std::optional<PartyQuestCoopSavePaths> Build(
         const std::filesystem::path& acRoot,
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestPlayerProfileId& acProfileId);
 
+    /** Kind root, e.g. checkpoints/PreRepair. */
     [[nodiscard]] static std::filesystem::path GetCheckpointDirectory(
         const PartyQuestCoopSavePaths& acPaths,
         PartyQuestCheckpointKind aKind);
+
+    /**
+     * Immutable revision snapshot root, e.g.
+     * checkpoints/PreRepair/Revision_000000000000019A.
+     */
+    [[nodiscard]] static std::filesystem::path GetCheckpointRevisionDirectory(
+        const PartyQuestCoopSavePaths& acPaths,
+        PartyQuestCheckpointKind aKind,
+        uint64_t aWorldRevision);
 
     [[nodiscard]] static const char* GetCheckpointName(
         PartyQuestCheckpointKind aKind) noexcept;
