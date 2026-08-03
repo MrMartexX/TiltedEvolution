@@ -3,7 +3,9 @@
 #include <Structs/Skyrim/PartyQuestCampaign.h>
 #include <Structs/Skyrim/PartyQuestPlayerProfile.h>
 
+#include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 
 enum class PartyQuestCheckpointKind : uint8_t
