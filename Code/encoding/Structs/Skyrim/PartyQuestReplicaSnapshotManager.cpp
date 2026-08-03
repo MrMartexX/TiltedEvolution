@@ -27,7 +27,7 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::EnsureImported
     uint64_t aCampaignWorldRevision,
     const PartyQuestReplicaCopyPlan& acPlan) const noexcept
 {
-    return Ensure(false, PartyQuestCheckpointKind::PreJoin, aCampaignWorldRevision, acPlan);
+    return Ensure(false, false, PartyQuestCheckpointKind::PreJoin, aCampaignWorldRevision, acPlan);
 }
 
 PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::EnsureCheckpoint(
@@ -35,22 +35,38 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::EnsureCheckpoi
     uint64_t aCampaignWorldRevision,
     const PartyQuestReplicaCopyPlan& acPlan) const noexcept
 {
-    return Ensure(true, aKind, aCampaignWorldRevision, acPlan);
+    return Ensure(true, false, aKind, aCampaignWorldRevision, acPlan);
+}
+
+PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::EnsureRevisionCheckpoint(
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
+    const PartyQuestReplicaCopyPlan& acPlan) const noexcept
+{
+    return Ensure(true, true, aKind, aCampaignWorldRevision, acPlan);
 }
 
 PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::ValidateImportedReplica() const noexcept
 {
-    return Validate(false, PartyQuestCheckpointKind::PreJoin);
+    return Validate(false, false, PartyQuestCheckpointKind::PreJoin, 0);
 }
 
 PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::ValidateCheckpoint(
     PartyQuestCheckpointKind aKind) const noexcept
 {
-    return Validate(true, aKind);
+    return Validate(true, false, aKind, 0);
+}
+
+PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::ValidateRevisionCheckpoint(
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision) const noexcept
+{
+    return Validate(true, true, aKind, aCampaignWorldRevision);
 }
 
 PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
     bool aCheckpoint,
+    bool aRevisionScoped,
     PartyQuestCheckpointKind aKind,
     uint64_t aCampaignWorldRevision,
     const PartyQuestReplicaCopyPlan& acPlan) const noexcept
@@ -59,29 +75,53 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
     {
         if (!m_campaignId.IsValid() || !m_playerProfileId.IsValid())
             return Failure(PartyQuestReplicaSnapshotStatus::InvalidIdentity);
-        if (!acPlan.IsReady() || acPlan.Operations.empty())
+        if (!acPlan.IsReady() || acPlan.Operations.empty() ||
+            (aRevisionScoped && aCampaignWorldRevision == 0))
+        {
             return Failure(PartyQuestReplicaSnapshotStatus::InvalidPlan);
+        }
 
-        const auto expectedManifest = aCheckpoint
-            ? PartyQuestReplicaManifestStore::BuildCheckpointManifest(
-                  m_paths,
-                  m_campaignId,
-                  m_playerProfileId,
-                  aKind,
-                  aCampaignWorldRevision,
-                  acPlan)
-            : PartyQuestReplicaManifestStore::BuildImportManifest(
-                  m_paths,
-                  m_campaignId,
-                  m_playerProfileId,
-                  aCampaignWorldRevision,
-                  acPlan);
+        std::optional<PartyQuestReplicaManifest> expectedManifest;
+        if (!aCheckpoint)
+        {
+            expectedManifest = PartyQuestReplicaManifestStore::BuildImportManifest(
+                m_paths,
+                m_campaignId,
+                m_playerProfileId,
+                aCampaignWorldRevision,
+                acPlan);
+        }
+        else if (aRevisionScoped)
+        {
+            expectedManifest = PartyQuestReplicaManifestStore::BuildRevisionCheckpointManifest(
+                m_paths,
+                m_campaignId,
+                m_playerProfileId,
+                aKind,
+                aCampaignWorldRevision,
+                acPlan);
+        }
+        else
+        {
+            expectedManifest = PartyQuestReplicaManifestStore::BuildCheckpointManifest(
+                m_paths,
+                m_campaignId,
+                m_playerProfileId,
+                aKind,
+                aCampaignWorldRevision,
+                acPlan);
+        }
         if (!expectedManifest)
             return Failure(PartyQuestReplicaSnapshotStatus::InvalidPlan);
 
-        const std::filesystem::path manifestPath = aCheckpoint
-            ? PartyQuestReplicaManifestStore::GetCheckpointManifestPath(m_paths, aKind)
-            : PartyQuestReplicaManifestStore::GetImportManifestPath(m_paths);
+        const std::filesystem::path manifestPath = !aCheckpoint
+            ? PartyQuestReplicaManifestStore::GetImportManifestPath(m_paths)
+            : (aRevisionScoped
+                  ? PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
+                        m_paths,
+                        aKind,
+                        aCampaignWorldRevision)
+                  : PartyQuestReplicaManifestStore::GetCheckpointManifestPath(m_paths, aKind));
 
         const auto existing = PartyQuestReplicaManifestStore::Load(manifestPath);
         if (existing.Status == PartyQuestReplicaManifestPersistenceStatus::Success)
@@ -132,9 +172,19 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
         }
 
         PartyQuestReplicaSnapshotResult result;
-        const PartyQuestReplicaExecutionReport copy = aCheckpoint
-            ? PartyQuestReplicaFileExecutor::ExecuteCheckpoint(m_paths, aKind, acPlan)
-            : PartyQuestReplicaFileExecutor::ExecuteImport(m_paths, acPlan);
+        PartyQuestReplicaExecutionReport copy;
+        if (!aCheckpoint)
+            copy = PartyQuestReplicaFileExecutor::ExecuteImport(m_paths, acPlan);
+        else if (aRevisionScoped)
+        {
+            copy = PartyQuestReplicaFileExecutor::ExecuteRevisionCheckpoint(
+                m_paths,
+                aKind,
+                aCampaignWorldRevision,
+                acPlan);
+        }
+        else
+            copy = PartyQuestReplicaFileExecutor::ExecuteCheckpoint(m_paths, aKind, acPlan);
         result.CopyStatus = copy.Status;
 
         if (!copy.IsSuccess())
@@ -145,12 +195,20 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
                 return result;
             }
 
-            // A previous process may have published every final file and died
-            // before persisting the completion manifest. Adopt only the exact
-            // complete byte set; partial/conflicting destinations remain blocked.
-            const PartyQuestReplicaExecutionReport existingFiles = aCheckpoint
-                ? PartyQuestReplicaFileExecutor::VerifyCheckpoint(m_paths, aKind, acPlan)
-                : PartyQuestReplicaFileExecutor::VerifyImport(m_paths, acPlan);
+            PartyQuestReplicaExecutionReport existingFiles;
+            if (!aCheckpoint)
+                existingFiles = PartyQuestReplicaFileExecutor::VerifyImport(m_paths, acPlan);
+            else if (aRevisionScoped)
+            {
+                existingFiles = PartyQuestReplicaFileExecutor::VerifyRevisionCheckpoint(
+                    m_paths,
+                    aKind,
+                    aCampaignWorldRevision,
+                    acPlan);
+            }
+            else
+                existingFiles = PartyQuestReplicaFileExecutor::VerifyCheckpoint(m_paths, aKind, acPlan);
+
             if (!existingFiles.IsSuccess())
             {
                 result.Status = PartyQuestReplicaSnapshotStatus::FileVerificationFailed;
@@ -160,9 +218,20 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
             result.AdoptedVerifiedFiles = true;
         }
 
-        const PartyQuestReplicaExecutionReport finalVerification = aCheckpoint
-            ? PartyQuestReplicaFileExecutor::VerifyCheckpoint(m_paths, aKind, acPlan)
-            : PartyQuestReplicaFileExecutor::VerifyImport(m_paths, acPlan);
+        PartyQuestReplicaExecutionReport finalVerification;
+        if (!aCheckpoint)
+            finalVerification = PartyQuestReplicaFileExecutor::VerifyImport(m_paths, acPlan);
+        else if (aRevisionScoped)
+        {
+            finalVerification = PartyQuestReplicaFileExecutor::VerifyRevisionCheckpoint(
+                m_paths,
+                aKind,
+                aCampaignWorldRevision,
+                acPlan);
+        }
+        else
+            finalVerification = PartyQuestReplicaFileExecutor::VerifyCheckpoint(m_paths, aKind, acPlan);
+
         result.CopyStatus = finalVerification.Status;
         if (!finalVerification.IsSuccess())
         {
@@ -211,16 +280,25 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
 
 PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Validate(
     bool aCheckpoint,
-    PartyQuestCheckpointKind aKind) const noexcept
+    bool aRevisionScoped,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision) const noexcept
 {
     try
     {
         if (!m_campaignId.IsValid() || !m_playerProfileId.IsValid())
             return Failure(PartyQuestReplicaSnapshotStatus::InvalidIdentity);
+        if (aRevisionScoped && aCampaignWorldRevision == 0)
+            return Failure(PartyQuestReplicaSnapshotStatus::InvalidPlan);
 
-        const std::filesystem::path manifestPath = aCheckpoint
-            ? PartyQuestReplicaManifestStore::GetCheckpointManifestPath(m_paths, aKind)
-            : PartyQuestReplicaManifestStore::GetImportManifestPath(m_paths);
+        const std::filesystem::path manifestPath = !aCheckpoint
+            ? PartyQuestReplicaManifestStore::GetImportManifestPath(m_paths)
+            : (aRevisionScoped
+                  ? PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
+                        m_paths,
+                        aKind,
+                        aCampaignWorldRevision)
+                  : PartyQuestReplicaManifestStore::GetCheckpointManifestPath(m_paths, aKind));
         const auto loaded = PartyQuestReplicaManifestStore::Load(manifestPath);
 
         PartyQuestReplicaSnapshotResult result;
@@ -236,10 +314,21 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Validate(
             return result;
         }
 
-        const bool shapeMatches = aCheckpoint
-            ? loaded.Manifest->SnapshotType == PartyQuestReplicaSnapshotType::Checkpoint &&
-                  loaded.Manifest->CheckpointKind == aKind
-            : loaded.Manifest->SnapshotType == PartyQuestReplicaSnapshotType::ImportedReplica;
+        bool shapeMatches{};
+        if (!aCheckpoint)
+            shapeMatches = loaded.Manifest->SnapshotType == PartyQuestReplicaSnapshotType::ImportedReplica;
+        else if (aRevisionScoped)
+        {
+            shapeMatches = loaded.Manifest->SnapshotType == PartyQuestReplicaSnapshotType::RevisionCheckpoint &&
+                loaded.Manifest->CheckpointKind == aKind &&
+                loaded.Manifest->CampaignWorldRevision == aCampaignWorldRevision;
+        }
+        else
+        {
+            shapeMatches = loaded.Manifest->SnapshotType == PartyQuestReplicaSnapshotType::Checkpoint &&
+                loaded.Manifest->CheckpointKind == aKind;
+        }
+
         if (!shapeMatches)
         {
             result.Status = PartyQuestReplicaSnapshotStatus::ExistingSnapshotConflict;
