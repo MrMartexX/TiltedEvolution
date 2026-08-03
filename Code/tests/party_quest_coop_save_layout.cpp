@@ -82,6 +82,33 @@ TEST_CASE("Co-op checkpoint names are explicit and stay inside the player checkp
     }
 }
 
+TEST_CASE("Checkpoint revisions have immutable deterministic subdirectories", "[quest.party-state.save-layout]")
+{
+    const auto paths = PartyQuestCoopSaveLayout::Build(
+        "CoopCampaigns",
+        PartyQuestCampaignId{0x10, 0x20},
+        PartyQuestPlayerProfileId{0x30, 0x40});
+    REQUIRE(paths.has_value());
+
+    REQUIRE(PartyQuestCoopSaveLayout::FormatWorldRevision(0) == "Revision_0000000000000000");
+    REQUIRE(PartyQuestCoopSaveLayout::FormatWorldRevision(410) == "Revision_000000000000019A");
+
+    const auto first = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        *paths,
+        PartyQuestCheckpointKind::PreRepair,
+        410);
+    const auto second = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        *paths,
+        PartyQuestCheckpointKind::PreRepair,
+        411);
+
+    REQUIRE(first != second);
+    REQUIRE(first.parent_path() ==
+        PartyQuestCoopSaveLayout::GetCheckpointDirectory(*paths, PartyQuestCheckpointKind::PreRepair));
+    REQUIRE(first.filename() == "Revision_000000000000019A");
+    REQUIRE(second.filename() == "Revision_000000000000019B");
+}
+
 TEST_CASE("Different player profiles never share runtime sidecar paths", "[quest.party-state.save-layout]")
 {
     const PartyQuestCampaignId campaign{0xAA, 0xBB};
