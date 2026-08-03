@@ -49,7 +49,8 @@ enum class PartyQuestReplicaCopyPlanStatus : uint8_t
     DuplicateDestination,
     SourceDestinationCollision,
     DestinationEscapesPlayerRoot,
-    MissingDigest
+    MissingDigest,
+    InvalidWorldRevision
 };
 
 struct PartyQuestReplicaCopyPlan
@@ -88,9 +89,21 @@ public:
         const PartyQuestCoopSavePaths& acPaths,
         const std::vector<PartyQuestReplicaFileSpec>& acFiles);
 
+    /** Legacy kind-root checkpoint planner retained for existing test/archive tooling. */
     [[nodiscard]] static PartyQuestReplicaCopyPlan BuildCheckpointPlan(
         const PartyQuestCoopSavePaths& acPaths,
         PartyQuestCheckpointKind aKind,
+        const std::vector<PartyQuestReplicaFileSpec>& acReplicaFiles);
+
+    /**
+     * Production-oriented immutable checkpoint planner. A non-zero campaign
+     * world revision gets its own Revision_<hex> snapshot directory so a newer
+     * checkpoint never overwrites an older recovery point.
+     */
+    [[nodiscard]] static PartyQuestReplicaCopyPlan BuildRevisionCheckpointPlan(
+        const PartyQuestCoopSavePaths& acPaths,
+        PartyQuestCheckpointKind aKind,
+        uint64_t aCampaignWorldRevision,
         const std::vector<PartyQuestReplicaFileSpec>& acReplicaFiles);
 
     [[nodiscard]] static std::optional<PartyQuestReplicaCheckpointManifest> BuildCheckpointManifest(
