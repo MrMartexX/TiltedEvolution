@@ -22,7 +22,16 @@ bool PartyQuestRuntimeApplySession::Persist(
     if (!m_campaignId.IsValid() || !m_durableStateHandler)
         return false;
 
-    return m_durableStateHandler(acCandidate.ExportRecoveryState(m_campaignId));
+    try
+    {
+        return m_durableStateHandler(acCandidate.ExportRecoveryState(m_campaignId));
+    }
+    catch (...)
+    {
+        // A storage callback exception is equivalent to a failed durability
+        // barrier. Never publish the candidate state in memory afterward.
+        return false;
+    }
 }
 
 PartyQuestRuntimeDurableBeginStatus PartyQuestRuntimeApplySession::TranslateBeginStatus(
