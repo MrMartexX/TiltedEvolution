@@ -6,7 +6,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
-#include <Structs/Skyrim/PartyQuestRuntimeSafety.h>
+#include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 
 #include <catch2/catch.hpp>
 
@@ -33,6 +33,28 @@ QuestSnapshot BuildSafetySnapshot(GameId aQuestId = GameId(7, 0x1000))
     snapshot.CompletedStages = {10, 20};
     snapshot.Objectives = {{20, QuestObjectiveState::Displayed}};
     return snapshot;
+}
+
+PartyQuestRuntimeSafetyProfile BuildAuthorizedProfile(GameId aQuestId)
+{
+    PartyQuestRuntimeCompatibilityRequirement requirement;
+    requirement.QuestId = aQuestId;
+    requirement.ProfileVersion = 3;
+    requirement.ResolvedRecordFingerprint = 0x1111111111111111ull;
+    requirement.WinningOverrideFingerprint = 0x2222222222222222ull;
+    requirement.ScriptFingerprint = 0x3333333333333333ull;
+    requirement.NativeAdapterFingerprint = 0x4444444444444444ull;
+
+    PartyQuestRuntimeCompatibilityFacts facts;
+    facts.ProfileVersion = requirement.ProfileVersion;
+    facts.ResolvedRecordFingerprint = requirement.ResolvedRecordFingerprint;
+    facts.WinningOverrideFingerprint = requirement.WinningOverrideFingerprint;
+    facts.ScriptFingerprint = requirement.ScriptFingerprint;
+    facts.NativeAdapterFingerprint = requirement.NativeAdapterFingerprint;
+
+    const auto compatibility = PartyQuestRuntimeCompatibilityPolicy::Evaluate(requirement, facts);
+    REQUIRE(compatibility.IsAuthorized());
+    return compatibility.SafetyProfile;
 }
 } // namespace
 
@@ -198,10 +220,11 @@ TEST_CASE("Inactive and terminal quest state are never generically replayed", "[
     }
 }
 
-TEST_CASE("Only an explicit verified native adapter can classify a quest RuntimeSafe", "[quest.party-state.runtime-safety]")
+TEST_CASE("Only an exact compatibility-authorized adapter can classify a quest RuntimeSafe", "[quest.party-state.runtime-safety]")
 {
-    const auto admission = BuildAdmittedDecision();
-    QuestSnapshot risky = BuildSafetySnapshot();
+    const GameId questId(7, 0x1000);
+    const auto admission = BuildAdmittedDecision(questId);
+    QuestSnapshot risky = BuildSafetySnapshot(questId);
     risky.Status = QuestSnapshotStatus::Completed;
     risky.ReferenceAliases = {{1, std::nullopt, true}};
     risky.LocationAliases = {{2, std::nullopt}};
@@ -210,15 +233,15 @@ TEST_CASE("Only an explicit verified native adapter can classify a quest Runtime
     const auto defaultDecision = PartyQuestRuntimeSafetyPolicy::Evaluate(admission, risky);
     REQUIRE_FALSE(defaultDecision.IsRuntimeSafe());
 
-    PartyQuestRuntimeSafetyProfile profile;
-    profile.HasVerifiedNativeAdapter = true;
+    const PartyQuestRuntimeSafetyProfile profile = BuildAuthorizedProfile(questId);
     const auto plan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(admission, risky, profile);
     REQUIRE(plan.Safety.Status == PartyQuestRuntimeSafetyStatus::RuntimeSafe);
     REQUIRE(plan.Safety.Reason == PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter);
     REQUIRE(plan.Safety.IsRuntimeSafe());
     REQUIRE(HasPartyQuestApplyAction(plan.Actions, PartyQuestApplyAction::AdapterManaged));
+    REQUIRE(HasPartyQuestApplyAction(plan.Actions, PartyQuestApplyAction::WaitForWorldTargets));
 
-    // Even a verified classification is only a dry-run in this milestone.
+    // Even an authorized classification is only a dry-run in this milestone.
     REQUIRE(plan.DryRunOnly);
     REQUIRE_FALSE(plan.WouldMutateQuestStage());
 }
