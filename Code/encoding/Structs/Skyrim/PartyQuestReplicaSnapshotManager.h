@@ -56,7 +56,14 @@ public:
         uint64_t aCampaignWorldRevision,
         const PartyQuestReplicaCopyPlan& acPlan) const noexcept;
 
+    /** Legacy kind-root checkpoint publication retained for test/archive tooling. */
     [[nodiscard]] PartyQuestReplicaSnapshotResult EnsureCheckpoint(
+        PartyQuestCheckpointKind aKind,
+        uint64_t aCampaignWorldRevision,
+        const PartyQuestReplicaCopyPlan& acPlan) const noexcept;
+
+    /** Production-oriented immutable revision checkpoint publication. */
+    [[nodiscard]] PartyQuestReplicaSnapshotResult EnsureRevisionCheckpoint(
         PartyQuestCheckpointKind aKind,
         uint64_t aCampaignWorldRevision,
         const PartyQuestReplicaCopyPlan& acPlan) const noexcept;
@@ -66,16 +73,23 @@ public:
     [[nodiscard]] PartyQuestReplicaSnapshotResult ValidateCheckpoint(
         PartyQuestCheckpointKind aKind) const noexcept;
 
+    [[nodiscard]] PartyQuestReplicaSnapshotResult ValidateRevisionCheckpoint(
+        PartyQuestCheckpointKind aKind,
+        uint64_t aCampaignWorldRevision) const noexcept;
+
 private:
     [[nodiscard]] PartyQuestReplicaSnapshotResult Ensure(
         bool aCheckpoint,
+        bool aRevisionScoped,
         PartyQuestCheckpointKind aKind,
         uint64_t aCampaignWorldRevision,
         const PartyQuestReplicaCopyPlan& acPlan) const noexcept;
 
     [[nodiscard]] PartyQuestReplicaSnapshotResult Validate(
         bool aCheckpoint,
-        PartyQuestCheckpointKind aKind) const noexcept;
+        bool aRevisionScoped,
+        PartyQuestCheckpointKind aKind,
+        uint64_t aCampaignWorldRevision) const noexcept;
 
     PartyQuestCoopSavePaths m_paths;
     PartyQuestCampaignId m_campaignId;
