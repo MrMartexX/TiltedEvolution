@@ -4,8 +4,10 @@
 
 PartyQuestRuntimeApplySession::PartyQuestRuntimeApplySession(
     PartyQuestCampaignId aCampaignId,
+    PartyQuestPlayerProfileId aPlayerProfileId,
     DurableStateHandler aDurableStateHandler)
     : m_campaignId(aCampaignId)
+    , m_playerProfileId(aPlayerProfileId)
     , m_durableStateHandler(std::move(aDurableStateHandler))
 {
 }
@@ -19,12 +21,13 @@ void PartyQuestRuntimeApplySession::SetDurableStateHandler(
 bool PartyQuestRuntimeApplySession::Persist(
     const PartyQuestRuntimeApplyCoordinator& acCandidate) const
 {
-    if (!m_campaignId.IsValid() || !m_durableStateHandler)
+    if (!m_campaignId.IsValid() || !m_playerProfileId.IsValid() || !m_durableStateHandler)
         return false;
 
     try
     {
-        return m_durableStateHandler(acCandidate.ExportRecoveryState(m_campaignId));
+        return m_durableStateHandler(
+            acCandidate.ExportRecoveryState(m_campaignId, m_playerProfileId));
     }
     catch (...)
     {
@@ -56,7 +59,7 @@ PartyQuestRuntimeDurableBeginStatus PartyQuestRuntimeApplySession::TranslateBegi
 PartyQuestRuntimeDurableBeginStatus PartyQuestRuntimeApplySession::Begin(
     const PartyQuestRuntimeApplyRequest& acRequest)
 {
-    if (!m_campaignId.IsValid())
+    if (!m_campaignId.IsValid() || !m_playerProfileId.IsValid())
         return PartyQuestRuntimeDurableBeginStatus::InvalidRequest;
 
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
@@ -210,7 +213,10 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::Complete
 PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplySession::RestoreRecoveryState(
     const PartyQuestRuntimeRecoveryState& acState) noexcept
 {
-    return m_coordinator.RestoreRecoveryState(acState, m_campaignId);
+    return m_coordinator.RestoreRecoveryState(
+        acState,
+        m_campaignId,
+        m_playerProfileId);
 }
 
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::CompleteCrashCheckpointRestore(
