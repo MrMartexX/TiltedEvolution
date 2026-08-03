@@ -7,6 +7,7 @@
 #include <glm/vec3.hpp>
 
 #include <Structs/Skyrim/PartyQuestRuntimeApply.h>
+#include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 
 #include <catch2/catch.hpp>
 
@@ -22,6 +23,28 @@ PartyQuestAdmissionDecision BuildRuntimeAdmission(GameId aQuestId)
     const auto admission = PartyQuestAdmissionPolicy::Evaluate(aQuestId, facts);
     REQUIRE(admission.IsAdmitted());
     return admission;
+}
+
+PartyQuestRuntimeSafetyProfile BuildRuntimeAuthorization(GameId aQuestId)
+{
+    PartyQuestRuntimeCompatibilityRequirement requirement;
+    requirement.QuestId = aQuestId;
+    requirement.ProfileVersion = 1;
+    requirement.ResolvedRecordFingerprint = 0x1010101010101010ull;
+    requirement.WinningOverrideFingerprint = 0x2020202020202020ull;
+    requirement.ScriptFingerprint = 0x3030303030303030ull;
+    requirement.NativeAdapterFingerprint = 0x4040404040404040ull;
+
+    PartyQuestRuntimeCompatibilityFacts facts;
+    facts.ProfileVersion = requirement.ProfileVersion;
+    facts.ResolvedRecordFingerprint = requirement.ResolvedRecordFingerprint;
+    facts.WinningOverrideFingerprint = requirement.WinningOverrideFingerprint;
+    facts.ScriptFingerprint = requirement.ScriptFingerprint;
+    facts.NativeAdapterFingerprint = requirement.NativeAdapterFingerprint;
+
+    const auto decision = PartyQuestRuntimeCompatibilityPolicy::Evaluate(requirement, facts);
+    REQUIRE(decision.IsAuthorized());
+    return decision.SafetyProfile;
 }
 
 QuestSnapshot BuildRuntimeSnapshot(GameId aQuestId, uint16_t aStage = 30)
@@ -48,8 +71,7 @@ PartyQuestRuntimeApplyRequest BuildRuntimeRequest(
         snapshot.ReferenceAliases = {{1, GameId(0, 0x1234), false}};
     snapshot.Canonicalize();
 
-    PartyQuestRuntimeSafetyProfile profile;
-    profile.HasVerifiedNativeAdapter = true;
+    const PartyQuestRuntimeSafetyProfile profile = BuildRuntimeAuthorization(aQuestId);
 
     PartyQuestRuntimeApplyRequest request;
     request.TransactionId = aTransactionId;
