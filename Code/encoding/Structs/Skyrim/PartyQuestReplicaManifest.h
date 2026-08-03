@@ -2,6 +2,7 @@
 
 #include <Structs/Skyrim/PartyQuestReplicaFileExecutor.h>
 
+#include <cctype>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
