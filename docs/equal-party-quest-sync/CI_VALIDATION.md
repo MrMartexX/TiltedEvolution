@@ -1,6 +1,6 @@
 # Equal-party quest PoC validation
 
-The canonical equal-party repair path remains non-mutating inside Skyrim. The branch now also contains a game-independent, explicitly invoked filesystem stack for isolated co-op save replicas and checkpoints; that stack is not connected to Skyrim save/load entry points yet.
+The canonical equal-party repair path remains non-mutating inside Skyrim. The branch now also contains a game-independent, explicitly invoked filesystem stack for isolated co-op save replicas and immutable revision checkpoints; that stack is not connected to Skyrim save/load entry points yet.
 
 ## Automated validation
 
@@ -38,9 +38,10 @@ Current coverage includes:
 - adoption of an exact complete orphaned file set after a crash before manifest publication;
 - refusal to adopt partial/conflicting orphaned copies;
 - snapshot-manager validation of imported replicas and checkpoints;
+- immutable revision-scoped checkpoint publication and independent validation of multiple revisions;
+- revision-bound checkpoint manifests and restore source selection;
 - non-executing checkpoint restore plans that can target only the current co-op replica's save/external-sidecar paths;
 - restore refusal when checkpoint bytes or stable identity no longer verify;
-- deterministic immutable checkpoint revision path names;
 - transaction-scoped save-guard policy;
 - deferred-world latest-revision queueing;
 - Papyrus/event-generation quiescence tracking;
@@ -101,18 +102,21 @@ A valid fully written `.tmp` can recover an interrupted sidecar replacement. An 
 
 ## Co-op replica filesystem milestone
 
-The planned/partially executable tree is:
+The executable library-level tree is:
 
 ```text
 CoopCampaigns/
   Campaign_<CampaignId>/
     Player_<PlayerProfileId>/
       checkpoints/
-        PreJoin/
-        PreMigration/
         PreRepair/
-        SessionStart/
+          Revision_<WorldRevision>/
+            manifest.bin
+            saves/
+            sidecars/external/
         LastKnownGood/
+          Revision_<WorldRevision>/
+            ...
       saves/
       sidecars/
         party_quest_runtime_apply.bin
@@ -123,48 +127,29 @@ CoopCampaigns/
 
 `PartyQuestReplicaFileExecutor` is deliberately create-only. It does not overwrite an existing replica/checkpoint. Before publication it re-reads source bytes, checks expected size/digest, rejects source/destination scope violations, stages every output to a temporary sibling and verifies the complete staged set. Final paths are published only afterward. Normal in-process publication errors roll back outputs created by that call.
 
-`PartyQuestReplicaManifestStore` is the durable completion marker. Copied files without a valid identity-bound manifest are not sufficient proof that a multi-file snapshot completed. Future validation reloads the manifest and re-verifies the final bytes.
+`PartyQuestReplicaManifestStore` is the durable completion marker. Copied files without a valid identity-bound manifest are not sufficient proof that a multi-file snapshot completed. Future validation reloads the manifest and re-verifies final bytes.
 
 `PartyQuestReplicaSnapshotManager` combines copy, verification and manifest durability. It can safely finish a crash window where every exact file was already published but the process died before manifest creation. Partial or conflicting orphaned output is rejected.
 
+Production-oriented checkpoint calls use `BuildRevisionCheckpointPlan` → `ExecuteRevisionCheckpoint` → `BuildRevisionCheckpointManifest`/`EnsureRevisionCheckpoint`. A non-zero `CampaignWorldRevision` selects an immutable `Revision_<hex>` subtree. Two checkpoint revisions therefore coexist rather than replacing each other, and each is verified against its own manifest and bytes.
+
+Legacy kind-root checkpoint methods remain available only for earlier tooling/tests; new recovery work should use `RevisionCheckpoint`.
+
 ## Checkpoint restore planning
 
-`PartyQuestReplicaRestorePlanner` accepts only a checkpoint whose manifest and bytes verify for the expected campaign/player. It maps checkpoint content back only into the current co-op replica's `saves/` and `sidecars/external/` paths.
+`PartyQuestReplicaRestorePlanner` accepts legacy or revision checkpoints only after manifest and bytes verify for the expected campaign/player. For a `RevisionCheckpoint`, the source root is derived from its `CheckpointKind + CampaignWorldRevision`, preventing a restore plan from silently selecting another revision.
 
-The restore planner cannot target solo saves, checkpoint storage, metadata, or `party_quest_runtime_apply.bin`.
+It maps checkpoint content back only into the current co-op replica's `saves/` and `sidecars/external/` paths. It cannot target solo saves, checkpoint storage, metadata, or `party_quest_runtime_apply.bin`.
 
 Restore remains **planning-only**. No destructive replacement executor exists yet. That executor must have its own durable restore journal/rollback protocol before it is allowed to replace live replica files.
 
-## Immutable checkpoint revision path foundation
-
-The layout now provides revision-scoped directories such as:
-
-```text
-checkpoints/PreRepair/Revision_000000000000019A/
-```
-
-This path primitive is validated, but the current checkpoint copy planner/manager still publishes at the checkpoint-kind root. Revision-scoped checkpoint publication/retention is therefore unfinished and must be completed before repeated production repairs rely on this filesystem layer.
-
 ## Live validation already completed
 
-The earlier one-PC shadow-peer session from persisted `WorldRevision=269` confirmed:
-
-- stable `CampaignId=A0C27D9E9A1E822D3EE502D620B25F94`;
-- initial shadow convergence;
-- baseline canonical update at revision 270;
-- deliberate missed update at revision 271;
-- revision-mismatch repair;
-- deliberate same-revision payload corruption;
-- `DigestMismatch` repair;
-- verified repair ACK/final convergence;
-- clean shadow-peer disconnect;
-- continued accepted canonical transactions.
-
-That live session also supplied the first service-quest quarantine evidence.
+The earlier one-PC shadow-peer session from persisted `WorldRevision=269` confirmed stable campaign identity, missed-update repair, same-revision digest-divergence repair, verified ACK convergence and continued accepted canonical progression. That session also supplied the first service-quest quarantine evidence.
 
 ## Current CI validation
 
-The branch head for this filesystem/checkpoint-control milestone triggers the full validation set:
+This branch head triggers the full validation set for immutable revision checkpoint publication:
 
 - Build Windows;
 - Build Linux;
@@ -172,7 +157,7 @@ The branch head for this filesystem/checkpoint-control milestone triggers the fu
 - PoC Windows runtime build;
 - `TPTests`.
 
-The new test families cover replica file inspection/execution, source-change detection, create-only destination protection, import/checkpoint scope boundaries, published-file corruption detection, manifest deterministic encoding/checksum/recovery, campaign/player binding, complete-orphan adoption, partial-orphan refusal, snapshot-manager validation, immutable revision path formatting, and checkpoint restore planning/refusal after checkpoint corruption.
+The newest tests verify that revision checkpoints publish under distinct paths, preserve older revisions, round-trip their manifests, restore from the exact recorded revision, reject revision zero, and isolate corruption of one checkpoint revision from another.
 
 ## Next live validation
 
@@ -180,7 +165,7 @@ No user-side run is required for the filesystem types alone because they are not
 
 Before the first canonical Skyrim mutation, remaining blockers include:
 
-- immutable revision-scoped checkpoint publication and retention;
+- retention/selection policy for immutable checkpoint revisions;
 - crash-resumable destructive checkpoint restore;
 - real Skyrim save interception using `PartyQuestSaveGuard`;
 - actual co-op replica/checkpoint routing in the client;
