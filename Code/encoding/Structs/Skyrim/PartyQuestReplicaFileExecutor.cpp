@@ -100,7 +100,6 @@ PartyQuestReplicaExecutionStatus ObserveDetailed(
     uint64_t digest = kFnvOffsetBasis;
     uint64_t size{};
     std::array<char, kIoBufferSize> buffer{};
-
     while (file)
     {
         file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
@@ -118,9 +117,6 @@ PartyQuestReplicaExecutionStatus ObserveDetailed(
 
     if (file.bad())
         return PartyQuestReplicaExecutionStatus::IoError;
-
-    // The planner reserves zero as "missing digest". Preserve that invariant
-    // even for the vanishingly rare byte sequence whose FNV result is zero.
     if (digest == 0)
         digest = 1;
 
@@ -159,7 +155,9 @@ std::optional<std::filesystem::path> ExpectedDestinationRoot(
     const PartyQuestCoopSavePaths& acPaths,
     PartyQuestReplicaFileKind aKind,
     bool aCheckpoint,
-    PartyQuestCheckpointKind aCheckpointKind) noexcept
+    PartyQuestCheckpointKind aCheckpointKind,
+    bool aRevisionScoped,
+    uint64_t aCampaignWorldRevision) noexcept
 {
     if (!aCheckpoint)
     {
@@ -168,8 +166,15 @@ std::optional<std::filesystem::path> ExpectedDestinationRoot(
         return acPaths.SavesDirectory;
     }
 
-    const std::filesystem::path checkpointRoot =
-        PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, aCheckpointKind);
+    if (aRevisionScoped && aCampaignWorldRevision == 0)
+        return std::nullopt;
+
+    const std::filesystem::path checkpointRoot = aRevisionScoped
+        ? PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+              acPaths,
+              aCheckpointKind,
+              aCampaignWorldRevision)
+        : PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, aCheckpointKind);
     if (checkpointRoot.empty())
         return std::nullopt;
 
@@ -195,6 +200,8 @@ PartyQuestReplicaExecutionReport ValidatePlanAndSources(
     const PartyQuestReplicaCopyPlan& acPlan,
     bool aCheckpoint,
     PartyQuestCheckpointKind aCheckpointKind,
+    bool aRevisionScoped,
+    uint64_t aCampaignWorldRevision,
     std::vector<NormalizedOperation>& aOperations) noexcept
 {
     if (!acPlan.IsReady() || acPlan.Operations.empty())
@@ -222,7 +229,9 @@ PartyQuestReplicaExecutionReport ValidatePlanAndSources(
             acPaths,
             operation.Kind,
             aCheckpoint,
-            aCheckpointKind);
+            aCheckpointKind,
+            aRevisionScoped,
+            aCampaignWorldRevision);
         const auto expectedRoot = expectedRootRaw ? AbsoluteNormalized(*expectedRootRaw) : std::nullopt;
         if (!source)
             return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidSourcePath, i, operation.SourcePath);
@@ -236,7 +245,6 @@ PartyQuestReplicaExecutionReport ValidatePlanAndSources(
 
         if (*source == *destination)
             return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidDestination, i, *destination);
-
         if (!sources.emplace(*source).second || !destinations.emplace(*destination).second)
             return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidPlan, i, *destination);
 
@@ -314,7 +322,9 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaCopyPlan& acPlan,
     bool aCheckpoint,
-    PartyQuestCheckpointKind aCheckpointKind) noexcept
+    PartyQuestCheckpointKind aCheckpointKind,
+    bool aRevisionScoped,
+    uint64_t aCampaignWorldRevision) noexcept
 {
     std::vector<NormalizedOperation> operations;
     PartyQuestReplicaExecutionReport validation = ValidatePlanAndSources(
@@ -322,6 +332,8 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
         acPlan,
         aCheckpoint,
         aCheckpointKind,
+        aRevisionScoped,
+        aCampaignWorldRevision,
         operations);
     if (!validation.IsSuccess())
         return validation;
@@ -339,9 +351,6 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
     if (ec || canonicalPlayerRoot.empty())
         return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, 0, *playerRoot);
 
-    // Resolve every destination parent before creating/copying files. Existing
-    // symlinks that would redirect a destination outside the effective player
-    // root are rejected before any file is staged.
     for (size_t i = 0; i < operations.size(); ++i)
     {
         const std::filesystem::path parent = operations[i].Destination.parent_path();
@@ -366,7 +375,6 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
     staged.reserve(operations.size());
     published.reserve(operations.size());
 
-    // Stage and verify the complete file set before publishing any final path.
     for (size_t i = 0; i < operations.size(); ++i)
     {
         const NormalizedOperation& operation = operations[i];
@@ -407,8 +415,6 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
         }
     }
 
-    // Publish create-only. Because every final destination was absent during
-    // preflight, rollback may safely delete only files created by this call.
     for (size_t i = 0; i < operations.size(); ++i)
     {
         std::error_code existsError;
@@ -472,7 +478,9 @@ PartyQuestReplicaExecutionReport VerifyInternal(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaCopyPlan& acPlan,
     bool aCheckpoint,
-    PartyQuestCheckpointKind aCheckpointKind) noexcept
+    PartyQuestCheckpointKind aCheckpointKind,
+    bool aRevisionScoped,
+    uint64_t aCampaignWorldRevision) noexcept
 {
     if (!acPlan.IsReady() || acPlan.Operations.empty())
         return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidPlan, 0);
@@ -490,7 +498,9 @@ PartyQuestReplicaExecutionReport VerifyInternal(
             acPaths,
             operation.Kind,
             aCheckpoint,
-            aCheckpointKind);
+            aCheckpointKind,
+            aRevisionScoped,
+            aCampaignWorldRevision);
         const auto expectedRoot = expectedRootRaw ? AbsoluteNormalized(*expectedRootRaw) : std::nullopt;
         if (!destination || !expectedRoot ||
             !IsInside(*playerRoot, *destination) ||
@@ -553,7 +563,7 @@ PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::ExecuteImport(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaCopyPlan& acPlan) noexcept
 {
-    return ExecuteInternal(acPaths, acPlan, false, PartyQuestCheckpointKind::PreJoin);
+    return ExecuteInternal(acPaths, acPlan, false, PartyQuestCheckpointKind::PreJoin, false, 0);
 }
 
 PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::ExecuteCheckpoint(
@@ -561,14 +571,29 @@ PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::ExecuteCheckpoin
     PartyQuestCheckpointKind aKind,
     const PartyQuestReplicaCopyPlan& acPlan) noexcept
 {
-    return ExecuteInternal(acPaths, acPlan, true, aKind);
+    return ExecuteInternal(acPaths, acPlan, true, aKind, false, 0);
+}
+
+PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::ExecuteRevisionCheckpoint(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
+    const PartyQuestReplicaCopyPlan& acPlan) noexcept
+{
+    return ExecuteInternal(
+        acPaths,
+        acPlan,
+        true,
+        aKind,
+        true,
+        aCampaignWorldRevision);
 }
 
 PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::VerifyImport(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaCopyPlan& acPlan) noexcept
 {
-    return VerifyInternal(acPaths, acPlan, false, PartyQuestCheckpointKind::PreJoin);
+    return VerifyInternal(acPaths, acPlan, false, PartyQuestCheckpointKind::PreJoin, false, 0);
 }
 
 PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::VerifyCheckpoint(
@@ -576,5 +601,20 @@ PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::VerifyCheckpoint
     PartyQuestCheckpointKind aKind,
     const PartyQuestReplicaCopyPlan& acPlan) noexcept
 {
-    return VerifyInternal(acPaths, acPlan, true, aKind);
+    return VerifyInternal(acPaths, acPlan, true, aKind, false, 0);
+}
+
+PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::VerifyRevisionCheckpoint(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
+    const PartyQuestReplicaCopyPlan& acPlan) noexcept
+{
+    return VerifyInternal(
+        acPaths,
+        acPlan,
+        true,
+        aKind,
+        true,
+        aCampaignWorldRevision);
 }
