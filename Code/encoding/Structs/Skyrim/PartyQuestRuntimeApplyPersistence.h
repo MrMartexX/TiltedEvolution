@@ -16,7 +16,14 @@ enum class PartyQuestRuntimeApplyPersistenceStatus : uint8_t
     UnsupportedVersion,
     Truncated,
     ChecksumMismatch,
-    InvalidData
+    InvalidData,
+
+    /**
+     * Only an older .bak archive is trustworthy. It must not be accepted as a
+     * normal current journal because doing so could forget a newer mutation
+     * barrier or committed transaction and repeat Skyrim side effects.
+     */
+    BackupRecoveryRequired
 };
 
 struct PartyQuestRuntimeApplyPersistenceResult
@@ -24,6 +31,7 @@ struct PartyQuestRuntimeApplyPersistenceResult
     PartyQuestRuntimeApplyPersistenceStatus Status{PartyQuestRuntimeApplyPersistenceStatus::InvalidData};
     std::optional<PartyQuestRuntimeRecoveryState> State;
     bool UsedBackup{};
+    bool UsedTemporary{};
 };
 
 /**
@@ -31,6 +39,7 @@ struct PartyQuestRuntimeApplyPersistenceResult
  *
  * It stores committed transaction fingerprints plus an optional in-progress
  * recovery marker. It does not store Skyrim save data or execute repairs.
+ * A stale backup is never silently promoted to current runtime truth.
  */
 class PartyQuestRuntimeApplyPersistence final
 {
