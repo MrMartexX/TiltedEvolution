@@ -75,4 +75,9 @@ The next executor milestone must implement backup creation, durable barrier pers
 
 ## CI hygiene
 
-The build regression that exposed missing standalone test dependencies in `party_quest_player_scope.cpp` was corrected by adding its required TiltedCore serialization/buffer includes. Intermediate repair and restore-journal commits use `[skip ci]`; this documentation commit is the single full-CI trigger for the completed milestone.
+Two independent stale standalone-test problems were exposed by full clean compilation rather than by the runtime logic itself:
+
+- `party_quest_player_scope.cpp` lacked its direct TiltedCore buffer/serialization prerequisites; those includes are now explicit;
+- `party_quest_replica_copy_verifier.cpp` still targeted the removed `PartyQuestReplicaCopyVerifier` API. Verification responsibility has since moved into the filesystem executor (`VerifyImport`, `VerifyCheckpoint`, and `VerifyRevisionCheckpoint`) with stronger real-file coverage, so the obsolete test was removed instead of resurrecting dead production API.
+
+All intermediate repair and restore-journal commits use `[skip ci]`. This commit is the single full-CI trigger after the complete static audit/fix pass.
