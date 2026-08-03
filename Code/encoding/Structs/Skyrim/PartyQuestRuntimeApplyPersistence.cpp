@@ -175,6 +175,17 @@ bool WriteFile(const std::filesystem::path& acPath, const std::vector<uint8_t>& 
     file.flush();
     return file.good();
 }
+
+PartyQuestRuntimeApplyPersistenceResult DecodeFile(const std::filesystem::path& acPath)
+{
+    std::vector<uint8_t> bytes;
+    PartyQuestRuntimeApplyPersistenceResult result;
+    result.Status = ReadFile(acPath, bytes);
+    if (result.Status != PartyQuestRuntimeApplyPersistenceStatus::Success)
+        return result;
+
+    return PartyQuestRuntimeApplyPersistence::Decode(bytes);
+}
 } // namespace
 
 std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
@@ -495,30 +506,36 @@ PartyQuestRuntimeApplyPersistenceStatus PartyQuestRuntimeApplyPersistence::SaveA
 PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Load(
     const std::filesystem::path& acPath)
 {
-    std::vector<uint8_t> bytes;
-    const PartyQuestRuntimeApplyPersistenceStatus primaryReadStatus = ReadFile(acPath, bytes);
+    // Primary is authoritative whenever it is intact.
+    PartyQuestRuntimeApplyPersistenceResult primaryResult = DecodeFile(acPath);
+    if (primaryResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
+        return primaryResult;
 
-    PartyQuestRuntimeApplyPersistenceResult primaryResult;
-    primaryResult.Status = primaryReadStatus;
-    if (primaryReadStatus == PartyQuestRuntimeApplyPersistenceStatus::Success)
+    // SaveAtomically writes and flushes the complete new archive to .tmp before
+    // moving the old primary to .bak. If a process dies between those renames,
+    // the valid .tmp is the newest complete recovery journal and is safer than
+    // rolling back to the older backup.
+    auto temporaryPath = acPath;
+    temporaryPath += ".tmp";
+    PartyQuestRuntimeApplyPersistenceResult temporaryResult = DecodeFile(temporaryPath);
+    if (temporaryResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
     {
-        primaryResult = Decode(bytes);
-        if (primaryResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
-            return primaryResult;
+        temporaryResult.UsedTemporary = true;
+        return temporaryResult;
     }
 
+    // A backup is necessarily older than the failed/missing primary. Unlike a
+    // canonical state snapshot, silently rolling this journal backward could
+    // forget that a Skyrim mutation was armed/committed and allow duplicate
+    // side effects. Expose the backup for explicit checkpoint recovery only.
     auto backupPath = acPath;
     backupPath += ".bak";
-    bytes.clear();
-    const PartyQuestRuntimeApplyPersistenceStatus backupReadStatus = ReadFile(backupPath, bytes);
-    if (backupReadStatus == PartyQuestRuntimeApplyPersistenceStatus::Success)
+    PartyQuestRuntimeApplyPersistenceResult backupResult = DecodeFile(backupPath);
+    if (backupResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
     {
-        auto backupResult = Decode(bytes);
-        if (backupResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
-        {
-            backupResult.UsedBackup = true;
-            return backupResult;
-        }
+        backupResult.Status = PartyQuestRuntimeApplyPersistenceStatus::BackupRecoveryRequired;
+        backupResult.UsedBackup = true;
+        return backupResult;
     }
 
     return primaryResult;
