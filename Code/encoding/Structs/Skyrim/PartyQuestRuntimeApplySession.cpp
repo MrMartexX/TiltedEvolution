@@ -1,0 +1,219 @@
+#include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
+
+#include <utility>
+
+PartyQuestRuntimeApplySession::PartyQuestRuntimeApplySession(
+    PartyQuestCampaignId aCampaignId,
+    DurableStateHandler aDurableStateHandler)
+    : m_campaignId(aCampaignId)
+    , m_durableStateHandler(std::move(aDurableStateHandler))
+{
+}
+
+void PartyQuestRuntimeApplySession::SetDurableStateHandler(
+    DurableStateHandler aDurableStateHandler)
+{
+    m_durableStateHandler = std::move(aDurableStateHandler);
+}
+
+bool PartyQuestRuntimeApplySession::Persist(
+    const PartyQuestRuntimeApplyCoordinator& acCandidate) const
+{
+    if (!m_campaignId.IsValid() || !m_durableStateHandler)
+        return false;
+
+    return m_durableStateHandler(acCandidate.ExportRecoveryState(m_campaignId));
+}
+
+PartyQuestRuntimeDurableBeginStatus PartyQuestRuntimeApplySession::TranslateBeginStatus(
+    PartyQuestRuntimeApplyBeginStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestRuntimeApplyBeginStatus::Started: return PartyQuestRuntimeDurableBeginStatus::Started;
+    case PartyQuestRuntimeApplyBeginStatus::Deferred: return PartyQuestRuntimeDurableBeginStatus::Deferred;
+    case PartyQuestRuntimeApplyBeginStatus::DuplicatePending: return PartyQuestRuntimeDurableBeginStatus::DuplicatePending;
+    case PartyQuestRuntimeApplyBeginStatus::DuplicateCommitted: return PartyQuestRuntimeDurableBeginStatus::DuplicateCommitted;
+    case PartyQuestRuntimeApplyBeginStatus::TransactionConflict: return PartyQuestRuntimeDurableBeginStatus::TransactionConflict;
+    case PartyQuestRuntimeApplyBeginStatus::Busy: return PartyQuestRuntimeDurableBeginStatus::Busy;
+    case PartyQuestRuntimeApplyBeginStatus::RecoveryBlocked: return PartyQuestRuntimeDurableBeginStatus::RecoveryBlocked;
+    case PartyQuestRuntimeApplyBeginStatus::InvalidRequest: return PartyQuestRuntimeDurableBeginStatus::InvalidRequest;
+    case PartyQuestRuntimeApplyBeginStatus::UnsafePlan: return PartyQuestRuntimeDurableBeginStatus::UnsafePlan;
+    }
+
+    return PartyQuestRuntimeDurableBeginStatus::InvalidRequest;
+}
+
+PartyQuestRuntimeDurableBeginStatus PartyQuestRuntimeApplySession::Begin(
+    const PartyQuestRuntimeApplyRequest& acRequest)
+{
+    if (!m_campaignId.IsValid())
+        return PartyQuestRuntimeDurableBeginStatus::InvalidRequest;
+
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    const PartyQuestRuntimeApplyBeginStatus status = candidate.Begin(acRequest);
+
+    if (status != PartyQuestRuntimeApplyBeginStatus::Started &&
+        status != PartyQuestRuntimeApplyBeginStatus::Deferred)
+    {
+        return TranslateBeginStatus(status);
+    }
+
+    if (!Persist(candidate))
+        return PartyQuestRuntimeDurableBeginStatus::PersistenceFailure;
+
+    m_coordinator = std::move(candidate);
+    return TranslateBeginStatus(status);
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkWorldReady(
+    uint64_t aTransactionId)
+{
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    if (!candidate.MarkWorldReady(aTransactionId))
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+
+    if (!Persist(candidate))
+        return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
+
+    m_coordinator = std::move(candidate);
+    return PartyQuestRuntimeDurableTransitionStatus::Applied;
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkCheckpointCreated(
+    uint64_t aTransactionId)
+{
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    if (!candidate.MarkCheckpointCreated(aTransactionId))
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+
+    if (!Persist(candidate))
+        return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
+
+    m_coordinator = std::move(candidate);
+    return PartyQuestRuntimeDurableTransitionStatus::Applied;
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::ArmRuntimeMutation(
+    uint64_t aTransactionId)
+{
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    if (!candidate.MarkApplyDispatched(aTransactionId))
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+
+    // The persisted candidate already says RuntimeMutationMayHaveOccurred=true.
+    // A future Skyrim executor may run only after this succeeds.
+    if (!Persist(candidate))
+        return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
+
+    m_coordinator = std::move(candidate);
+    return PartyQuestRuntimeDurableTransitionStatus::Applied;
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkPapyrusQuiescent(
+    uint64_t aTransactionId)
+{
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    if (!candidate.MarkPapyrusQuiescent(aTransactionId))
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+
+    if (!Persist(candidate))
+        return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
+
+    m_coordinator = std::move(candidate);
+    return PartyQuestRuntimeDurableTransitionStatus::Applied;
+}
+
+PartyQuestRuntimeDurableVerificationResult PartyQuestRuntimeApplySession::SubmitResnapshot(
+    uint64_t aTransactionId,
+    QuestSnapshot aObservedSnapshot)
+{
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    const PartyQuestRuntimeVerificationStatus verification =
+        candidate.SubmitResnapshot(aTransactionId, std::move(aObservedSnapshot));
+
+    if (verification == PartyQuestRuntimeVerificationStatus::InvalidState)
+        return {verification, false};
+
+    if (!Persist(candidate))
+        return {verification, true};
+
+    m_coordinator = std::move(candidate);
+    return {verification, false};
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::Commit(
+    uint64_t aTransactionId)
+{
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    if (!candidate.Commit(aTransactionId))
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+
+    // The committed transaction journal must be durable before the in-memory
+    // save guard is released/published as committed.
+    if (!Persist(candidate))
+        return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
+
+    m_coordinator = std::move(candidate);
+    return PartyQuestRuntimeDurableTransitionStatus::Applied;
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::AbortBeforeMutation(
+    uint64_t aTransactionId)
+{
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    if (!candidate.Abort(aTransactionId))
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+
+    if (candidate.LastAbortRequiresCheckpointRestore())
+        return PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired;
+
+    if (!Persist(candidate))
+        return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
+
+    m_coordinator = std::move(candidate);
+    return PartyQuestRuntimeDurableTransitionStatus::Applied;
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::CompleteLiveCheckpointRestore(
+    uint64_t aTransactionId)
+{
+    const PartyQuestRuntimeApplyEntry* pActive = m_coordinator.GetActive();
+    if (!pActive ||
+        pActive->TransactionId != aTransactionId ||
+        !pActive->CheckpointCreated ||
+        !pActive->RuntimeMutationMayHaveOccurred)
+    {
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+    }
+
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    if (!candidate.Abort(aTransactionId) || !candidate.LastAbortRequiresCheckpointRestore())
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+
+    if (!Persist(candidate))
+        return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
+
+    m_coordinator = std::move(candidate);
+    return PartyQuestRuntimeDurableTransitionStatus::Applied;
+}
+
+PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplySession::RestoreRecoveryState(
+    const PartyQuestRuntimeRecoveryState& acState) noexcept
+{
+    return m_coordinator.RestoreRecoveryState(acState, m_campaignId);
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::CompleteCrashCheckpointRestore(
+    uint64_t aTransactionId)
+{
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    if (!candidate.AcknowledgeCheckpointRestored(aTransactionId))
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+
+    if (!Persist(candidate))
+        return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
+
+    m_coordinator = std::move(candidate);
+    return PartyQuestRuntimeDurableTransitionStatus::Applied;
+}
