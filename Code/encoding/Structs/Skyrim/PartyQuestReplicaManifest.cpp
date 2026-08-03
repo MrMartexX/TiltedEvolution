@@ -62,9 +62,7 @@ uint64_t ComputeChecksum(const uint8_t* apData, size_t aSize) noexcept
 std::string PathToUtf8(const std::filesystem::path& acPath)
 {
     const auto utf8 = acPath.generic_u8string();
-    return std::string(
-        reinterpret_cast<const char*>(utf8.data()),
-        utf8.size());
+    return std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size());
 }
 
 std::optional<std::filesystem::path> Utf8ToPath(const std::string& acUtf8)
@@ -145,6 +143,17 @@ bool IsExpectedPublishedRelativePath(
     return normalized.parent_path() == "saves";
 }
 
+bool IsCheckpointType(PartyQuestReplicaSnapshotType aType) noexcept
+{
+    return aType == PartyQuestReplicaSnapshotType::Checkpoint ||
+        aType == PartyQuestReplicaSnapshotType::RevisionCheckpoint;
+}
+
+bool IsRevisionCheckpointType(PartyQuestReplicaSnapshotType aType) noexcept
+{
+    return aType == PartyQuestReplicaSnapshotType::RevisionCheckpoint;
+}
+
 bool ValidateManifestData(const PartyQuestReplicaManifest& acManifest)
 {
     if (!acManifest.CampaignId.IsValid() ||
@@ -156,7 +165,7 @@ bool ValidateManifestData(const PartyQuestReplicaManifest& acManifest)
     }
 
     if (static_cast<uint8_t>(acManifest.SnapshotType) >
-        static_cast<uint8_t>(PartyQuestReplicaSnapshotType::Checkpoint))
+        static_cast<uint8_t>(PartyQuestReplicaSnapshotType::RevisionCheckpoint))
     {
         return false;
     }
@@ -165,6 +174,8 @@ bool ValidateManifestData(const PartyQuestReplicaManifest& acManifest)
     {
         return false;
     }
+    if (IsRevisionCheckpointType(acManifest.SnapshotType) && acManifest.CampaignWorldRevision == 0)
+        return false;
 
     size_t mainSaveCount{};
     std::set<std::filesystem::path> relativePaths;
@@ -188,22 +199,43 @@ bool ValidateManifestData(const PartyQuestReplicaManifest& acManifest)
     return mainSaveCount == 1;
 }
 
+std::filesystem::path SnapshotRoot(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestReplicaSnapshotType aSnapshotType,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision)
+{
+    if (aSnapshotType == PartyQuestReplicaSnapshotType::ImportedReplica)
+        return acPaths.PlayerDirectory;
+    if (aSnapshotType == PartyQuestReplicaSnapshotType::RevisionCheckpoint)
+    {
+        return PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+            acPaths,
+            aKind,
+            aCampaignWorldRevision);
+    }
+    return PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, aKind);
+}
+
 std::optional<std::filesystem::path> ExpectedDestinationRoot(
     const PartyQuestCoopSavePaths& acPaths,
     PartyQuestReplicaFileKind aKind,
-    bool aCheckpoint,
-    PartyQuestCheckpointKind aKindCheckpoint)
+    PartyQuestReplicaSnapshotType aSnapshotType,
+    PartyQuestCheckpointKind aCheckpointKind,
+    uint64_t aCampaignWorldRevision)
 {
-    if (!aCheckpoint)
+    if (aSnapshotType == PartyQuestReplicaSnapshotType::ImportedReplica)
     {
         if (aKind == PartyQuestReplicaFileKind::ExternalSidecar)
             return acPaths.SidecarsDirectory / "external";
         return acPaths.SavesDirectory;
     }
 
-    const auto checkpointRoot = PartyQuestCoopSaveLayout::GetCheckpointDirectory(
+    const std::filesystem::path checkpointRoot = SnapshotRoot(
         acPaths,
-        aKindCheckpoint);
+        aSnapshotType,
+        aCheckpointKind,
+        aCampaignWorldRevision);
     if (checkpointRoot.empty())
         return std::nullopt;
     if (aKind == PartyQuestReplicaFileKind::ExternalSidecar)
@@ -223,15 +255,17 @@ std::optional<PartyQuestReplicaManifest> BuildManifest(
     if (!acCampaignId.IsValid() ||
         !acPlayerProfileId.IsValid() ||
         !acPlan.IsReady() ||
-        acPlan.Operations.empty())
+        acPlan.Operations.empty() ||
+        (IsRevisionCheckpointType(aSnapshotType) && aCampaignWorldRevision == 0))
     {
         return std::nullopt;
     }
 
-    const bool checkpoint = aSnapshotType == PartyQuestReplicaSnapshotType::Checkpoint;
-    const std::filesystem::path snapshotRootRaw = checkpoint
-        ? PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, aCheckpointKind)
-        : acPaths.PlayerDirectory;
+    const std::filesystem::path snapshotRootRaw = SnapshotRoot(
+        acPaths,
+        aSnapshotType,
+        aCheckpointKind,
+        aCampaignWorldRevision);
     const auto snapshotRoot = AbsoluteNormalized(snapshotRootRaw);
     if (!snapshotRoot)
         return std::nullopt;
@@ -251,8 +285,9 @@ std::optional<PartyQuestReplicaManifest> BuildManifest(
         const auto expectedRootRaw = ExpectedDestinationRoot(
             acPaths,
             operation.Kind,
-            checkpoint,
-            aCheckpointKind);
+            aSnapshotType,
+            aCheckpointKind,
+            aCampaignWorldRevision);
         const auto expectedRoot = expectedRootRaw ? AbsoluteNormalized(*expectedRootRaw) : std::nullopt;
         if (!destination || !expectedRoot ||
             !IsInside(*snapshotRoot, *destination) ||
@@ -262,7 +297,8 @@ std::optional<PartyQuestReplicaManifest> BuildManifest(
             return std::nullopt;
         }
 
-        const std::filesystem::path relative = destination->lexically_relative(*snapshotRoot).lexically_normal();
+        const std::filesystem::path relative =
+            destination->lexically_relative(*snapshotRoot).lexically_normal();
         if (!IsExpectedPublishedRelativePath(operation.Kind, relative) ||
             !relativePaths.emplace(relative).second)
         {
@@ -372,6 +408,24 @@ std::optional<PartyQuestReplicaManifest> PartyQuestReplicaManifestStore::BuildCh
         acPlan);
 }
 
+std::optional<PartyQuestReplicaManifest> PartyQuestReplicaManifestStore::BuildRevisionCheckpointManifest(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acPlayerProfileId,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
+    const PartyQuestReplicaCopyPlan& acPlan)
+{
+    return BuildManifest(
+        acPaths,
+        acCampaignId,
+        acPlayerProfileId,
+        PartyQuestReplicaSnapshotType::RevisionCheckpoint,
+        aKind,
+        aCampaignWorldRevision,
+        acPlan);
+}
+
 std::filesystem::path PartyQuestReplicaManifestStore::GetImportManifestPath(
     const PartyQuestCoopSavePaths& acPaths)
 {
@@ -383,6 +437,17 @@ std::filesystem::path PartyQuestReplicaManifestStore::GetCheckpointManifestPath(
     PartyQuestCheckpointKind aKind)
 {
     return PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, aKind) / "manifest.bin";
+}
+
+std::filesystem::path PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision)
+{
+    return PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        acPaths,
+        aKind,
+        aCampaignWorldRevision) / "manifest.bin";
 }
 
 std::vector<uint8_t> PartyQuestReplicaManifestStore::Encode(
@@ -461,14 +526,9 @@ PartyQuestReplicaManifestPersistenceResult PartyQuestReplicaManifestStore::Decod
         result.Status = PartyQuestReplicaManifestPersistenceStatus::UnsupportedVersion;
         return result;
     }
-    if (payloadSize64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    if (payloadSize64 > static_cast<uint64_t>(std::numeric_limits<size_t>::max()) || offset > acBytes.size())
     {
         result.Status = PartyQuestReplicaManifestPersistenceStatus::InvalidData;
-        return result;
-    }
-    if (offset > acBytes.size())
-    {
-        result.Status = PartyQuestReplicaManifestPersistenceStatus::Truncated;
         return result;
     }
 
@@ -518,7 +578,7 @@ PartyQuestReplicaManifestPersistenceResult PartyQuestReplicaManifestStore::Decod
         return result;
     }
 
-    if (snapshotType > static_cast<uint8_t>(PartyQuestReplicaSnapshotType::Checkpoint) ||
+    if (snapshotType > static_cast<uint8_t>(PartyQuestReplicaSnapshotType::RevisionCheckpoint) ||
         checkpointKind > static_cast<uint8_t>(PartyQuestCheckpointKind::LastKnownGood) ||
         fileCount == 0 || fileCount > kMaxFiles)
     {
@@ -667,49 +727,57 @@ PartyQuestReplicaManifestVerificationStatus PartyQuestReplicaManifestStore::Veri
     const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
     const PartyQuestReplicaManifest& acManifest) noexcept
 {
-    if (!acExpectedCampaignId.IsValid() ||
-        !acExpectedPlayerProfileId.IsValid() ||
-        acManifest.CampaignId != acExpectedCampaignId ||
-        acManifest.PlayerProfileId != acExpectedPlayerProfileId)
+    try
     {
-        return PartyQuestReplicaManifestVerificationStatus::InvalidIdentity;
-    }
-
-    if (!ValidateManifestData(acManifest))
-        return PartyQuestReplicaManifestVerificationStatus::InvalidManifest;
-
-    const std::filesystem::path rootRaw =
-        acManifest.SnapshotType == PartyQuestReplicaSnapshotType::Checkpoint
-        ? PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, acManifest.CheckpointKind)
-        : acPaths.PlayerDirectory;
-    const auto root = AbsoluteNormalized(rootRaw);
-    if (!root)
-        return PartyQuestReplicaManifestVerificationStatus::PathEscape;
-
-    std::error_code ec;
-    const std::filesystem::path canonicalRoot = std::filesystem::weakly_canonical(*root, ec);
-    if (ec || canonicalRoot.empty())
-        return PartyQuestReplicaManifestVerificationStatus::MissingOrChangedFile;
-
-    for (const PartyQuestReplicaPublishedFile& file : acManifest.Files)
-    {
-        const auto candidate = AbsoluteNormalized(rootRaw / file.RelativePath);
-        if (!candidate || !IsInside(*root, *candidate))
-            return PartyQuestReplicaManifestVerificationStatus::PathEscape;
-
-        const std::filesystem::path canonicalParent =
-            std::filesystem::weakly_canonical(candidate->parent_path(), ec);
-        if (ec || !IsInside(canonicalRoot, canonicalParent))
-            return PartyQuestReplicaManifestVerificationStatus::PathEscape;
-
-        const auto observation = PartyQuestReplicaFileExecutor::ObserveRegularFile(*candidate);
-        if (!observation ||
-            observation->Size != file.Size ||
-            observation->Digest != file.Digest)
+        if (!acExpectedCampaignId.IsValid() ||
+            !acExpectedPlayerProfileId.IsValid() ||
+            acManifest.CampaignId != acExpectedCampaignId ||
+            acManifest.PlayerProfileId != acExpectedPlayerProfileId)
         {
-            return PartyQuestReplicaManifestVerificationStatus::MissingOrChangedFile;
+            return PartyQuestReplicaManifestVerificationStatus::InvalidIdentity;
         }
-    }
 
-    return PartyQuestReplicaManifestVerificationStatus::Verified;
+        if (!ValidateManifestData(acManifest))
+            return PartyQuestReplicaManifestVerificationStatus::InvalidManifest;
+
+        const std::filesystem::path rootRaw = SnapshotRoot(
+            acPaths,
+            acManifest.SnapshotType,
+            acManifest.CheckpointKind,
+            acManifest.CampaignWorldRevision);
+        const auto root = AbsoluteNormalized(rootRaw);
+        if (!root)
+            return PartyQuestReplicaManifestVerificationStatus::PathEscape;
+
+        std::error_code ec;
+        const std::filesystem::path canonicalRoot = std::filesystem::weakly_canonical(*root, ec);
+        if (ec || canonicalRoot.empty())
+            return PartyQuestReplicaManifestVerificationStatus::MissingOrChangedFile;
+
+        for (const PartyQuestReplicaPublishedFile& file : acManifest.Files)
+        {
+            const auto candidate = AbsoluteNormalized(rootRaw / file.RelativePath);
+            if (!candidate || !IsInside(*root, *candidate))
+                return PartyQuestReplicaManifestVerificationStatus::PathEscape;
+
+            const std::filesystem::path canonicalParent =
+                std::filesystem::weakly_canonical(candidate->parent_path(), ec);
+            if (ec || !IsInside(canonicalRoot, canonicalParent))
+                return PartyQuestReplicaManifestVerificationStatus::PathEscape;
+
+            const auto observation = PartyQuestReplicaFileExecutor::ObserveRegularFile(*candidate);
+            if (!observation ||
+                observation->Size != file.Size ||
+                observation->Digest != file.Digest)
+            {
+                return PartyQuestReplicaManifestVerificationStatus::MissingOrChangedFile;
+            }
+        }
+
+        return PartyQuestReplicaManifestVerificationStatus::Verified;
+    }
+    catch (...)
+    {
+        return PartyQuestReplicaManifestVerificationStatus::InvalidManifest;
+    }
 }
