@@ -11,7 +11,8 @@
 enum class PartyQuestReplicaSnapshotType : uint8_t
 {
     ImportedReplica,
-    Checkpoint
+    Checkpoint,
+    RevisionCheckpoint
 };
 
 struct PartyQuestReplicaPublishedFile
@@ -85,7 +86,17 @@ public:
         uint64_t aCampaignWorldRevision,
         const PartyQuestReplicaCopyPlan& acPlan);
 
+    /** Legacy kind-root checkpoint manifest retained for existing tooling. */
     [[nodiscard]] static std::optional<PartyQuestReplicaManifest> BuildCheckpointManifest(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acPlayerProfileId,
+        PartyQuestCheckpointKind aKind,
+        uint64_t aCampaignWorldRevision,
+        const PartyQuestReplicaCopyPlan& acPlan);
+
+    /** Immutable revision-scoped checkpoint completion manifest. */
+    [[nodiscard]] static std::optional<PartyQuestReplicaManifest> BuildRevisionCheckpointManifest(
         const PartyQuestCoopSavePaths& acPaths,
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestPlayerProfileId& acPlayerProfileId,
@@ -99,6 +110,11 @@ public:
     [[nodiscard]] static std::filesystem::path GetCheckpointManifestPath(
         const PartyQuestCoopSavePaths& acPaths,
         PartyQuestCheckpointKind aKind);
+
+    [[nodiscard]] static std::filesystem::path GetRevisionCheckpointManifestPath(
+        const PartyQuestCoopSavePaths& acPaths,
+        PartyQuestCheckpointKind aKind,
+        uint64_t aCampaignWorldRevision);
 
     [[nodiscard]] static std::vector<uint8_t> Encode(
         const PartyQuestReplicaManifest& acManifest);
