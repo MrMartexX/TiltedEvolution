@@ -3,6 +3,7 @@
 #include <catch2/catch.hpp>
 
 #include <string>
+#include <utility>
 
 TEST_CASE("Co-op save layout isolates campaign and player replicas", "[quest.party-state.save-layout]")
 {
