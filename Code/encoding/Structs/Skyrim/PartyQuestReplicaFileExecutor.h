@@ -82,13 +82,17 @@ public:
         const PartyQuestCoopSavePaths& acPaths,
         const PartyQuestReplicaCopyPlan& acPlan) noexcept;
 
-    /**
-     * Creates a checkpoint from files already owned by this player replica.
-     * Source files must be inside PlayerDirectory but outside checkpoints/.
-     */
+    /** Legacy kind-root checkpoint execution retained for existing tooling. */
     [[nodiscard]] static PartyQuestReplicaExecutionReport ExecuteCheckpoint(
         const PartyQuestCoopSavePaths& acPaths,
         PartyQuestCheckpointKind aKind,
+        const PartyQuestReplicaCopyPlan& acPlan) noexcept;
+
+    /** Executes an immutable revision-scoped checkpoint plan. */
+    [[nodiscard]] static PartyQuestReplicaExecutionReport ExecuteRevisionCheckpoint(
+        const PartyQuestCoopSavePaths& acPaths,
+        PartyQuestCheckpointKind aKind,
+        uint64_t aCampaignWorldRevision,
         const PartyQuestReplicaCopyPlan& acPlan) noexcept;
 
     [[nodiscard]] static PartyQuestReplicaExecutionReport VerifyImport(
@@ -98,5 +102,11 @@ public:
     [[nodiscard]] static PartyQuestReplicaExecutionReport VerifyCheckpoint(
         const PartyQuestCoopSavePaths& acPaths,
         PartyQuestCheckpointKind aKind,
+        const PartyQuestReplicaCopyPlan& acPlan) noexcept;
+
+    [[nodiscard]] static PartyQuestReplicaExecutionReport VerifyRevisionCheckpoint(
+        const PartyQuestCoopSavePaths& acPaths,
+        PartyQuestCheckpointKind aKind,
+        uint64_t aCampaignWorldRevision,
         const PartyQuestReplicaCopyPlan& acPlan) noexcept;
 };
