@@ -10,7 +10,7 @@
 namespace
 {
 constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'R', 'A', 'P', 'P', 'L'};
-constexpr uint16_t kFormatVersion = 1;
+constexpr uint16_t kFormatVersion = 2;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
 constexpr uint64_t kMaxCommittedEntries = 1000000;
@@ -191,7 +191,7 @@ PartyQuestRuntimeApplyPersistenceResult DecodeFile(const std::filesystem::path& 
 std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
     const PartyQuestRuntimeRecoveryState& acState)
 {
-    if (!acState.CampaignId.IsValid())
+    if (!acState.CampaignId.IsValid() || !acState.PlayerProfileId.IsValid())
         return {};
 
     std::vector<PartyQuestRuntimeCommittedRecord> committed = acState.Committed;
@@ -206,6 +206,8 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
     std::vector<uint8_t> payload;
     WriteInteger(payload, acState.CampaignId.High);
     WriteInteger(payload, acState.CampaignId.Low);
+    WriteInteger(payload, acState.PlayerProfileId.High);
+    WriteInteger(payload, acState.PlayerProfileId.Low);
     WriteInteger<uint64_t>(payload, committed.size());
     for (const PartyQuestRuntimeCommittedRecord& record : committed)
     {
@@ -344,12 +346,14 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
 
     PartyQuestRuntimeRecoveryState state;
     if (!ReadInteger(acBytes, offset, payloadEnd, state.CampaignId.High) ||
-        !ReadInteger(acBytes, offset, payloadEnd, state.CampaignId.Low))
+        !ReadInteger(acBytes, offset, payloadEnd, state.CampaignId.Low) ||
+        !ReadInteger(acBytes, offset, payloadEnd, state.PlayerProfileId.High) ||
+        !ReadInteger(acBytes, offset, payloadEnd, state.PlayerProfileId.Low))
     {
         result.Status = PartyQuestRuntimeApplyPersistenceStatus::Truncated;
         return result;
     }
-    if (!state.CampaignId.IsValid())
+    if (!state.CampaignId.IsValid() || !state.PlayerProfileId.IsValid())
     {
         result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
         return result;
