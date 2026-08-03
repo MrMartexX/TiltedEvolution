@@ -1,3 +1,8 @@
+#include <TiltedCore/Stl.hpp>
+#include <TiltedCore/Allocator.hpp>
+#include <TiltedCore/Buffer.hpp>
+#include <TiltedCore/Serialization.hpp>
+
 #include <Structs/Skyrim/PartyQuestCoopSaveLayout.h>
 #include <Structs/Skyrim/PartyQuestRuntimeApply.h>
 
