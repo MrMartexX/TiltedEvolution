@@ -34,6 +34,17 @@ std::string PartyQuestCoopSaveLayout::FormatPlayerProfileId(
         : std::string{};
 }
 
+std::string PartyQuestCoopSaveLayout::FormatWorldRevision(uint64_t aWorldRevision)
+{
+    std::array<char, 26> buffer{};
+    std::snprintf(
+        buffer.data(),
+        buffer.size(),
+        "Revision_%016llX",
+        static_cast<unsigned long long>(aWorldRevision));
+    return buffer.data();
+}
+
 std::optional<PartyQuestCoopSavePaths> PartyQuestCoopSaveLayout::Build(
     const std::filesystem::path& acRoot,
     const PartyQuestCampaignId& acCampaignId,
@@ -79,4 +90,12 @@ std::filesystem::path PartyQuestCoopSaveLayout::GetCheckpointDirectory(
     PartyQuestCheckpointKind aKind)
 {
     return acPaths.CheckpointsDirectory / GetCheckpointName(aKind);
+}
+
+std::filesystem::path PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aWorldRevision)
+{
+    return GetCheckpointDirectory(acPaths, aKind) / FormatWorldRevision(aWorldRevision);
 }
