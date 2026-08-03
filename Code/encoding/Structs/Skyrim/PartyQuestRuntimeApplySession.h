@@ -36,10 +36,10 @@ struct PartyQuestRuntimeDurableVerificationResult
  * Durability barrier around PartyQuestRuntimeApplyCoordinator.
  *
  * Every state-changing transition is first applied to a copy, then the complete
- * campaign-bound recovery state is durably persisted, and only then published
- * in memory. This is especially important for ArmRuntimeMutation(): the
- * "mutation may have occurred" marker is guaranteed durable before the caller
- * is allowed to invoke any Skyrim/Papyrus mutation.
+ * campaign/player-bound recovery state is durably persisted, and only then
+ * published in memory. This is especially important for ArmRuntimeMutation():
+ * the "mutation may have occurred" marker is guaranteed durable before the
+ * caller is allowed to invoke any Skyrim/Papyrus mutation.
  *
  * The session still does not call Skyrim, Papyrus, save APIs or file I/O itself.
  */
@@ -50,6 +50,7 @@ public:
 
     PartyQuestRuntimeApplySession(
         PartyQuestCampaignId aCampaignId,
+        PartyQuestPlayerProfileId aPlayerProfileId,
         DurableStateHandler aDurableStateHandler = {});
 
     void SetDurableStateHandler(DurableStateHandler aDurableStateHandler);
@@ -104,12 +105,18 @@ public:
         return m_campaignId;
     }
 
+    [[nodiscard]] const PartyQuestPlayerProfileId& GetPlayerProfileId() const noexcept
+    {
+        return m_playerProfileId;
+    }
+
 private:
     [[nodiscard]] bool Persist(const PartyQuestRuntimeApplyCoordinator& acCandidate) const;
     [[nodiscard]] static PartyQuestRuntimeDurableBeginStatus TranslateBeginStatus(
         PartyQuestRuntimeApplyBeginStatus aStatus) noexcept;
 
     PartyQuestCampaignId m_campaignId;
+    PartyQuestPlayerProfileId m_playerProfileId;
     DurableStateHandler m_durableStateHandler;
     PartyQuestRuntimeApplyCoordinator m_coordinator;
 };
