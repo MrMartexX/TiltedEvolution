@@ -9,6 +9,7 @@ on:
       - "Code/encoding/Messages/ClientMessageFactory.h"
       - "Code/encoding/Messages/ServerMessageFactory.h"
       - "Code/encoding/Messages/PartyQuestMessages.*"
+      - "Code/encoding/Structs/GameId.h"
       - "Code/encoding/Structs/Skyrim/QuestSnapshot.*"
       - "Code/encoding/Structs/Skyrim/PartyQuest*.*"
       - "Code/tests/quest_snapshot.cpp"
