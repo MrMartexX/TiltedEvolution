@@ -1,5 +1,7 @@
 #include <Structs/Skyrim/PartyQuestSaveGuard.h>
 
+#include <mutex>
+
 thread_local PartyQuestSaveGuard* PartyQuestControlledSaveScope::s_pGuard = nullptr;
 thread_local uint64_t PartyQuestControlledSaveScope::s_transactionId = 0;
 thread_local uint32_t PartyQuestControlledSaveScope::s_depth = 0;
@@ -15,19 +17,26 @@ PartyQuestSaveGuardAcquireStatus PartyQuestSaveGuard::Acquire(uint64_t aTransact
     if (aTransactionId == 0)
         return PartyQuestSaveGuardAcquireStatus::InvalidTransaction;
 
-    uint64_t expected = 0;
-    if (m_transactionId.compare_exchange_strong(
-            expected,
-            aTransactionId,
-            std::memory_order_acq_rel,
-            std::memory_order_acquire))
+    try
     {
+        // Exclusive acquisition waits for any engine save that already entered
+        // under a shared permit before publishing the critical repair lease.
+        std::unique_lock lock(m_engineSaveGate);
+        const uint64_t current = m_transactionId.load(std::memory_order_acquire);
+        if (current == aTransactionId)
+            return PartyQuestSaveGuardAcquireStatus::Duplicate;
+        if (current != 0)
+            return PartyQuestSaveGuardAcquireStatus::Busy;
+
+        m_transactionId.store(aTransactionId, std::memory_order_release);
         return PartyQuestSaveGuardAcquireStatus::Acquired;
     }
-
-    return expected == aTransactionId
-        ? PartyQuestSaveGuardAcquireStatus::Duplicate
-        : PartyQuestSaveGuardAcquireStatus::Busy;
+    catch (...)
+    {
+        // Locking failure must never publish a repair that the save hook cannot
+        // reliably guard.
+        return PartyQuestSaveGuardAcquireStatus::Busy;
+    }
 }
 
 bool PartyQuestSaveGuard::Release(uint64_t aTransactionId) noexcept
@@ -35,12 +44,21 @@ bool PartyQuestSaveGuard::Release(uint64_t aTransactionId) noexcept
     if (aTransactionId == 0)
         return false;
 
-    uint64_t expected = aTransactionId;
-    return m_transactionId.compare_exchange_strong(
-        expected,
-        0,
-        std::memory_order_acq_rel,
-        std::memory_order_acquire);
+    try
+    {
+        // The exclusive side also waits for a controlled checkpoint save that
+        // is still executing under its shared engine permit.
+        std::unique_lock lock(m_engineSaveGate);
+        if (m_transactionId.load(std::memory_order_acquire) != aTransactionId)
+            return false;
+
+        m_transactionId.store(0, std::memory_order_release);
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 bool PartyQuestSaveGuard::CanSave(PartyQuestSaveKind aKind) const noexcept
@@ -51,13 +69,38 @@ bool PartyQuestSaveGuard::CanSave(PartyQuestSaveKind aKind) const noexcept
     return aKind == PartyQuestSaveKind::ControlledCheckpoint;
 }
 
-bool PartyQuestSaveGuard::CanEnterEngineSave() const noexcept
+PartyQuestEngineSavePermit PartyQuestSaveGuard::TryEnterEngineSave() const noexcept
 {
-    if (!IsActive())
-        return true;
+    try
+    {
+        return PartyQuestEngineSavePermit(*this);
+    }
+    catch (...)
+    {
+        return {};
+    }
+}
 
-    return CanSave(PartyQuestSaveKind::ControlledCheckpoint) &&
-        PartyQuestControlledSaveScope::IsAuthorized(*this);
+PartyQuestEngineSavePermit::PartyQuestEngineSavePermit(
+    const PartyQuestSaveGuard& acGuard)
+    : m_lock(acGuard.m_engineSaveGate)
+{
+    const uint64_t transactionId = acGuard.GetTransactionId();
+    if (transactionId == 0)
+    {
+        m_allowed = true;
+        return;
+    }
+
+    if (PartyQuestControlledSaveScope::IsAuthorized(acGuard))
+    {
+        m_allowed = true;
+        return;
+    }
+
+    // Do not hold a shared lock for a denied request. The critical repair owns
+    // the logical lease already; returning false is enough to stop this save.
+    m_lock.unlock();
 }
 
 PartyQuestControlledSaveScope::PartyQuestControlledSaveScope(
