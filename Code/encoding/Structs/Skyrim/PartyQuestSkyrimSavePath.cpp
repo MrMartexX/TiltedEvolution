@@ -9,6 +9,14 @@ namespace
 constexpr std::string_view kRoot = "CoopCampaigns";
 constexpr char kSeparator = '\\';
 
+bool StartsWith(
+    std::string_view acValue,
+    std::string_view acPrefix) noexcept
+{
+    return acValue.size() >= acPrefix.size() &&
+        acValue.substr(0, acPrefix.size()) == acPrefix;
+}
+
 bool IsAsciiHex(char aCharacter) noexcept
 {
     const unsigned char value = static_cast<unsigned char>(aCharacter);
@@ -20,16 +28,14 @@ bool IsExpectedIdComponent(
     std::string_view acComponent,
     std::string_view acPrefix) noexcept
 {
-    if (!acComponent.starts_with(acPrefix) ||
-        acComponent.size() != acPrefix.size() + 32)
+    if (acComponent.size() != acPrefix.size() + 32 ||
+        !StartsWith(acComponent, acPrefix))
     {
         return false;
     }
 
-    return std::all_of(
-        acComponent.begin() + static_cast<std::ptrdiff_t>(acPrefix.size()),
-        acComponent.end(),
-        IsAsciiHex);
+    const std::string_view id = acComponent.substr(acPrefix.size());
+    return std::all_of(id.begin(), id.end(), IsAsciiHex);
 }
 
 std::vector<std::string_view> SplitComponents(std::string_view acPath)
@@ -106,17 +112,17 @@ bool PartyQuestSkyrimSavePathPolicy::IsSafeRelativeSavePath(
         if (acPath.empty() || acPath.back() != kSeparator)
             return false;
 
-        // No forward slashes: one canonical separator prevents ambiguous
-        // normalization between Skyrim, SKSE and std::filesystem.
+        // One canonical separator prevents normalization differences between
+        // Skyrim, SKSE and std::filesystem.
         if (acPath.find('/') != std::string_view::npos)
             return false;
 
         // Reject rooted Windows forms before component parsing.
         if (acPath.front() == kSeparator ||
             acPath.find(':') != std::string_view::npos ||
-            acPath.starts_with("\\\\") ||
-            acPath.starts_with("\\?\\") ||
-            acPath.starts_with("\\.\\"))
+            StartsWith(acPath, "\\\\") ||
+            StartsWith(acPath, "\\?\\") ||
+            StartsWith(acPath, "\\.\\"))
         {
             return false;
         }
