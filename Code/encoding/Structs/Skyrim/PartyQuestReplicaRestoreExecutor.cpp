@@ -4,8 +4,10 @@
 #include <cctype>
 #include <iomanip>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace
@@ -13,7 +15,8 @@ namespace
 enum class NodeState : uint8_t
 {
     Missing,
-    Regular,
+    RegularFile,
+    Directory,
     Unsafe,
     Error
 };
@@ -30,6 +33,12 @@ struct RestoreFailure
         return Status == PartyQuestReplicaRestoreExecutionStatus::Success;
     }
 };
+
+bool IsMissingError(const std::error_code& acError) noexcept
+{
+    return acError == std::errc::no_such_file_or_directory ||
+        acError == std::errc::not_a_directory;
+}
 
 std::string FormatRestoreId(uint64_t aRestoreId)
 {
@@ -72,7 +81,7 @@ std::optional<std::filesystem::path> AbsoluteNormalized(
         return std::nullopt;
 
     std::error_code ec;
-    auto absolute = std::filesystem::absolute(acPath, ec);
+    const auto absolute = std::filesystem::absolute(acPath, ec);
     if (ec || absolute.empty())
         return std::nullopt;
     return absolute.lexically_normal();
@@ -99,13 +108,17 @@ NodeState InspectNode(const std::filesystem::path& acPath) noexcept
     {
         std::error_code ec;
         const auto status = std::filesystem::symlink_status(acPath, ec);
+        if (status.type() == std::filesystem::file_type::not_found || IsMissingError(ec))
+            return NodeState::Missing;
         if (ec)
             return NodeState::Error;
-        if (status.type() == std::filesystem::file_type::not_found)
-            return NodeState::Missing;
-        if (std::filesystem::is_symlink(status) || !std::filesystem::is_regular_file(status))
+        if (std::filesystem::is_symlink(status))
             return NodeState::Unsafe;
-        return NodeState::Regular;
+        if (std::filesystem::is_regular_file(status))
+            return NodeState::RegularFile;
+        if (std::filesystem::is_directory(status))
+            return NodeState::Directory;
+        return NodeState::Unsafe;
     }
     catch (...)
     {
@@ -151,6 +164,33 @@ bool IsParentResolvedInside(
     }
 }
 
+bool IsResolvedInside(
+    const std::filesystem::path& acRoot,
+    const std::filesystem::path& acPath) noexcept
+{
+    try
+    {
+        const auto root = AbsoluteNormalized(acRoot);
+        const auto path = AbsoluteNormalized(acPath);
+        if (!root || !path || !IsInside(*root, *path))
+            return false;
+
+        std::error_code ec;
+        const auto resolvedRoot = std::filesystem::weakly_canonical(*root, ec);
+        if (ec || resolvedRoot.empty())
+            return false;
+        ec.clear();
+        const auto resolvedPath = std::filesystem::weakly_canonical(*path, ec);
+        if (ec || resolvedPath.empty())
+            return false;
+        return IsInside(resolvedRoot, resolvedPath);
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
 bool EnsureParentResolvedInside(
     const std::filesystem::path& acRoot,
     const std::filesystem::path& acPath) noexcept
@@ -175,13 +215,15 @@ bool RemoveRegularIfPresent(const std::filesystem::path& acPath) noexcept
     const NodeState state = InspectNode(acPath);
     if (state == NodeState::Missing)
         return true;
-    if (state != NodeState::Regular)
+    if (state != NodeState::RegularFile)
         return false;
 
     try
     {
         std::error_code ec;
         const bool removed = std::filesystem::remove(acPath, ec);
+        if (IsMissingError(ec))
+            return true;
         return !ec && removed;
     }
     catch (...)
@@ -227,13 +269,20 @@ bool LayoutMatchesState(
     if (!expected)
         return false;
 
-    return expected->CampaignDirectory.lexically_normal() == acPaths.CampaignDirectory.lexically_normal() &&
-        expected->PlayerDirectory.lexically_normal() == acPaths.PlayerDirectory.lexically_normal() &&
-        expected->CheckpointsDirectory.lexically_normal() == acPaths.CheckpointsDirectory.lexically_normal() &&
-        expected->SavesDirectory.lexically_normal() == acPaths.SavesDirectory.lexically_normal() &&
-        expected->SidecarsDirectory.lexically_normal() == acPaths.SidecarsDirectory.lexically_normal() &&
-        expected->MetadataDirectory.lexically_normal() == acPaths.MetadataDirectory.lexically_normal() &&
-        expected->RuntimeApplySidecar.lexically_normal() == acPaths.RuntimeApplySidecar.lexically_normal();
+    return expected->CampaignDirectory.lexically_normal() ==
+               acPaths.CampaignDirectory.lexically_normal() &&
+        expected->PlayerDirectory.lexically_normal() ==
+               acPaths.PlayerDirectory.lexically_normal() &&
+        expected->CheckpointsDirectory.lexically_normal() ==
+               acPaths.CheckpointsDirectory.lexically_normal() &&
+        expected->SavesDirectory.lexically_normal() ==
+               acPaths.SavesDirectory.lexically_normal() &&
+        expected->SidecarsDirectory.lexically_normal() ==
+               acPaths.SidecarsDirectory.lexically_normal() &&
+        expected->MetadataDirectory.lexically_normal() ==
+               acPaths.MetadataDirectory.lexically_normal() &&
+        expected->RuntimeApplySidecar.lexically_normal() ==
+               acPaths.RuntimeApplySidecar.lexically_normal();
 }
 
 bool ValidateStatePaths(
@@ -255,7 +304,8 @@ bool ValidateStatePaths(
 
         const auto playerRoot = AbsoluteNormalized(acPaths.PlayerDirectory);
         const auto checkpointRoot = AbsoluteNormalized(
-            PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, acState.CheckpointKind));
+            PartyQuestCoopSaveLayout::GetCheckpointDirectory(
+                acPaths, acState.CheckpointKind));
         const auto metadataRoot = AbsoluteNormalized(acPaths.MetadataDirectory);
         const auto transactionDirectory = AbsoluteNormalized(acState.TransactionDirectory);
         const auto journalPath = AbsoluteNormalized(acJournalPath);
@@ -269,19 +319,25 @@ bool ValidateStatePaths(
 
         const auto expectedTransactionDirectory = AbsoluteNormalized(
             acPaths.MetadataDirectory / "restore" / FormatRestoreId(acState.RestoreId));
-        if (!expectedTransactionDirectory || *transactionDirectory != *expectedTransactionDirectory ||
+        if (!expectedTransactionDirectory ||
+            *transactionDirectory != *expectedTransactionDirectory ||
             !IsInside(*playerRoot, *transactionDirectory) ||
-            !IsInside(*metadataRoot, *transactionDirectory))
+            !IsInside(*metadataRoot, *transactionDirectory) ||
+            !IsParentResolvedInside(*playerRoot, *transactionDirectory) ||
+            !IsParentResolvedInside(*playerRoot, *journalPath))
         {
             return false;
         }
 
         const auto savesRoot = AbsoluteNormalized(acPaths.SavesDirectory);
-        const auto externalSidecarsRoot = AbsoluteNormalized(acPaths.SidecarsDirectory / "external");
+        const auto externalSidecarsRoot = AbsoluteNormalized(
+            acPaths.SidecarsDirectory / "external");
         const auto runtimeApplySidecar = AbsoluteNormalized(acPaths.RuntimeApplySidecar);
         if (!savesRoot || !externalSidecarsRoot || !runtimeApplySidecar)
             return false;
 
+        std::set<std::filesystem::path> destinations;
+        std::set<std::filesystem::path> rollbackPaths;
         for (const auto& operation : acState.Operations)
         {
             const auto source = AbsoluteNormalized(operation.CheckpointSourcePath);
@@ -292,7 +348,9 @@ bool ValidateStatePaths(
                 !IsInside(*playerRoot, *destination) ||
                 *destination == *runtimeApplySidecar ||
                 operation.ExpectedRestoredDigest == 0 ||
-                (operation.DestinationExisted && operation.OriginalDigest == 0))
+                (operation.DestinationExisted && operation.OriginalDigest == 0) ||
+                !destinations.emplace(*destination).second ||
+                !rollbackPaths.emplace(*rollback).second)
             {
                 return false;
             }
@@ -302,18 +360,16 @@ bool ValidateStatePaths(
                 if (!IsInside(*externalSidecarsRoot, *destination))
                     return false;
             }
-            else
+            else if (destination->parent_path() != *savesRoot ||
+                     !HasExpectedExtension(operation.Kind, *destination))
             {
-                if (destination->parent_path() != *savesRoot ||
-                    !HasExpectedExtension(operation.Kind, *destination))
-                {
-                    return false;
-                }
+                return false;
             }
 
             const auto relative = destination->lexically_relative(*playerRoot).lexically_normal();
             if (!PartyQuestReplicaFilePlanner::IsSafeRelativePath(relative))
                 return false;
+
             const auto expectedRollback = AbsoluteNormalized(
                 *transactionDirectory / "rollback" / relative);
             if (!expectedRollback || *rollback != *expectedRollback ||
@@ -323,7 +379,8 @@ bool ValidateStatePaths(
             }
 
             if (!IsParentResolvedInside(*checkpointRoot, *source) ||
-                !IsParentResolvedInside(*playerRoot, *destination))
+                !IsParentResolvedInside(*playerRoot, *destination) ||
+                !IsParentResolvedInside(*playerRoot, *rollback))
             {
                 return false;
             }
@@ -365,9 +422,7 @@ RestoreFailure CopyVerified(
     if (!Matches(acSource, aExpectedSize, aExpectedDigest))
         return {aSourceFailure, aIndex, acSource};
     if (!EnsureParentResolvedInside(acConfinementRoot, acDestination))
-    {
         return {PartyQuestReplicaRestoreExecutionStatus::UnsafePath, aIndex, acDestination};
-    }
     if (!RemoveRegularIfPresent(acDestination))
         return {PartyQuestReplicaRestoreExecutionStatus::UnsafePath, aIndex, acDestination};
 
@@ -405,11 +460,15 @@ RestoreFailure VerifyPreparedDestinations(
         const NodeState node = InspectNode(operation.ReplicaDestinationPath);
         if (operation.DestinationExisted)
         {
-            if (node != NodeState::Regular ||
-                !Matches(operation.ReplicaDestinationPath, operation.OriginalSize, operation.OriginalDigest))
+            if (node != NodeState::RegularFile ||
+                !Matches(
+                    operation.ReplicaDestinationPath,
+                    operation.OriginalSize,
+                    operation.OriginalDigest))
             {
                 return {
-                    node == NodeState::Unsafe || node == NodeState::Error
+                    node == NodeState::Unsafe || node == NodeState::Error ||
+                            node == NodeState::Directory
                         ? PartyQuestReplicaRestoreExecutionStatus::UnsafePath
                         : PartyQuestReplicaRestoreExecutionStatus::DestinationChanged,
                     i,
@@ -419,7 +478,8 @@ RestoreFailure VerifyPreparedDestinations(
         else if (node != NodeState::Missing)
         {
             return {
-                node == NodeState::Unsafe || node == NodeState::Error
+                node == NodeState::Unsafe || node == NodeState::Error ||
+                        node == NodeState::Directory
                     ? PartyQuestReplicaRestoreExecutionStatus::UnsafePath
                     : PartyQuestReplicaRestoreExecutionStatus::DestinationChanged,
                 i,
@@ -446,18 +506,21 @@ RestoreFailure CreateRollbackBackups(
             if (rollbackState != NodeState::Missing)
             {
                 return {
-                    rollbackState == NodeState::Unsafe || rollbackState == NodeState::Error
-                        ? PartyQuestReplicaRestoreExecutionStatus::UnsafePath
-                        : PartyQuestReplicaRestoreExecutionStatus::BackupVerificationFailed,
+                    rollbackState == NodeState::RegularFile
+                        ? PartyQuestReplicaRestoreExecutionStatus::BackupVerificationFailed
+                        : PartyQuestReplicaRestoreExecutionStatus::UnsafePath,
                     i,
                     operation.RollbackPath};
             }
             continue;
         }
 
-        if (rollbackState == NodeState::Regular)
+        if (rollbackState == NodeState::RegularFile)
         {
-            if (!Matches(operation.RollbackPath, operation.OriginalSize, operation.OriginalDigest))
+            if (!Matches(
+                    operation.RollbackPath,
+                    operation.OriginalSize,
+                    operation.OriginalDigest))
             {
                 return {
                     PartyQuestReplicaRestoreExecutionStatus::BackupVerificationFailed,
@@ -467,9 +530,7 @@ RestoreFailure CreateRollbackBackups(
             continue;
         }
         if (rollbackState != NodeState::Missing)
-        {
             return {PartyQuestReplicaRestoreExecutionStatus::UnsafePath, i, operation.RollbackPath};
-        }
 
         std::filesystem::path temporary = operation.RollbackPath;
         temporary += ".tmp";
@@ -512,7 +573,10 @@ RestoreFailure StageCheckpointBytes(
     {
         const auto& operation = acState.Operations[i];
         const auto staged = BuildSiblingTemporary(
-            operation.ReplicaDestinationPath, "stage", acState.RestoreId, i);
+            operation.ReplicaDestinationPath,
+            "stage",
+            acState.RestoreId,
+            i);
         const RestoreFailure copied = CopyVerified(
             acPaths.PlayerDirectory,
             operation.CheckpointSourcePath,
@@ -543,7 +607,10 @@ bool CleanupSiblingTemporaries(
         for (const char* purpose : {"stage", "old", "rollback", "failed"})
         {
             const auto path = BuildSiblingTemporary(
-                operation.ReplicaDestinationPath, purpose, acState.RestoreId, i);
+                operation.ReplicaDestinationPath,
+                purpose,
+                acState.RestoreId,
+                i);
             if (!RemoveRegularIfPresent(path))
                 success = false;
         }
@@ -559,8 +626,11 @@ bool VerifyOriginalDestinations(
         const NodeState state = InspectNode(operation.ReplicaDestinationPath);
         if (operation.DestinationExisted)
         {
-            if (state != NodeState::Regular ||
-                !Matches(operation.ReplicaDestinationPath, operation.OriginalSize, operation.OriginalDigest))
+            if (state != NodeState::RegularFile ||
+                !Matches(
+                    operation.ReplicaDestinationPath,
+                    operation.OriginalSize,
+                    operation.OriginalDigest))
             {
                 return false;
             }
@@ -588,7 +658,7 @@ bool RestoreOriginalDestinations(
         {
             if (destinationState == NodeState::Missing)
                 continue;
-            if (destinationState != NodeState::Regular ||
+            if (destinationState != NodeState::RegularFile ||
                 !RemoveRegularIfPresent(operation.ReplicaDestinationPath))
             {
                 return false;
@@ -596,18 +666,33 @@ bool RestoreOriginalDestinations(
             continue;
         }
 
-        if (!Matches(operation.RollbackPath, operation.OriginalSize, operation.OriginalDigest))
+        if (!Matches(
+                operation.RollbackPath,
+                operation.OriginalSize,
+                operation.OriginalDigest))
+        {
             return false;
-        if (destinationState == NodeState::Regular &&
-            Matches(operation.ReplicaDestinationPath, operation.OriginalSize, operation.OriginalDigest))
+        }
+        if (destinationState == NodeState::RegularFile &&
+            Matches(
+                operation.ReplicaDestinationPath,
+                operation.OriginalSize,
+                operation.OriginalDigest))
         {
             continue;
         }
-        if (destinationState == NodeState::Unsafe || destinationState == NodeState::Error)
+        if (destinationState == NodeState::Unsafe ||
+            destinationState == NodeState::Error ||
+            destinationState == NodeState::Directory)
+        {
             return false;
+        }
 
         const auto rollbackStage = BuildSiblingTemporary(
-            operation.ReplicaDestinationPath, "rollback", acState.RestoreId, i);
+            operation.ReplicaDestinationPath,
+            "rollback",
+            acState.RestoreId,
+            i);
         const RestoreFailure staged = CopyVerified(
             acPaths.PlayerDirectory,
             operation.RollbackPath,
@@ -621,12 +706,15 @@ bool RestoreOriginalDestinations(
             return false;
 
         const auto failed = BuildSiblingTemporary(
-            operation.ReplicaDestinationPath, "failed", acState.RestoreId, i);
+            operation.ReplicaDestinationPath,
+            "failed",
+            acState.RestoreId,
+            i);
         if (!RemoveRegularIfPresent(failed))
             return false;
 
         bool movedCurrent{};
-        if (destinationState == NodeState::Regular)
+        if (destinationState == NodeState::RegularFile)
         {
             if (!RenameFile(operation.ReplicaDestinationPath, failed))
                 return false;
@@ -641,15 +729,19 @@ bool RestoreOriginalDestinations(
             return false;
         }
 
-        if (!Matches(operation.ReplicaDestinationPath, operation.OriginalSize, operation.OriginalDigest))
+        if (!Matches(
+                operation.ReplicaDestinationPath,
+                operation.OriginalSize,
+                operation.OriginalDigest))
+        {
             return false;
+        }
         if (movedCurrent && !RemoveRegularIfPresent(failed))
             aCleanupPending = true;
     }
 
     if (!VerifyOriginalDestinations(acState))
         return false;
-
     if (!CleanupSiblingTemporaries(acState))
         aCleanupPending = true;
     return true;
@@ -659,13 +751,30 @@ bool RemoveTransactionDirectory(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaRestoreJournalState& acState) noexcept
 {
-    if (!IsInside(acPaths.MetadataDirectory.lexically_normal(), acState.TransactionDirectory.lexically_normal()))
-        return false;
-
     try
     {
+        const auto metadataRoot = AbsoluteNormalized(acPaths.MetadataDirectory);
+        const auto transactionDirectory = AbsoluteNormalized(acState.TransactionDirectory);
+        const auto expectedTransactionDirectory = AbsoluteNormalized(
+            acPaths.MetadataDirectory / "restore" / FormatRestoreId(acState.RestoreId));
+        if (!metadataRoot || !transactionDirectory || !expectedTransactionDirectory ||
+            *transactionDirectory != *expectedTransactionDirectory ||
+            !IsInside(*metadataRoot, *transactionDirectory))
+        {
+            return false;
+        }
+
+        const NodeState state = InspectNode(*transactionDirectory);
+        if (state == NodeState::Missing)
+            return true;
+        if (state != NodeState::Directory ||
+            !IsResolvedInside(*metadataRoot, *transactionDirectory))
+        {
+            return false;
+        }
+
         std::error_code ec;
-        std::filesystem::remove_all(acState.TransactionDirectory, ec);
+        std::filesystem::remove_all(*transactionDirectory, ec);
         return !ec;
     }
     catch (...)
@@ -682,7 +791,7 @@ PartyQuestReplicaRestoreExecutionReport RollbackAndReport(
     const std::filesystem::path& acFailedPath,
     bool aRecoveredRollback) noexcept
 {
-    PartyQuestReplicaRestoreExecutionReport report = MakeReport(
+    auto report = MakeReport(
         acState,
         aRecoveredRollback
             ? PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback
@@ -716,22 +825,31 @@ RestoreFailure ReplaceStagedFiles(
     {
         const auto& operation = acState.Operations[i];
         if (i >= acStaged.size() ||
-            !Matches(acStaged[i], operation.ExpectedRestoredSize, operation.ExpectedRestoredDigest) ||
+            !Matches(
+                acStaged[i],
+                operation.ExpectedRestoredSize,
+                operation.ExpectedRestoredDigest) ||
             !IsParentResolvedInside(acPaths.PlayerDirectory, operation.ReplicaDestinationPath))
         {
-            return {PartyQuestReplicaRestoreExecutionStatus::StagingFailed, i, operation.ReplicaDestinationPath};
+            return {
+                PartyQuestReplicaRestoreExecutionStatus::StagingFailed,
+                i,
+                operation.ReplicaDestinationPath};
         }
 
         const NodeState destinationState = InspectNode(operation.ReplicaDestinationPath);
         if (operation.DestinationExisted)
         {
-            if (destinationState != NodeState::Regular ||
-                !Matches(operation.ReplicaDestinationPath, operation.OriginalSize, operation.OriginalDigest))
+            if (destinationState != NodeState::RegularFile ||
+                !Matches(
+                    operation.ReplicaDestinationPath,
+                    operation.OriginalSize,
+                    operation.OriginalDigest))
             {
                 return {
-                    destinationState == NodeState::Unsafe || destinationState == NodeState::Error
-                        ? PartyQuestReplicaRestoreExecutionStatus::UnsafePath
-                        : PartyQuestReplicaRestoreExecutionStatus::DestinationChanged,
+                    destinationState == NodeState::Missing
+                        ? PartyQuestReplicaRestoreExecutionStatus::DestinationChanged
+                        : PartyQuestReplicaRestoreExecutionStatus::UnsafePath,
                     i,
                     operation.ReplicaDestinationPath};
             }
@@ -739,23 +857,36 @@ RestoreFailure ReplaceStagedFiles(
         else if (destinationState != NodeState::Missing)
         {
             return {
-                destinationState == NodeState::Unsafe || destinationState == NodeState::Error
-                    ? PartyQuestReplicaRestoreExecutionStatus::UnsafePath
-                    : PartyQuestReplicaRestoreExecutionStatus::DestinationChanged,
+                destinationState == NodeState::RegularFile
+                    ? PartyQuestReplicaRestoreExecutionStatus::DestinationChanged
+                    : PartyQuestReplicaRestoreExecutionStatus::UnsafePath,
                 i,
                 operation.ReplicaDestinationPath};
         }
 
         const auto oldPath = BuildSiblingTemporary(
-            operation.ReplicaDestinationPath, "old", acState.RestoreId, i);
+            operation.ReplicaDestinationPath,
+            "old",
+            acState.RestoreId,
+            i);
         if (InspectNode(oldPath) != NodeState::Missing)
-            return {PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed, i, oldPath};
+        {
+            return {
+                PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed,
+                i,
+                oldPath};
+        }
 
         bool movedOriginal{};
         if (operation.DestinationExisted)
         {
             if (!RenameFile(operation.ReplicaDestinationPath, oldPath))
-                return {PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed, i, operation.ReplicaDestinationPath};
+            {
+                return {
+                    PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed,
+                    i,
+                    operation.ReplicaDestinationPath};
+            }
             movedOriginal = true;
         }
 
@@ -763,7 +894,10 @@ RestoreFailure ReplaceStagedFiles(
         {
             if (movedOriginal)
                 RenameFile(oldPath, operation.ReplicaDestinationPath);
-            return {PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed, i, operation.ReplicaDestinationPath};
+            return {
+                PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed,
+                i,
+                operation.ReplicaDestinationPath};
         }
 
         if (!Matches(
@@ -771,7 +905,10 @@ RestoreFailure ReplaceStagedFiles(
                 operation.ExpectedRestoredSize,
                 operation.ExpectedRestoredDigest))
         {
-            return {PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed, i, operation.ReplicaDestinationPath};
+            return {
+                PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed,
+                i,
+                operation.ReplicaDestinationPath};
         }
         ++aCompleted;
     }
@@ -849,7 +986,9 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
         aState.Phase = PartyQuestReplicaRestoreJournalPhase::BackupsReady;
         for (const auto& path : staged)
             RemoveRegularIfPresent(path);
-        return MakeReport(aState, PartyQuestReplicaRestoreExecutionStatus::JournalPersistenceFailed);
+        return MakeReport(
+            aState,
+            PartyQuestReplicaRestoreExecutionStatus::JournalPersistenceFailed);
     }
 
     size_t completed{};
@@ -914,9 +1053,7 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
         return report;
     }
 
-    PartyQuestReplicaRestoreExecutionReport report = MakeReport(
-        aState,
-        PartyQuestReplicaRestoreExecutionStatus::Success);
+    auto report = MakeReport(aState, PartyQuestReplicaRestoreExecutionStatus::Success);
     report.CompletedOperations = completed;
     report.CleanupPending = !CleanupSiblingTemporaries(aState);
     return report;
@@ -930,7 +1067,8 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execut
 {
     try
     {
-        const auto prepared = PartyQuestReplicaRestoreJournal::Prepare(acPaths, acPlan, aRestoreId);
+        const auto prepared = PartyQuestReplicaRestoreJournal::Prepare(
+            acPaths, acPlan, aRestoreId);
         if (!prepared.IsReady())
         {
             PartyQuestReplicaRestoreJournalState emptyState;
@@ -948,18 +1086,19 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execut
         if (!ValidateStatePaths(acPaths, state, journalPath))
             return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::UnsafePath);
 
-        std::error_code ec;
-        const auto transactionStatus = std::filesystem::symlink_status(state.TransactionDirectory, ec);
-        if (ec)
+        const NodeState transactionState = InspectNode(state.TransactionDirectory);
+        if (transactionState == NodeState::Error || transactionState == NodeState::Unsafe)
             return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::UnsafePath);
-        if (transactionStatus.type() != std::filesystem::file_type::not_found)
+        if (transactionState != NodeState::Missing)
             return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::RestoreIdConflict);
 
         if (PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(journalPath, state) !=
             PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
         {
             RemoveTransactionDirectory(acPaths, state);
-            return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::JournalPersistenceFailed);
+            return MakeReport(
+                state,
+                PartyQuestReplicaRestoreExecutionStatus::JournalPersistenceFailed);
         }
 
         return ContinueBeforeMutation(acPaths, state);
@@ -984,7 +1123,8 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
     try
     {
         const auto loaded = PartyQuestReplicaRestoreJournalPersistence::Load(acJournalPath);
-        if (loaded.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired)
+        if (loaded.Status ==
+            PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired)
         {
             PartyQuestReplicaRestoreJournalState state;
             if (loaded.State)
@@ -995,7 +1135,8 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
             report.JournalPath = acJournalPath;
             return report;
         }
-        if (loaded.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success || !loaded.State)
+        if (loaded.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success ||
+            !loaded.State)
         {
             PartyQuestReplicaRestoreJournalState emptyState;
             auto report = MakeReport(
@@ -1009,10 +1150,19 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
         if (state.CampaignId != acExpectedCampaignId ||
             state.PlayerProfileId != acExpectedPlayerProfileId)
         {
-            return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::InvalidIdentity);
+            return MakeReport(
+                state,
+                PartyQuestReplicaRestoreExecutionStatus::InvalidIdentity);
         }
         if (!ValidateStatePaths(acPaths, state, acJournalPath))
             return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::UnsafePath);
+
+        const NodeState transactionState = InspectNode(state.TransactionDirectory);
+        if (transactionState != NodeState::Directory ||
+            !IsResolvedInside(acPaths.MetadataDirectory, state.TransactionDirectory))
+        {
+            return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::UnsafePath);
+        }
 
         switch (PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(state))
         {
@@ -1047,7 +1197,8 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
                     state,
                     PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed);
             }
-            if (PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(acJournalPath, state) !=
+            if (PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
+                    acJournalPath, state) !=
                 PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
             {
                 state.Phase = PartyQuestReplicaRestoreJournalPhase::Restored;
@@ -1057,7 +1208,9 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
                     0,
                     acJournalPath);
             }
-            auto report = MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::Success);
+            auto report = MakeReport(
+                state,
+                PartyQuestReplicaRestoreExecutionStatus::Success);
             report.CompletedOperations = state.Operations.size();
             report.CleanupPending = !CleanupSiblingTemporaries(state);
             return report;
@@ -1074,7 +1227,9 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
         }
 
         case PartyQuestReplicaRestoreRecoveryDisposition::InvalidState:
-            return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::InvalidPlan);
+            return MakeReport(
+                state,
+                PartyQuestReplicaRestoreExecutionStatus::InvalidPlan);
         }
     }
     catch (...)
