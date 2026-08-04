@@ -105,13 +105,13 @@ bool VerifyLiveDestinations(
 PartyQuestRuntimeRecoveryResult
 PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
     PartyQuestRuntimeApplySession& aSession,
-    const PartyQuestCoopSavePaths& acPaths,
-    uint64_t aRestoreId) noexcept
+    const PartyQuestCoopSavePaths& acPaths) noexcept
 {
     try
     {
         const auto& coordinator = aSession.GetCoordinator();
         const PartyQuestRuntimeApplyEntry* pRecovery = coordinator.GetRecoveryRecord();
+        const uint64_t candidateRestoreId = pRecovery ? pRecovery->TransactionId : 0;
 
         if (!aSession.GetCampaignId().IsValid() ||
             !aSession.GetPlayerProfileId().IsValid())
@@ -119,14 +119,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             return MakeResult(
                 PartyQuestRuntimeRecoveryStatus::InvalidIdentity,
                 pRecovery,
-                aRestoreId);
-        }
-        if (aRestoreId == 0)
-        {
-            return MakeResult(
-                PartyQuestRuntimeRecoveryStatus::InvalidRestoreId,
-                pRecovery,
-                aRestoreId);
+                candidateRestoreId);
         }
         if (!PartyQuestCoopSaveLayout::Matches(
                 acPaths,
@@ -136,7 +129,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             return MakeResult(
                 PartyQuestRuntimeRecoveryStatus::InvalidLayout,
                 pRecovery,
-                aRestoreId);
+                candidateRestoreId);
         }
         if (!coordinator.IsRecoveryBlocked() ||
             !pRecovery ||
@@ -145,22 +138,23 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             return MakeResult(
                 PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState,
                 pRecovery,
-                aRestoreId);
+                candidateRestoreId);
         }
 
         const uint64_t transactionId = pRecovery->TransactionId;
+        const uint64_t restoreId = transactionId;
         const uint64_t targetWorldRevision = pRecovery->TargetWorldRevision;
         const auto manifestPath =
             PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
                 acPaths,
                 PartyQuestCheckpointKind::PreRepair,
                 targetWorldRevision);
-        const auto journalPath = GetRestoreJournalPath(acPaths, aRestoreId);
+        const auto journalPath = GetRestoreJournalPath(acPaths, restoreId);
 
         PartyQuestRuntimeRecoveryResult result = MakeResult(
             PartyQuestRuntimeRecoveryStatus::CheckpointMissing,
             pRecovery,
-            aRestoreId,
+            restoreId,
             manifestPath,
             journalPath);
 
@@ -225,7 +219,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         if (loadedJournal.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
         {
             if (!loadedJournal.State ||
-                !JournalMatchesPlan(*loadedJournal.State, restorePlan, aRestoreId))
+                !JournalMatchesPlan(*loadedJournal.State, restorePlan, restoreId))
             {
                 result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
                 return result;
@@ -243,7 +237,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             restoreReport = PartyQuestReplicaRestoreExecutor::Execute(
                 acPaths,
                 restorePlan,
-                aRestoreId);
+                restoreId);
         }
         else
         {
@@ -309,14 +303,16 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
     }
     catch (...)
     {
+        const auto* recovery = aSession.GetCoordinator().GetRecoveryRecord();
         return MakeResult(
             PartyQuestRuntimeRecoveryStatus::RestoreFailed,
-            aSession.GetCoordinator().GetRecoveryRecord(),
-            aRestoreId);
+            recovery,
+            recovery ? recovery->TransactionId : 0);
     }
 
+    const auto* recovery = aSession.GetCoordinator().GetRecoveryRecord();
     return MakeResult(
         PartyQuestRuntimeRecoveryStatus::RestoreFailed,
-        aSession.GetCoordinator().GetRecoveryRecord(),
-        aRestoreId);
+        recovery,
+        recovery ? recovery->TransactionId : 0);
 }
