@@ -18,7 +18,8 @@ BGSSaveLoadManager* BGSSaveLoadManager::Get() noexcept
     // CommonLibSSE-NG: BGSSaveLoadManager::Singleton is
     // RELOCATION_ID(516860, 403340). STR VersionDb uses the AE-side id.
     POINTER_SKYRIMSE(BGSSaveLoadManager*, s_singleton, 403340);
-    return *s_singleton.Get();
+    auto** ppSingleton = s_singleton.Get();
+    return ppSingleton ? *ppSingleton : nullptr;
 }
 
 void BGSSaveLoadManager::Save(SaveData* apData)
