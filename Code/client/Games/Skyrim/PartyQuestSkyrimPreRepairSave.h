@@ -11,12 +11,12 @@
 enum class PartyQuestSkyrimPreRepairSaveStatus : uint8_t
 {
     Ready,
-    ReusedExistingSource,
     InvalidRuntimeState,
     GuardMismatch,
     InvalidIdentity,
     InvalidLayout,
     SaveDirectoryUnavailable,
+    SaveNameExhausted,
     ExistingSourceConflict,
     SavePathOverrideFailed,
     ControlledSaveAuthorizationFailed,
@@ -32,6 +32,7 @@ struct PartyQuestSkyrimPreRepairSaveResult
         PartyQuestSkyrimPreRepairSaveStatus::InvalidRuntimeState};
     uint64_t TransactionId{};
     uint64_t TargetWorldRevision{};
+    uint64_t AttemptNonce{};
     std::string SaveName;
     std::filesystem::path MainSavePath;
     std::filesystem::path SkseCosavePath;
@@ -40,15 +41,18 @@ struct PartyQuestSkyrimPreRepairSaveResult
 
     [[nodiscard]] bool IsReady() const noexcept
     {
-        return Status == PartyQuestSkyrimPreRepairSaveStatus::Ready ||
-            Status == PartyQuestSkyrimPreRepairSaveStatus::ReusedExistingSource;
+        return Status == PartyQuestSkyrimPreRepairSaveStatus::Ready;
     }
 };
 
 /**
- * Creates or re-adopts the engine-generated core save source for a PreRepair
- * checkpoint while the runtime transaction owns the physical process save
- * guard.
+ * Creates a new engine-generated core save source for a PreRepair checkpoint
+ * while the runtime transaction owns the physical process save guard.
+ *
+ * Every capture attempt uses a unique name. Existing files are never trusted as
+ * proof that a prior engine save completed: a crash/failure may have left a
+ * partially written .ess. Orphan attempts remain confined to the co-op replica
+ * and can be handled by later retention/cleanup policy.
  *
  * This is deliberately NOT the durable checkpoint gate. It captures only the
  * Skyrim .ess and an SKSE .skse co-save when one is actually produced. Future
@@ -71,5 +75,6 @@ public:
 
     [[nodiscard]] static std::string FormatSaveName(
         uint64_t aTransactionId,
-        uint64_t aTargetWorldRevision);
+        uint64_t aTargetWorldRevision,
+        uint64_t aAttemptNonce);
 };
