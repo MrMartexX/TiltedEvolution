@@ -79,6 +79,27 @@ bool JournalMatchesPlan(
 
     return true;
 }
+
+bool VerifyLiveDestinations(
+    const PartyQuestReplicaRestorePlan& acPlan) noexcept
+{
+    if (!acPlan.IsReady() || acPlan.Operations.empty())
+        return false;
+
+    for (const auto& operation : acPlan.Operations)
+    {
+        const auto observation = PartyQuestReplicaFileExecutor::ObserveRegularFile(
+            operation.ReplicaDestinationPath);
+        if (!observation ||
+            observation->Size != operation.ExpectedSize ||
+            observation->Digest != operation.ExpectedDigest)
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
 } // namespace
 
 PartyQuestRuntimeRecoveryResult
@@ -248,6 +269,18 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         }
         if (!restoreReport.IsCheckpointRestored())
         {
+            result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
+            return result;
+        }
+
+        // A Committed restore journal records that the filesystem transaction
+        // finished at some earlier instant; it is not proof that another actor
+        // has not changed the live replica since then. Independently verify the
+        // exact checkpoint bytes immediately before clearing the quest barrier.
+        if (!VerifyLiveDestinations(restorePlan))
+        {
+            result.RestoreStatus =
+                PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed;
             result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
             return result;
         }
