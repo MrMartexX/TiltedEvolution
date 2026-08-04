@@ -58,6 +58,11 @@ struct PartyQuestReplicaExecutionReport
  * temporary siblings, verified, and only then renamed into place. If a normal
  * in-process publication error occurs, newly published files are rolled back.
  *
+ * Missing destination paths are a normal create-only condition on every
+ * supported STL implementation. ENOENT/ENOTDIR returned by symlink_status are
+ * therefore normalized as "missing", while all other metadata errors remain
+ * fail-closed. Destination parent confinement is checked again before publish.
+ *
  * This is intentionally not wired to Skyrim's save APIs yet. The digest is a
  * deterministic transport-integrity checksum, not a cryptographic trust proof;
  * mod compatibility/authentication uses separate fingerprint policy.
