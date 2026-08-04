@@ -57,6 +57,10 @@ struct PartyQuestRuntimeGuardResult
  * - commit/safe abort: persist the state transition first, then release guard;
  * - checkpoint restore required: retain/acquire the guard until physical
  *   recovery and durable barrier clearance both succeed.
+ *
+ * This is the control-plane boundary future Skyrim save hooks should query;
+ * callers must not treat the runtime state's SaveGuardActive bit alone as an
+ * actual save interception lease.
  */
 class PartyQuestRuntimeGuardedSession final
 {
