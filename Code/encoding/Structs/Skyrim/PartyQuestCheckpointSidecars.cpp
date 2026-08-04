@@ -1,5 +1,7 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 
+#include <algorithm>
+
 bool PartyQuestCheckpointSidecarPolicy::IsValidRequirement(
     const PartyQuestCheckpointSidecarRequirement& acRequirement) noexcept
 {
@@ -107,4 +109,22 @@ PartyQuestCheckpointSidecarManifest::FindRequirement(
 {
     const auto it = m_requirements.find(aCapabilityId);
     return it != m_requirements.end() ? &it->second : nullptr;
+}
+
+std::vector<PartyQuestCheckpointSidecarRequirement>
+PartyQuestCheckpointSidecarManifest::GetRequirements() const
+{
+    std::vector<PartyQuestCheckpointSidecarRequirement> requirements;
+    requirements.reserve(m_requirements.size());
+    for (const auto& [capabilityId, requirement] : m_requirements)
+    {
+        (void)capabilityId;
+        requirements.push_back(requirement);
+    }
+
+    std::sort(requirements.begin(), requirements.end(), [](const auto& acLeft, const auto& acRight)
+    {
+        return acLeft.CapabilityId < acRight.CapabilityId;
+    });
+    return requirements;
 }
