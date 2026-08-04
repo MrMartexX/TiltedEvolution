@@ -4,11 +4,11 @@ This document tracks the protection/control-plane work required before the new s
 
 ## Current safety boundary
 
-The canonical quest path still does not execute `TESQuest::ScriptSetStage`, restore aliases, mutate inventories, change quest objects, or apply canonical state to Skyrim.
+The canonical quest path still does not execute `TESQuest::ScriptSetStage`, restore aliases, mutate inventories, change quest objects, or apply canonical quest state to a running Skyrim process.
 
 `PartyQuestApplyPlan::DryRunOnly` remains `true`.
 
-The branch now has game-independent filesystem code capable of copying explicitly supplied save/co-save/sidecar files into the isolated co-op replica tree. That code is not connected to Skyrim save/load hooks and never overwrites original solo saves.
+The branch now has game-independent filesystem code capable of copying, checkpointing and crash-safely restoring explicitly supplied save/co-save/sidecar files inside the isolated co-op replica tree. That code is not connected to Skyrim save/load hooks and never overwrites original solo saves.
 
 ## Admission is not mutation authority
 
@@ -60,7 +60,7 @@ Duplicate transaction ids are idempotent when their fingerprints match. Reusing 
 
 ## Save guard policy
 
-`PartyQuestSaveGuard` now models a transaction-scoped critical-save lease.
+`PartyQuestSaveGuard` models a transaction-scoped critical-save lease.
 
 While held it denies:
 
@@ -143,9 +143,10 @@ CoopCampaigns/
         external/
       metadata/
         replica_manifest.bin
+        restore/
 ```
 
-`PartyQuestReplicaFileExecutor` now performs verified create-only copies when explicitly invoked. It rechecks source bytes, stages the complete set into temporary siblings, verifies those temporary files and only then publishes final paths. Normal in-process publication failure rolls back files created by that call.
+`PartyQuestReplicaFileExecutor` performs verified create-only copies when explicitly invoked. It rechecks source bytes, stages the complete set into temporary siblings, verifies those temporary files and only then publishes final paths. Normal in-process publication failure rolls back files created by that call.
 
 Import sources are required to be outside the player replica. Checkpoint sources are required to be inside the player replica but outside the checkpoint tree. Destination confinement is rechecked independently of the pure planner.
 
@@ -167,40 +168,47 @@ Future validation reloads the manifest and verifies the published files again. A
 
 `PartyQuestReplicaSnapshotManager` composes copy, verification and manifest durability. It can safely finish one crash window where all exact files were already published but the manifest was not. Partial/conflicting orphan copies fail closed.
 
-## Checkpoint restore boundary
+## Immutable revision checkpoints
 
-`PartyQuestReplicaRestorePlanner` can now produce a restore plan only from a checkpoint whose manifest and bytes verify for the expected campaign/player.
-
-Restore destinations are restricted to the current co-op replica's `saves/` and `sidecars/external/`. The planner cannot target:
-
-- original solo saves;
-- checkpoint storage;
-- player metadata;
-- the runtime-apply recovery journal.
-
-The restore planner does not overwrite anything. A destructive restore executor still needs its own durable restore journal/rollback semantics before it may be implemented.
-
-## Immutable checkpoint revision path foundation
-
-The layout now exposes revision-scoped checkpoint directories such as:
+Production-oriented checkpoints can now be published under immutable revision directories such as:
 
 ```text
 checkpoints/PreRepair/Revision_000000000000019A/
 ```
 
-This is the intended direction for repeated checkpoints so a new LastKnownGood/PreRepair snapshot does not overwrite an older recovery point. Current checkpoint copy publication still targets the checkpoint-kind root; migration to the revision-scoped path primitive remains unfinished.
+`PartyQuestReplicaFileExecutor::ExecuteRevisionCheckpoint` and `PartyQuestReplicaSnapshotManager::EnsureRevisionCheckpoint` keep repeated recovery points from overwriting an earlier revision. Legacy kind-root checkpoint APIs remain only for existing archive/test tooling.
+
+Retention and checkpoint-selection policy are still higher-level concerns.
+
+## Crash-resumable checkpoint restore
+
+`PartyQuestReplicaRestorePlanner` accepts only a checkpoint whose manifest and bytes verify for the expected campaign/player. Restore destinations remain restricted to the current co-op replica's `saves/` and `sidecars/external/` roots.
+
+`PartyQuestReplicaRestoreJournal` records the exact pre-mutation observations and rollback locations. `PartyQuestReplicaRestoreExecutor` now completes the filesystem transaction:
+
+1. persist `Prepared`;
+2. create and verify rollback copies;
+3. persist `BackupsReady`;
+4. stage and verify all checkpoint files;
+5. recheck live destination drift;
+6. persist `MutationStarted` before the first live replacement;
+7. replace and verify the complete target set;
+8. persist `Restored` and `Committed`.
+
+A crash at `MutationStarted` is recovered conservatively by restoring the full pre-mutation file set and terminating that attempt. A `Restored` transaction is re-verified before commit. Backup-only journal recovery remains fail-closed.
+
+The executor still is not invoked automatically by Skyrim; it is a protected filesystem primitive for the later runtime integration.
 
 ## Remaining work before canonical Skyrim mutation
 
-The important remaining blockers are now narrower:
+The important remaining blockers are now concentrated at the game/runtime boundary:
 
-- publish checkpoints into immutable revision directories and define retention/selection policy;
-- implement crash-resumable checkpoint restore execution;
 - wire actual Skyrim save blocking to `PartyQuestSaveGuard`;
-- wire save/checkpoint creation to the isolated co-op replica instead of the player's original solo save set;
+- wire save/checkpoint creation and checkpoint restore selection into the isolated co-op replica lifecycle;
+- connect runtime-apply crash recovery to the restore executor and a LastKnownGood/PreRepair selection policy;
 - wire unloaded-cell/reference readiness to `PartyQuestDeferredWorldQueue`;
 - wire observable Papyrus/event-queue activity to `PartyQuestPapyrusQuiescenceTracker`;
 - collect real mod/script/native-adapter fingerprints and exchange the campaign compatibility manifest;
-- run one combined live diagnostic validation of admission/quarantine, runtime-safety buckets and the new non-mutating guardrails.
+- run combined live diagnostics for admission/quarantine, runtime-safety buckets, checkpoint creation and restore recovery.
 
 Only after those protections are implemented and validated should the first narrowly scoped canonical runtime mutation be considered.
