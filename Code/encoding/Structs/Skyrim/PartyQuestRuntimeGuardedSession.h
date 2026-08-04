@@ -58,13 +58,22 @@ struct PartyQuestRuntimeGuardResult
  * - checkpoint restore required: retain/acquire the guard until physical
  *   recovery and durable barrier clearance both succeed.
  *
- * This is the control-plane boundary future Skyrim save hooks should query;
- * callers must not treat the runtime state's SaveGuardActive bit alone as an
- * actual save interception lease.
+ * Production runtime integration should use the one-argument constructor so
+ * the session is coupled to PartyQuestSaveGuard::GetProcessGuard(), which is
+ * the same guard observed by the Skyrim BGSSaveLoadManager hook. The explicit
+ * two-argument constructor remains available for isolated unit tests.
  */
 class PartyQuestRuntimeGuardedSession final
 {
 public:
+    explicit PartyQuestRuntimeGuardedSession(
+        PartyQuestRuntimeApplySession& aSession) noexcept
+        : PartyQuestRuntimeGuardedSession(
+              aSession,
+              PartyQuestSaveGuard::GetProcessGuard())
+    {
+    }
+
     PartyQuestRuntimeGuardedSession(
         PartyQuestRuntimeApplySession& aSession,
         PartyQuestSaveGuard& aSaveGuard) noexcept;
@@ -111,6 +120,32 @@ public:
     [[nodiscard]] bool CanSave(PartyQuestSaveKind aKind) const noexcept
     {
         return m_saveGuard.CanSave(aKind);
+    }
+
+    /** Read-only ownership bridge for the Skyrim-specific checkpoint creator. */
+    [[nodiscard]] PartyQuestRuntimeApplySession& GetRuntimeSession() noexcept
+    {
+        return m_session;
+    }
+
+    [[nodiscard]] const PartyQuestRuntimeApplySession& GetRuntimeSession() const noexcept
+    {
+        return m_session;
+    }
+
+    /**
+     * Exposes the exact physical guard owned by this control-plane session so a
+     * Skyrim-specific controlled checkpoint cannot accidentally authorize a
+     * different process-local lease.
+     */
+    [[nodiscard]] PartyQuestSaveGuard& GetSaveGuard() noexcept
+    {
+        return m_saveGuard;
+    }
+
+    [[nodiscard]] const PartyQuestSaveGuard& GetSaveGuard() const noexcept
+    {
+        return m_saveGuard;
     }
 
 private:
