@@ -24,13 +24,17 @@ Before any replica mutation, recovery requires:
 
 Missing, stale-backup-only, invalid, mismatched or corrupt checkpoint state fails closed and leaves the runtime recovery barrier active.
 
-## Restore transaction reuse
+## Restore transaction identity and reuse
 
-The caller supplies a non-zero restore id. That id identifies a durable filesystem restore transaction under:
+Crash recovery does not accept a caller-selected restore id. `RestoreId` is deterministically the blocked runtime `TransactionId`.
+
+The durable filesystem restore journal is therefore always:
 
 ```text
-metadata/restore/Transaction_<RestoreId>/journal.bin
+metadata/restore/Transaction_<TransactionId>/journal.bin
 ```
+
+One runtime repair cannot accidentally fork into two filesystem restore transactions because a retry used a different id.
 
 If no journal exists, the coordinator starts `PartyQuestReplicaRestoreExecutor::Execute`.
 
@@ -47,7 +51,9 @@ Successful crash recovery has two separate durable facts:
 
 The second fact is written only after the first has been proven.
 
-If checkpoint restore commits but `CompleteCrashCheckpointRestore()` cannot persist the cleared runtime state, the live replica remains restored while the in-memory/runtime journal barrier remains blocked. A later call with the same restore id loads the committed restore journal, receives `AlreadyCommitted`, re-verifies the restored files, and retries only the runtime-journal transition.
+A committed restore journal alone is not accepted as proof that the live replica is still correct. Immediately before clearing the runtime barrier, the coordinator independently re-observes every live restore destination and requires the exact size and digest from the restore plan. If another actor changed a live file after restore commit, recovery fails closed and the barrier remains active.
+
+If checkpoint restore commits but `CompleteCrashCheckpointRestore()` cannot persist the cleared runtime state, the live replica remains restored while the in-memory/runtime journal barrier remains blocked. A later call loads the transaction-id-bound committed restore journal, receives `AlreadyCommitted`, re-verifies the live files, and retries only the runtime-journal transition.
 
 The checkpoint is not copied again.
 
@@ -57,7 +63,7 @@ A restore journal in `MutationStarted` does not prove that the requested checkpo
 
 `PartyQuestRuntimeRecoveryCoordinator` maps that result to `RollbackRecoveredRetryRequired` and deliberately leaves the quest runtime recovery barrier active.
 
-A later call may then start a fresh exact checkpoint restore using the same restore id after the rolled-back transaction directory has been retired.
+A later call may then start a fresh exact checkpoint restore using the same transaction id after the rolled-back restore directory has been retired.
 
 This prevents a safe rollback of the restore mechanism itself from being confused with successful recovery of the earlier Skyrim quest mutation.
 
@@ -76,9 +82,10 @@ It provides the durable recovery primitive that those later client integrations 
 
 ## Test coverage
 
-`party_quest_runtime_recovery.cpp` covers:
+`party_quest_runtime_recovery.cpp` and `party_quest_runtime_recovery_integrity.cpp` cover:
 
 - exact `PreRepair` revision restore followed by durable barrier clearance;
 - refusal to substitute `LastKnownGood` when the exact `PreRepair` revision is absent;
 - checkpoint restore commit followed by runtime-journal persistence failure and idempotent retry;
-- an existing `MutationStarted` restore journal that first rolls back and keeps the runtime barrier, followed by a fresh exact restore that finally clears it.
+- an existing `MutationStarted` restore journal that first rolls back and keeps the runtime barrier, followed by a fresh exact restore that finally clears it;
+- live-replica drift after a committed restore, which must be detected before the runtime barrier can be cleared.
