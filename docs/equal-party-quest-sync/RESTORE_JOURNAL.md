@@ -1,8 +1,8 @@
 # Crash-safe co-op replica restore journal
 
-This milestone remains game-independent and does **not** overwrite Skyrim saves at runtime.
+This milestone remains game-independent: it can replace files only inside the isolated co-op replica when explicitly invoked, but it is **not** connected to Skyrim save/load hooks or live quest mutation.
 
-`PartyQuestReplicaRestoreJournal` is the durable control plane that a future destructive restore executor must obey before replacing any file in the isolated co-op replica.
+`PartyQuestReplicaRestoreJournal` provides the durable control plane and `PartyQuestReplicaRestoreExecutor` now enforces that control plane while restoring a verified checkpoint.
 
 ## Transaction boundary
 
@@ -42,44 +42,88 @@ Prepared
   -> Committed
 ```
 
-The `MutationStarted` phase is the durable mutation barrier. A future executor must persist that phase before replacing the first live co-op replica file.
+`MutationStarted` is the durable mutation barrier. The executor persists that phase before replacing the first live co-op replica file.
 
 Recovery disposition is deliberately conservative:
 
-- `Prepared` / `BackupsReady`: resume safely before mutation;
-- `MutationStarted`: rollback required;
-- `Restored`: verify restored targets before commit;
-- `Committed`: clean.
+- `Prepared` / `BackupsReady`: resume safely because no live mutation was allowed yet;
+- `MutationStarted`: restore the pre-mutation bytes first and terminate that restore attempt;
+- `Restored`: verify the restored targets and then durably commit;
+- `Committed`: clean/idempotent.
 
 A transition to `BackupsReady` requires every originally existing destination to have a verified rollback copy with the original size and digest. Destinations that did not originally exist must not invent rollback bytes.
 
 A transition to `Restored` or `Committed` requires all live replica targets to match the checkpoint size and digest.
 
+## Executor ordering
+
+A fresh restore follows this sequence:
+
+1. prepare and persist the journal;
+2. create verified rollback copies for every existing destination;
+3. persist `BackupsReady`;
+4. stage and verify every checkpoint source beside its final destination without touching the live file;
+5. re-verify that live destinations still match the observations captured by `Prepared`;
+6. mark and persist `MutationStarted`;
+7. replace destinations through same-directory staged renames;
+8. verify the complete restored file set;
+9. persist `Restored`;
+10. persist `Committed`;
+11. remove only executor-owned sibling staging files.
+
+If replacement or verification fails after the mutation barrier, the executor restores all original destinations from the verified rollback set. Originally absent files are removed again. The rollback is verified before the transaction directory is retired.
+
+The executor independently rechecks path confinement and refuses symlink/non-regular-file destinations. It accepts checkpoint sources only from the selected checkpoint tree and destinations only from the current player's `saves/` or `sidecars/external/` roots. `party_quest_runtime_apply.bin`, checkpoint storage, metadata and solo-save paths are not legal restore destinations.
+
+## Crash recovery policy
+
+Recovery intentionally does not guess how far a `MutationStarted` restore progressed. Even if some destination already contains canonical bytes, the entire attempt is rolled back to the captured pre-mutation state and terminated. A later caller can build a fresh restore plan from current canonical state.
+
+This prevents a process restart from replaying an unknown subset of file side effects.
+
+A `Restored` journal is different: all target bytes had already verified before that phase could be persisted, so recovery re-verifies them and advances to `Committed` if they still match. A mismatch fails closed and rolls back.
+
 ## Persistence semantics
 
 The journal uses checksum-protected atomic persistence with `.tmp` and `.bak` files.
 
-A fully written valid `.tmp` may recover a crash during journal publication because it represents the newer complete state. A stale `.bak` is never silently promoted to current truth. If only the backup is trustworthy, loading returns `BackupRecoveryRequired` so recovery cannot accidentally forget that the mutation barrier may already have been crossed.
+A fully written valid `.tmp` may recover a crash during journal publication because it represents the newer complete state. A stale `.bak` is never silently promoted to current truth. If only the backup is trustworthy, loading returns `BackupRecoveryRequired`; the executor does not mutate replica files from that stale state.
 
 ## Current safety boundary
 
-No destructive restore executor is connected yet. The new code only:
+The restore executor now performs real filesystem replacement, but only inside the isolated co-op replica tree and only when explicitly invoked. It still does **not**:
 
-- prepares a restore journal from an already verified restore plan;
-- observes existing co-op replica destinations;
-- defines and verifies rollback locations;
-- verifies restored target bytes;
-- persists/reloads the crash-recovery state machine.
+- intercept Skyrim save/load entry points;
+- overwrite original solo saves;
+- call `TESQuest::ScriptSetStage`;
+- restore aliases;
+- mutate inventory or quest objects;
+- automatically recover a running Skyrim process.
 
-The next executor milestone must implement backup creation, durable barrier persistence, atomic per-file replacement, verified rollback/resume, and cleanup while remaining confined to the current player's co-op replica.
+Those integrations remain blocked on the higher-level save guard, runtime compatibility, deferred-world and Papyrus-quiescence work.
 
-## CI hygiene
+## Validation coverage
 
-The clean-build audit exposed stale tests left behind by API hardening rather than failures in the new runtime logic:
+`party_quest_replica_restore_executor.cpp` covers:
 
-- `party_quest_player_scope.cpp` lacked its direct TiltedCore buffer/serialization prerequisites; those includes are now explicit;
-- `party_quest_replica_copy_verifier.cpp` still targeted the removed `PartyQuestReplicaCopyVerifier` API. Verification responsibility has moved into the filesystem executor (`VerifyImport`, `VerifyCheckpoint`, and `VerifyRevisionCheckpoint`) with stronger real-file coverage, so the obsolete test was removed instead of resurrecting dead production API;
-- `party_quest_runtime_apply_persistence.cpp` still used the pre-`PlayerProfileId` recovery signatures. Every recovery export/restore test is now explicitly scoped by both `CampaignId` and `PlayerProfileId`, including manually constructed recovery state;
-- `party_quest_runtime_apply_session.cpp` still used the old two-argument session constructor and one-argument recovery export. Session tests now carry a stable `PlayerProfileId` through construction, durable capture, crash recovery, invalid-identity checks, and no-persistence checks.
+- successful restore with a verified rollback copy;
+- restore of a destination that did not previously exist;
+- protection of an unrelated solo-save file;
+- destination drift detected before the mutation barrier;
+- simulated `MutationStarted` crash recovery with verified rollback and transaction retirement;
+- `Restored` recovery that verifies bytes before durable commit.
 
-All intermediate repair and restore-journal commits use `[skip ci]`. This commit is the single full-CI trigger after the complete blocker audit/fix pass.
+Existing journal tests continue to cover checksum persistence, temporary-file recovery and fail-closed stale-backup handling.
+
+## Next integration boundary
+
+The filesystem transaction is no longer the blocker by itself. Before the executor can be called automatically during a live co-op session, the project still needs to connect:
+
+- real Skyrim save blocking to `PartyQuestSaveGuard`;
+- checkpoint creation to the isolated co-op replica flow;
+- runtime-apply recovery decisions to checkpoint restore selection;
+- unloaded-cell/reference readiness to `PartyQuestDeferredWorldQueue`;
+- observable Papyrus/event-queue activity to `PartyQuestPapyrusQuiescenceTracker`;
+- real campaign compatibility fingerprints and adapter authorization.
+
+Only after those integrations are validated should canonical quest mutation be enabled.
