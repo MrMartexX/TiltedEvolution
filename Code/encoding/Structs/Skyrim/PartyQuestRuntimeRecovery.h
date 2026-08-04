@@ -66,9 +66,10 @@ struct PartyQuestRuntimeRecoveryResult
  *  3. build a confined restore plan;
  *  4. resume an existing durable restore journal when one exists, otherwise
  *     start a new crash-resumable restore with the caller-supplied restore id;
- *  5. clear the runtime recovery barrier only when the restore report proves
- *     that checkpoint bytes are durably present in the live co-op replica;
- *  6. persist that cleared runtime state before exposing recovery as resolved.
+ *  5. independently reverify the live replica against the exact restore plan;
+ *  6. clear the runtime recovery barrier only when checkpoint bytes are proven
+ *     present in the live co-op replica at that instant;
+ *  7. persist that cleared runtime state before exposing recovery as resolved.
  *
  * A recovered rollback is deliberately not success: the old replica bytes are
  * safe again, but the requested checkpoint still has to be restored by a later
