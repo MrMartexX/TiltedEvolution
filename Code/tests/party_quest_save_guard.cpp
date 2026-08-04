@@ -132,7 +132,8 @@ TEST_CASE("A stale controlled scope cannot authorize a later transaction", "[que
 TEST_CASE("Critical repair acquisition drains an already running engine save", "[quest.party-state.save-guard]")
 {
     PartyQuestSaveGuard guard;
-    std::atomic<bool> saveEntered{false};
+    std::atomic<bool> saveAttempted{false};
+    std::atomic<bool> saveAllowed{false};
     std::atomic<bool> releaseSave{false};
     std::atomic<bool> acquireStarted{false};
     std::atomic<bool> acquireFinished{false};
@@ -142,16 +143,25 @@ TEST_CASE("Critical repair acquisition drains an already running engine save", "
     std::thread saveThread([&]()
     {
         auto permit = guard.TryEnterEngineSave();
+        saveAllowed.store(permit.IsAllowed(), std::memory_order_release);
+        saveAttempted.store(true, std::memory_order_release);
         if (!permit.IsAllowed())
             return;
 
-        saveEntered.store(true, std::memory_order_release);
         while (!releaseSave.load(std::memory_order_acquire))
             std::this_thread::yield();
     });
 
-    while (!saveEntered.load(std::memory_order_acquire))
+    while (!saveAttempted.load(std::memory_order_acquire))
         std::this_thread::yield();
+
+    if (!saveAllowed.load(std::memory_order_acquire))
+    {
+        releaseSave.store(true, std::memory_order_release);
+        saveThread.join();
+        REQUIRE(saveAllowed.load(std::memory_order_acquire));
+        return;
+    }
 
     std::thread acquireThread([&]()
     {
@@ -163,16 +173,16 @@ TEST_CASE("Critical repair acquisition drains an already running engine save", "
     while (!acquireStarted.load(std::memory_order_acquire))
         std::this_thread::yield();
 
-    // Give the acquisition thread multiple scheduling opportunities. It cannot
-    // complete while saveThread owns the shared engine-save permit.
     for (int i = 0; i < 256; ++i)
         std::this_thread::yield();
-    REQUIRE_FALSE(acquireFinished.load(std::memory_order_acquire));
+    const bool acquiredWhileSaveWasRunning =
+        acquireFinished.load(std::memory_order_acquire);
 
     releaseSave.store(true, std::memory_order_release);
     saveThread.join();
     acquireThread.join();
 
+    REQUIRE_FALSE(acquiredWhileSaveWasRunning);
     REQUIRE(acquireFinished.load(std::memory_order_acquire));
     REQUIRE(acquireStatus.load(std::memory_order_acquire) ==
         PartyQuestSaveGuardAcquireStatus::Acquired);
