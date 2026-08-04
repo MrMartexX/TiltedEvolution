@@ -2,6 +2,7 @@
 
 #include <Structs/Skyrim/PartyQuestReplicaFileExecutor.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
+#include <Structs/Skyrim/PartyQuestRuntimePreRepairCheckpoint.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -37,11 +38,13 @@ struct PartyQuestSkyrimPreRepairSaveResult
     std::filesystem::path MainSavePath;
     std::filesystem::path SkseCosavePath;
     std::vector<PartyQuestReplicaFileSpec> CoreFiles;
+    PartyQuestRuntimePreRepairCoreAuthorization Authorization;
     bool IncludedSkseCosave{};
 
     [[nodiscard]] bool IsReady() const noexcept
     {
-        return Status == PartyQuestSkyrimPreRepairSaveStatus::Ready;
+        return Status == PartyQuestSkyrimPreRepairSaveStatus::Ready &&
+            Authorization.IsVerified();
     }
 };
 
@@ -55,10 +58,11 @@ struct PartyQuestSkyrimPreRepairSaveResult
  * and can be handled by later retention/cleanup policy.
  *
  * This is deliberately NOT the durable checkpoint gate. It captures only the
- * Skyrim .ess and an SKSE .skse co-save when one is actually produced. Future
- * compatibility/sidecar policy must append every required external sidecar,
- * build the immutable revision checkpoint plan, and only then call
- * PartyQuestRuntimeGuardedSession::EnsurePreRepairCheckpoint().
+ * Skyrim .ess and an SKSE .skse co-save when one is actually produced. A
+ * private core authorization is issued only after those files have been
+ * observed and digested. The full assembler must additionally validate every
+ * required external sidecar capability before CheckpointCreated can be
+ * published.
  *
  * No quest/Papyrus mutation is dispatched here.
  */
