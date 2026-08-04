@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
+#include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 
 #include <catch2/catch.hpp>
 
@@ -62,7 +63,7 @@ std::string ReadRecoveryBytes(const std::filesystem::path& acPath)
     file.seekg(0, std::ios::beg);
     if (!bytes.empty())
         file.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
-    REQUIRE(file.good() || file.eof());
+    REQUIRE((file.good() || file.eof()));
     return bytes;
 }
 
