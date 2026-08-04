@@ -222,7 +222,10 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::ArmRuntimeMutation
     uint64_t aTransactionId) noexcept
 {
     const auto* active = m_session.GetCoordinator().GetActive();
-    if (!active || !active->SaveGuardActive || !HasGuard(aTransactionId))
+    if (!active ||
+        active->TransactionId != aTransactionId ||
+        !active->SaveGuardActive ||
+        !HasGuard(aTransactionId))
     {
         PartyQuestRuntimeGuardResult result;
         result.Status = PartyQuestRuntimeGuardStatus::GuardMismatch;
@@ -237,7 +240,10 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::MarkPapyrusQuiesce
     uint64_t aTransactionId) noexcept
 {
     const auto* active = m_session.GetCoordinator().GetActive();
-    if (!active || !active->SaveGuardActive || !HasGuard(aTransactionId))
+    if (!active ||
+        active->TransactionId != aTransactionId ||
+        !active->SaveGuardActive ||
+        !HasGuard(aTransactionId))
     {
         PartyQuestRuntimeGuardResult result;
         result.Status = PartyQuestRuntimeGuardStatus::GuardMismatch;
@@ -253,8 +259,13 @@ PartyQuestRuntimeDurableVerificationResult PartyQuestRuntimeGuardedSession::Subm
     QuestSnapshot aObservedSnapshot) noexcept
 {
     const auto* active = m_session.GetCoordinator().GetActive();
-    if (!active || !active->SaveGuardActive || !HasGuard(aTransactionId))
+    if (!active ||
+        active->TransactionId != aTransactionId ||
+        !active->SaveGuardActive ||
+        !HasGuard(aTransactionId))
+    {
         return {PartyQuestRuntimeVerificationStatus::InvalidState, false};
+    }
     return m_session.SubmitResnapshot(aTransactionId, std::move(aObservedSnapshot));
 }
 
@@ -383,15 +394,17 @@ PartyQuestRuntimeRecoveryResult PartyQuestRuntimeGuardedSession::ResolveCrashRec
         return result;
     }
 
+    const uint64_t transactionId = recovery->TransactionId;
+    const uint64_t targetWorldRevision = recovery->TargetWorldRevision;
     bool acquiredHere{};
-    const auto guardStatus = AcquireGuard(recovery->TransactionId, acquiredHere);
+    const auto guardStatus = AcquireGuard(transactionId, acquiredHere);
     if (guardStatus != PartyQuestRuntimeGuardStatus::Ready)
     {
         PartyQuestRuntimeRecoveryResult result;
         result.Status = PartyQuestRuntimeRecoveryStatus::SaveGuardBusy;
-        result.TransactionId = recovery->TransactionId;
-        result.TargetWorldRevision = recovery->TargetWorldRevision;
-        result.RestoreId = recovery->TransactionId;
+        result.TransactionId = transactionId;
+        result.TargetWorldRevision = targetWorldRevision;
+        result.RestoreId = transactionId;
         return result;
     }
 
@@ -400,7 +413,7 @@ PartyQuestRuntimeRecoveryResult PartyQuestRuntimeGuardedSession::ResolveCrashRec
         acPaths);
     if (result.IsResolved())
     {
-        if (!m_saveGuard.Release(recovery->TransactionId))
+        if (!m_saveGuard.Release(transactionId))
             result.Status = PartyQuestRuntimeRecoveryStatus::SaveGuardReleaseFailed;
     }
     // Any unresolved recovery deliberately keeps the lease, including when this
