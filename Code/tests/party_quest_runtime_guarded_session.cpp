@@ -110,6 +110,16 @@ struct GuardSandbox
 };
 } // namespace
 
+TEST_CASE("Production runtime guarded session binds the process save guard", "[quest.party-state.runtime-guard]")
+{
+    GuardDurability durability;
+    auto session = BuildGuardSession(durability);
+    PartyQuestRuntimeGuardedSession guarded(session);
+
+    REQUIRE(&guarded.GetRuntimeSession() == &session);
+    REQUIRE(&guarded.GetSaveGuard() == &PartyQuestSaveGuard::GetProcessGuard());
+}
+
 TEST_CASE("Immediate runtime begin acquires physical save guard before durable publication", "[quest.party-state.runtime-guard]")
 {
     PartyQuestSaveGuard saveGuard;
