@@ -8,6 +8,7 @@
 #include <vector>
 
 class PartyQuestSkyrimPreRepairSave;
+class PartyQuestRuntimePreRepairCheckpointTestAccess;
 
 /**
  * Unforgeable proof that an exact .ess/.skse core file set came from the
@@ -41,6 +42,8 @@ private:
     bool m_verified{};
 
     friend class PartyQuestSkyrimPreRepairSave;
+    // Defined only in Code/tests; no production implementation/API exists.
+    friend class PartyQuestRuntimePreRepairCheckpointTestAccess;
 };
 
 enum class PartyQuestRuntimePreRepairCheckpointStatus : uint8_t
