@@ -14,6 +14,17 @@ PartyQuestRuntimeSessionStoreResult MakeStoreResult(
     result.RecoveryDisposition = aDisposition;
     return result;
 }
+
+PartyQuestRuntimeSessionStoreResult FailClosed(
+    PartyQuestRuntimeApplySession& aSession,
+    PartyQuestRuntimeSessionStoreStatus aStatus,
+    PartyQuestRuntimeApplyPersistenceStatus aPersistenceStatus,
+    PartyQuestRuntimeRecoveryDisposition aDisposition =
+        PartyQuestRuntimeRecoveryDisposition::InvalidState)
+{
+    aSession.SetDurableStateHandler({});
+    return MakeStoreResult(aStatus, aPersistenceStatus, aDisposition);
+}
 } // namespace
 
 PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
@@ -25,7 +36,8 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
         if (!aSession.GetCampaignId().IsValid() ||
             !aSession.GetPlayerProfileId().IsValid())
         {
-            return MakeStoreResult(
+            return FailClosed(
+                aSession,
                 PartyQuestRuntimeSessionStoreStatus::InvalidIdentity,
                 PartyQuestRuntimeApplyPersistenceStatus::InvalidData);
         }
@@ -35,7 +47,8 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
                 aSession.GetCampaignId(),
                 aSession.GetPlayerProfileId()))
         {
-            return MakeStoreResult(
+            return FailClosed(
+                aSession,
                 PartyQuestRuntimeSessionStoreStatus::InvalidLayout,
                 PartyQuestRuntimeApplyPersistenceStatus::InvalidData);
         }
@@ -60,14 +73,16 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
         if (loaded.Status ==
             PartyQuestRuntimeApplyPersistenceStatus::BackupRecoveryRequired)
         {
-            return MakeStoreResult(
+            return FailClosed(
+                aSession,
                 PartyQuestRuntimeSessionStoreStatus::JournalRecoveryRequired,
                 loaded.Status);
         }
         if (loaded.Status != PartyQuestRuntimeApplyPersistenceStatus::Success ||
             !loaded.State)
         {
-            return MakeStoreResult(
+            return FailClosed(
+                aSession,
                 PartyQuestRuntimeSessionStoreStatus::JournalInvalid,
                 loaded.Status);
         }
@@ -100,7 +115,8 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
                 cleaned);
             if (persisted != PartyQuestRuntimeApplyPersistenceStatus::Success)
             {
-                return MakeStoreResult(
+                return FailClosed(
+                    aSession,
                     PartyQuestRuntimeSessionStoreStatus::CleanupPersistenceFailed,
                     persisted,
                     disposition);
@@ -113,6 +129,9 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
         }
 
         case PartyQuestRuntimeRecoveryDisposition::CheckpointRestoreRequired:
+            // Keep the durable handler bound: successful physical checkpoint
+            // recovery must persist removal of this barrier through the same
+            // player-scoped sidecar before the session can become usable.
             return MakeStoreResult(
                 PartyQuestRuntimeSessionStoreStatus::RecoveryRequired,
                 loaded.Status,
@@ -120,13 +139,15 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
 
         case PartyQuestRuntimeRecoveryDisposition::CampaignMismatch:
         case PartyQuestRuntimeRecoveryDisposition::PlayerProfileMismatch:
-            return MakeStoreResult(
+            return FailClosed(
+                aSession,
                 PartyQuestRuntimeSessionStoreStatus::JournalIdentityMismatch,
                 loaded.Status,
                 disposition);
 
         case PartyQuestRuntimeRecoveryDisposition::InvalidState:
-            return MakeStoreResult(
+            return FailClosed(
+                aSession,
                 PartyQuestRuntimeSessionStoreStatus::JournalInvalid,
                 loaded.Status,
                 disposition);
@@ -134,12 +155,14 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
     }
     catch (...)
     {
-        return MakeStoreResult(
+        return FailClosed(
+            aSession,
             PartyQuestRuntimeSessionStoreStatus::JournalInvalid,
             PartyQuestRuntimeApplyPersistenceStatus::IoError);
     }
 
-    return MakeStoreResult(
+    return FailClosed(
+        aSession,
         PartyQuestRuntimeSessionStoreStatus::JournalInvalid,
         PartyQuestRuntimeApplyPersistenceStatus::InvalidData);
 }
