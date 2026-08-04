@@ -14,6 +14,8 @@ enum class PartyQuestRuntimeRecoveryStatus : uint8_t
     InvalidIdentity,
     InvalidLayout,
     InvalidRecoveryState,
+    SaveGuardBusy,
+    SaveGuardReleaseFailed,
     CheckpointMissing,
     CheckpointManifestRecoveryRequired,
     CheckpointManifestInvalid,
@@ -73,6 +75,9 @@ struct PartyQuestRuntimeRecoveryResult
  *  6. clear the runtime recovery barrier only when checkpoint bytes are proven
  *     present in the live co-op replica at that instant;
  *  7. persist that cleared runtime state before exposing recovery as resolved.
+ *
+ * SaveGuardBusy/SaveGuardReleaseFailed are reserved for the guarded wrapper;
+ * this filesystem coordinator itself never manipulates the save lease.
  *
  * A recovered rollback is deliberately not success: the old replica bytes are
  * safe again, but the requested checkpoint still has to be restored by a later
