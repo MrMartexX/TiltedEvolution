@@ -18,6 +18,8 @@ on:
       - "Code/client/Services/QuestService.h"
       - "Code/client/Services/Generic/QuestSnapshotCollector.cpp"
       - "Code/client/Services/Generic/QuestService.cpp"
+      - "Code/client/Games/Skyrim/SaveLoad.cpp"
+      - "Code/client/Games/Skyrim/SaveLoad.h"
       - "Code/client/Games/Skyrim/Forms/BGSBaseAlias.h"
       - "Code/client/Games/Skyrim/Forms/TESQuest.h"
       - "Code/server/Services/QuestService.h"
