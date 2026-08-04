@@ -330,6 +330,17 @@ PartyQuestSkyrimPreRepairSave::CaptureCoreSource(
             result.IncludedSkseCosave = true;
         }
 
+        result.Authorization = PartyQuestRuntimePreRepairCoreAuthorization(
+            result.TransactionId,
+            result.TargetWorldRevision,
+            result.CoreFiles);
+        if (!result.Authorization.IsVerified())
+        {
+            result.Status = PartyQuestSkyrimPreRepairSaveStatus::SourceInspectionFailed;
+            result.CoreFiles.clear();
+            return result;
+        }
+
         result.Status = PartyQuestSkyrimPreRepairSaveStatus::Ready;
         spdlog::info(
             "PartyQuest captured isolated PreRepair core save source: transaction={} revision={} save={} skse={}",
