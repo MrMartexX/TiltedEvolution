@@ -197,7 +197,8 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::MarkWorldReady(
 PartyQuestRuntimeCheckpointResult
 PartyQuestRuntimeGuardedSession::EnsurePreRepairCheckpoint(
     const PartyQuestCoopSavePaths& acPaths,
-    const PartyQuestReplicaCopyPlan& acCheckpointPlan) noexcept
+    const PartyQuestReplicaCopyPlan& acCheckpointPlan,
+    const PartyQuestRuntimeCheckpointCoverageAuthorization& acCoverage) noexcept
 {
     const auto* active = m_session.GetCoordinator().GetActive();
     if (!active || !active->SaveGuardActive || !HasGuard(active->TransactionId))
@@ -215,7 +216,8 @@ PartyQuestRuntimeGuardedSession::EnsurePreRepairCheckpoint(
     return PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
         m_session,
         acPaths,
-        acCheckpointPlan);
+        acCheckpointPlan,
+        acCoverage);
 }
 
 PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::ArmRuntimeMutation(
