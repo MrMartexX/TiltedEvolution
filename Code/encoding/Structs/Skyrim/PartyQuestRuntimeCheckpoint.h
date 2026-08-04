@@ -8,6 +8,7 @@
 #include <filesystem>
 
 class PartyQuestRuntimePreRepairCheckpointAssembler;
+class PartyQuestRuntimePreRepairCheckpointTestAccess;
 
 enum class PartyQuestRuntimeCheckpointStatus : uint8_t
 {
@@ -62,6 +63,8 @@ private:
     bool m_verified{};
 
     friend class PartyQuestRuntimePreRepairCheckpointAssembler;
+    // Defined only in Code/tests; no production implementation/API exists.
+    friend class PartyQuestRuntimePreRepairCheckpointTestAccess;
 };
 
 struct PartyQuestRuntimeCheckpointResult
