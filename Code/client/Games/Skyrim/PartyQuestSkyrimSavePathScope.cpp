@@ -1,0 +1,126 @@
+#include <TiltedOnlinePCH.h>
+
+#include <PartyQuestSkyrimSavePathScope.h>
+
+#include <cstddef>
+#include <cstring>
+
+namespace
+{
+constexpr const char* kLocalSavePathSettingName = "sLocalSavePath:General";
+constexpr size_t kSettingListOffset = 0x118;
+constexpr size_t kMaxSettingNodes = 4096;
+
+struct RuntimeSettingNode;
+struct RuntimeIniSettingCollection;
+
+struct RuntimeSettingNode
+{
+    PartyQuestSkyrimSavePathScope::RuntimeSetting* pItem{};
+    RuntimeSettingNode* pNext{};
+};
+static_assert(sizeof(RuntimeSettingNode) == 0x10);
+
+struct RuntimeIniSettingCollection
+{
+    std::byte Padding[kSettingListOffset];
+    RuntimeSettingNode Settings;
+};
+static_assert(offsetof(RuntimeIniSettingCollection, Settings) == kSettingListOffset);
+} // namespace
+
+struct PartyQuestSkyrimSavePathScope::RuntimeSetting
+{
+    void* pVtable{};      // 00
+    char* pStringValue{}; // 08 - Setting::Data::s
+    char* pName{};        // 10
+};
+static_assert(sizeof(PartyQuestSkyrimSavePathScope::RuntimeSetting) == 0x18);
+
+std::mutex& PartyQuestSkyrimSavePathScope::GetOverrideMutex() noexcept
+{
+    static std::mutex mutex;
+    return mutex;
+}
+
+PartyQuestSkyrimSavePathScope::RuntimeSetting*
+PartyQuestSkyrimSavePathScope::FindLocalSavePathSetting() noexcept
+{
+    try
+    {
+        // CommonLibSSE-NG: INISettingCollection::Singleton is
+        // RELOCATION_ID(524557, 411155). STR VersionDb uses the AE-side ids.
+        POINTER_SKYRIMSE(RuntimeIniSettingCollection*, s_iniSettings, 411155);
+        RuntimeIniSettingCollection* pCollection = *s_iniSettings.Get();
+        if (!pCollection)
+            return nullptr;
+
+        RuntimeSettingNode* pNode = &pCollection->Settings;
+        for (size_t i = 0; pNode && i < kMaxSettingNodes; ++i)
+        {
+            RuntimeSetting* pSetting = pNode->pItem;
+            if (pSetting && pSetting->pName &&
+                std::strcmp(pSetting->pName, kLocalSavePathSettingName) == 0)
+            {
+                return pSetting;
+            }
+            pNode = pNode->pNext;
+        }
+    }
+    catch (...)
+    {
+    }
+
+    return nullptr;
+}
+
+PartyQuestSkyrimSavePathScope::PartyQuestSkyrimSavePathScope(
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acPlayerProfileId) noexcept
+{
+    try
+    {
+        m_relativePath = PartyQuestSkyrimSavePathPolicy::BuildRelativeSavePath(
+            acCampaignId,
+            acPlayerProfileId);
+        if (!PartyQuestSkyrimSavePathPolicy::IsSafeRelativeSavePath(m_relativePath) ||
+            !PartyQuestSkyrimSavePathPolicy::MatchesRelativeSavePath(
+                m_relativePath,
+                acCampaignId,
+                acPlayerProfileId))
+        {
+            m_relativePath.clear();
+            return;
+        }
+
+        // Serialize process-wide mutation of the shared INI Setting pointer.
+        m_lock = std::unique_lock<std::mutex>(GetOverrideMutex());
+
+        m_pSetting = FindLocalSavePathSetting();
+        if (!m_pSetting || !m_pSetting->pStringValue)
+            return;
+
+        m_pOriginalValue = m_pSetting->pStringValue;
+        m_pSetting->pStringValue = m_relativePath.data();
+        m_armed = true;
+    }
+    catch (...)
+    {
+        m_armed = false;
+        m_pSetting = nullptr;
+        m_pOriginalValue = nullptr;
+        m_relativePath.clear();
+    }
+}
+
+PartyQuestSkyrimSavePathScope::~PartyQuestSkyrimSavePathScope()
+{
+    if (!m_armed || !m_pSetting)
+        return;
+
+    // Do not clobber an unexpected external replacement. Our storage is about
+    // to be destroyed, so restoring is required only while the live setting
+    // still points at this exact scope-owned buffer.
+    if (m_pSetting->pStringValue == m_relativePath.data())
+        m_pSetting->pStringValue = m_pOriginalValue;
+}
