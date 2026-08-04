@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
+#include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 
 #include <catch2/catch.hpp>
 
