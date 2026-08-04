@@ -36,13 +36,11 @@ public:
     [[nodiscard]] const std::string& GetRelativePath() const noexcept { return m_relativePath; }
 
 private:
-    struct RuntimeSetting;
-
-    static RuntimeSetting* FindLocalSavePathSetting() noexcept;
+    static void* FindLocalSavePathSetting() noexcept;
     static std::mutex& GetOverrideMutex() noexcept;
 
     std::unique_lock<std::mutex> m_lock;
-    RuntimeSetting* m_pSetting{};
+    void* m_pSetting{};
     char* m_pOriginalValue{};
     std::string m_relativePath;
     bool m_armed{};
