@@ -16,6 +16,20 @@ std::string FormatId(uint64_t aHigh, uint64_t aLow)
         static_cast<unsigned long long>(aLow));
     return buffer.data();
 }
+
+bool SameNormalizedPath(
+    const std::filesystem::path& acLeft,
+    const std::filesystem::path& acRight) noexcept
+{
+    try
+    {
+        return acLeft.lexically_normal() == acRight.lexically_normal();
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
 } // namespace
 
 std::string PartyQuestCoopSaveLayout::FormatCampaignId(
@@ -68,6 +82,32 @@ std::optional<PartyQuestCoopSavePaths> PartyQuestCoopSaveLayout::Build(
     paths.MetadataDirectory = paths.PlayerDirectory / "metadata";
     paths.RuntimeApplySidecar = paths.SidecarsDirectory / "party_quest_runtime_apply.bin";
     return paths;
+}
+
+bool PartyQuestCoopSaveLayout::Matches(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acProfileId) noexcept
+{
+    try
+    {
+        const auto expected = Build(acPaths.Root, acCampaignId, acProfileId);
+        if (!expected)
+            return false;
+
+        return SameNormalizedPath(acPaths.Root, expected->Root) &&
+            SameNormalizedPath(acPaths.CampaignDirectory, expected->CampaignDirectory) &&
+            SameNormalizedPath(acPaths.PlayerDirectory, expected->PlayerDirectory) &&
+            SameNormalizedPath(acPaths.CheckpointsDirectory, expected->CheckpointsDirectory) &&
+            SameNormalizedPath(acPaths.SavesDirectory, expected->SavesDirectory) &&
+            SameNormalizedPath(acPaths.SidecarsDirectory, expected->SidecarsDirectory) &&
+            SameNormalizedPath(acPaths.MetadataDirectory, expected->MetadataDirectory) &&
+            SameNormalizedPath(acPaths.RuntimeApplySidecar, expected->RuntimeApplySidecar);
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 const char* PartyQuestCoopSaveLayout::GetCheckpointName(
