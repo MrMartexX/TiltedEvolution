@@ -206,7 +206,6 @@ TEST_CASE("Crash recovery restores exact PreRepair revision before clearing runt
     const auto paths = BuildRecoveryPaths(sandbox);
     constexpr uint64_t kWorldRevision = 1600;
     constexpr uint64_t kTransactionId = 21001;
-    constexpr uint64_t kRestoreId = 31001;
 
     PublishCheckpoint(
         paths,
@@ -219,12 +218,12 @@ TEST_CASE("Crash recovery restores exact PreRepair revision before clearing runt
     auto session = BuildBlockedSession(capture, kTransactionId, kWorldRevision);
     const auto result = PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         session,
-        paths,
-        kRestoreId);
+        paths);
 
     REQUIRE(result.Status == PartyQuestRuntimeRecoveryStatus::Restored);
     REQUIRE(result.IsResolved());
     REQUIRE(result.TransactionId == kTransactionId);
+    REQUIRE(result.RestoreId == kTransactionId);
     REQUIRE(result.TargetWorldRevision == kWorldRevision);
     REQUIRE(result.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
     REQUIRE(result.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
@@ -252,8 +251,7 @@ TEST_CASE("Crash recovery never guesses LastKnownGood when exact PreRepair revis
     auto session = BuildBlockedSession(capture, 21002, kWorldRevision);
     const auto result = PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         session,
-        paths,
-        31002);
+        paths);
 
     REQUIRE(result.Status == PartyQuestRuntimeRecoveryStatus::CheckpointMissing);
     REQUIRE(result.ManifestStatus == PartyQuestReplicaManifestPersistenceStatus::FileNotFound);
@@ -266,7 +264,7 @@ TEST_CASE("Durable barrier clear can be retried after checkpoint restore already
     RecoverySandbox sandbox;
     const auto paths = BuildRecoveryPaths(sandbox);
     constexpr uint64_t kWorldRevision = 1620;
-    constexpr uint64_t kRestoreId = 31003;
+    constexpr uint64_t kTransactionId = 21003;
 
     PublishCheckpoint(
         paths,
@@ -276,14 +274,14 @@ TEST_CASE("Durable barrier clear can be retried after checkpoint restore already
     WriteRecoveryBytes(paths.SavesDirectory / "Hero.ess", "MUTATED_1620");
 
     RecoveryDurableCapture capture;
-    auto session = BuildBlockedSession(capture, 21003, kWorldRevision);
+    auto session = BuildBlockedSession(capture, kTransactionId, kWorldRevision);
     capture.Allow = false;
 
     const auto first = PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         session,
-        paths,
-        kRestoreId);
+        paths);
     REQUIRE(first.Status == PartyQuestRuntimeRecoveryStatus::RuntimeStatePersistenceFailed);
+    REQUIRE(first.RestoreId == kTransactionId);
     REQUIRE(first.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
     REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1620");
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
@@ -291,9 +289,9 @@ TEST_CASE("Durable barrier clear can be retried after checkpoint restore already
     capture.Allow = true;
     const auto second = PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         session,
-        paths,
-        kRestoreId);
+        paths);
     REQUIRE(second.Status == PartyQuestRuntimeRecoveryStatus::AlreadyRestored);
+    REQUIRE(second.RestoreId == kTransactionId);
     REQUIRE(second.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted);
     REQUIRE(second.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
@@ -305,7 +303,7 @@ TEST_CASE("Interrupted restore rollback keeps runtime barrier until a later exac
     RecoverySandbox sandbox;
     const auto paths = BuildRecoveryPaths(sandbox);
     constexpr uint64_t kWorldRevision = 1630;
-    constexpr uint64_t kRestoreId = 31004;
+    constexpr uint64_t kTransactionId = 21004;
 
     PublishCheckpoint(
         paths,
@@ -318,9 +316,10 @@ TEST_CASE("Interrupted restore rollback keeps runtime barrier until a later exac
     auto prepared = PartyQuestReplicaRestoreJournal::Prepare(
         paths,
         restorePlan,
-        kRestoreId);
+        kTransactionId);
     REQUIRE(prepared.IsReady());
     auto restoreState = *prepared.State;
+    REQUIRE(restoreState.RestoreId == kTransactionId);
     REQUIRE(restoreState.Operations.size() == 1);
     const auto journalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(restoreState);
     REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
@@ -345,13 +344,13 @@ TEST_CASE("Interrupted restore rollback keeps runtime barrier until a later exac
     WriteRecoveryBytes(paths.SavesDirectory / "Hero.ess", "PRE_REPAIR_1630");
 
     RecoveryDurableCapture capture;
-    auto session = BuildBlockedSession(capture, 21004, kWorldRevision);
+    auto session = BuildBlockedSession(capture, kTransactionId, kWorldRevision);
     const auto rollback = PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         session,
-        paths,
-        kRestoreId);
+        paths);
     REQUIRE(rollback.Status ==
         PartyQuestRuntimeRecoveryStatus::RollbackRecoveredRetryRequired);
+    REQUIRE(rollback.RestoreId == kTransactionId);
     REQUIRE(rollback.RestoreStatus ==
         PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback);
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
@@ -360,9 +359,9 @@ TEST_CASE("Interrupted restore rollback keeps runtime barrier until a later exac
 
     const auto retried = PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         session,
-        paths,
-        kRestoreId);
+        paths);
     REQUIRE(retried.Status == PartyQuestRuntimeRecoveryStatus::Restored);
+    REQUIRE(retried.RestoreId == kTransactionId);
     REQUIRE(retried.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
     REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1630");
