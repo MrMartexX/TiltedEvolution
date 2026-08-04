@@ -2,8 +2,10 @@
 
 #include <atomic>
 #include <cstdint>
+#include <shared_mutex>
 
 class PartyQuestControlledSaveScope;
+class PartyQuestEngineSavePermit;
 
 enum class PartyQuestSaveKind : uint8_t
 {
@@ -24,11 +26,12 @@ enum class PartyQuestSaveGuardAcquireStatus : uint8_t
 /**
  * Transaction-scoped policy/lease used by the Skyrim save interception layer.
  *
- * The transaction id is atomic because the game-level save hook and the
- * runtime coordinator must remain coherent even if a save request is emitted
- * from another thread. A critical repair denies ordinary saves; a controlled
- * checkpoint is authorized separately by a thread-local, transaction-bound
- * PartyQuestControlledSaveScope.
+ * The transaction id remains atomic for cheap cross-thread observation. The
+ * engine-save gate additionally uses a shared mutex: every allowed engine save
+ * holds a shared permit for the complete original save call, while Acquire and
+ * Release take the exclusive side. Therefore a critical repair cannot become
+ * active until an already-running save has finished, and a new uncontrolled
+ * save cannot slip through after the repair lease is acquired.
  */
 class PartyQuestSaveGuard final
 {
@@ -41,11 +44,14 @@ public:
     [[nodiscard]] bool CanSave(PartyQuestSaveKind aKind) const noexcept;
 
     /**
-     * Policy queried immediately before entering the real Skyrim save
-     * function. An inactive guard is transparent. An active guard requires a
-     * matching controlled-save scope on the current thread.
+     * Acquire permission to call the real Skyrim save function. The returned
+     * permit must stay alive until the original engine call returns.
+     *
+     * Inactive guard: ordinary save is allowed.
+     * Active guard: only an exact transaction-bound controlled scope on this
+     * thread is allowed. Lock acquisition failure fails closed.
      */
-    [[nodiscard]] bool CanEnterEngineSave() const noexcept;
+    [[nodiscard]] PartyQuestEngineSavePermit TryEnterEngineSave() const noexcept;
 
     [[nodiscard]] bool IsActive() const noexcept
     {
@@ -58,7 +64,36 @@ public:
     }
 
 private:
+    mutable std::shared_mutex m_engineSaveGate;
     std::atomic<uint64_t> m_transactionId{};
+
+    friend class PartyQuestEngineSavePermit;
+};
+
+/**
+ * RAII permit held across the complete original BGSSaveLoadManager save call.
+ * A denied/default permit owns no shared lock.
+ */
+class PartyQuestEngineSavePermit final
+{
+public:
+    PartyQuestEngineSavePermit() noexcept = default;
+    ~PartyQuestEngineSavePermit() = default;
+
+    PartyQuestEngineSavePermit(const PartyQuestEngineSavePermit&) = delete;
+    PartyQuestEngineSavePermit& operator=(const PartyQuestEngineSavePermit&) = delete;
+    PartyQuestEngineSavePermit(PartyQuestEngineSavePermit&&) noexcept = default;
+    PartyQuestEngineSavePermit& operator=(PartyQuestEngineSavePermit&&) noexcept = default;
+
+    [[nodiscard]] bool IsAllowed() const noexcept { return m_allowed; }
+
+private:
+    explicit PartyQuestEngineSavePermit(const PartyQuestSaveGuard& acGuard);
+
+    std::shared_lock<std::shared_mutex> m_lock;
+    bool m_allowed{};
+
+    friend class PartyQuestSaveGuard;
 };
 
 /**
