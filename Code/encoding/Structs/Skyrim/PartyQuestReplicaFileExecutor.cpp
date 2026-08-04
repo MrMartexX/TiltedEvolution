@@ -8,6 +8,7 @@
 #include <fstream>
 #include <set>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace
@@ -38,6 +39,12 @@ uint64_t NextCopyNonce() noexcept
     return value != 0 ? value : counter;
 }
 
+bool IsMissingError(const std::error_code& acError) noexcept
+{
+    return acError == std::errc::no_such_file_or_directory ||
+        acError == std::errc::not_a_directory;
+}
+
 std::string LowerExtension(const std::filesystem::path& acPath)
 {
     std::string extension = acPath.extension().string();
@@ -61,7 +68,6 @@ bool HasExpectedExtension(
     case PartyQuestReplicaFileKind::ExternalSidecar:
         return true;
     }
-
     return false;
 }
 
@@ -72,57 +78,79 @@ std::optional<std::filesystem::path> AbsoluteNormalized(
         return std::nullopt;
 
     std::error_code ec;
-    std::filesystem::path absolute = std::filesystem::absolute(acPath, ec);
+    const auto absolute = std::filesystem::absolute(acPath, ec);
     if (ec || absolute.empty())
         return std::nullopt;
     return absolute.lexically_normal();
+}
+
+bool IsInside(
+    const std::filesystem::path& acRoot,
+    const std::filesystem::path& acCandidate) noexcept
+{
+    try
+    {
+        return PartyQuestReplicaFilePlanner::IsContainedBy(
+            acRoot.lexically_normal(), acCandidate.lexically_normal());
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 PartyQuestReplicaExecutionStatus ObserveDetailed(
     const std::filesystem::path& acPath,
     PartyQuestReplicaFileObservation& aObservation) noexcept
 {
-    std::error_code ec;
-    const std::filesystem::file_status status = std::filesystem::symlink_status(acPath, ec);
-    if (ec)
-        return PartyQuestReplicaExecutionStatus::IoError;
-    if (status.type() == std::filesystem::file_type::not_found)
-        return PartyQuestReplicaExecutionStatus::SourceMissing;
-    if (std::filesystem::is_symlink(status))
-        return PartyQuestReplicaExecutionStatus::SourceSymlink;
-    if (!std::filesystem::is_regular_file(status))
-        return PartyQuestReplicaExecutionStatus::SourceNotRegularFile;
-
-    std::ifstream file(acPath, std::ios::binary);
-    if (!file.is_open())
-        return PartyQuestReplicaExecutionStatus::IoError;
-
-    uint64_t digest = kFnvOffsetBasis;
-    uint64_t size{};
-    std::array<char, kIoBufferSize> buffer{};
-    while (file)
+    try
     {
-        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-        const std::streamsize count = file.gcount();
-        if (count <= 0)
-            break;
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(acPath, ec);
+        if (status.type() == std::filesystem::file_type::not_found || IsMissingError(ec))
+            return PartyQuestReplicaExecutionStatus::SourceMissing;
+        if (ec)
+            return PartyQuestReplicaExecutionStatus::IoError;
+        if (std::filesystem::is_symlink(status))
+            return PartyQuestReplicaExecutionStatus::SourceSymlink;
+        if (!std::filesystem::is_regular_file(status))
+            return PartyQuestReplicaExecutionStatus::SourceNotRegularFile;
 
-        size += static_cast<uint64_t>(count);
-        for (std::streamsize i = 0; i < count; ++i)
+        std::ifstream file(acPath, std::ios::binary);
+        if (!file.is_open())
+            return PartyQuestReplicaExecutionStatus::IoError;
+
+        uint64_t digest = kFnvOffsetBasis;
+        uint64_t size{};
+        std::array<char, kIoBufferSize> buffer{};
+        while (file)
         {
-            digest ^= static_cast<uint8_t>(buffer[static_cast<size_t>(i)]);
-            digest *= kFnvPrime;
+            file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+            const std::streamsize count = file.gcount();
+            if (count <= 0)
+                break;
+
+            size += static_cast<uint64_t>(count);
+            for (std::streamsize i = 0; i < count; ++i)
+            {
+                digest ^= static_cast<uint8_t>(buffer[static_cast<size_t>(i)]);
+                digest *= kFnvPrime;
+            }
         }
+
+        if (file.bad())
+            return PartyQuestReplicaExecutionStatus::IoError;
+        if (digest == 0)
+            digest = 1;
+
+        aObservation.Size = size;
+        aObservation.Digest = digest;
+        return PartyQuestReplicaExecutionStatus::Success;
     }
-
-    if (file.bad())
+    catch (...)
+    {
         return PartyQuestReplicaExecutionStatus::IoError;
-    if (digest == 0)
-        digest = 1;
-
-    aObservation.Size = size;
-    aObservation.Digest = digest;
-    return PartyQuestReplicaExecutionStatus::Success;
+    }
 }
 
 bool MatchesExpected(
@@ -133,22 +161,18 @@ bool MatchesExpected(
         acObservation.Digest == acOperation.ExpectedDigest;
 }
 
-bool PathExistsOrIsLink(const std::filesystem::path& acPath, std::error_code& aEc) noexcept
+bool PathExistsOrIsLink(const std::filesystem::path& acPath, std::error_code& aError) noexcept
 {
-    aEc.clear();
-    const std::filesystem::file_status status = std::filesystem::symlink_status(acPath, aEc);
-    if (aEc)
+    aError.clear();
+    const auto status = std::filesystem::symlink_status(acPath, aError);
+    if (status.type() == std::filesystem::file_type::not_found || IsMissingError(aError))
+    {
+        aError.clear();
         return false;
-    return status.type() != std::filesystem::file_type::not_found;
-}
-
-bool IsInside(
-    const std::filesystem::path& acRoot,
-    const std::filesystem::path& acCandidate) noexcept
-{
-    return PartyQuestReplicaFilePlanner::IsContainedBy(
-        acRoot.lexically_normal(),
-        acCandidate.lexically_normal());
+    }
+    if (aError)
+        return false;
+    return true;
 }
 
 std::optional<std::filesystem::path> ExpectedDestinationRoot(
@@ -169,11 +193,9 @@ std::optional<std::filesystem::path> ExpectedDestinationRoot(
     if (aRevisionScoped && aCampaignWorldRevision == 0)
         return std::nullopt;
 
-    const std::filesystem::path checkpointRoot = aRevisionScoped
+    const auto checkpointRoot = aRevisionScoped
         ? PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
-              acPaths,
-              aCheckpointKind,
-              aCampaignWorldRevision)
+              acPaths, aCheckpointKind, aCampaignWorldRevision)
         : PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, aCheckpointKind);
     if (checkpointRoot.empty())
         return std::nullopt;
@@ -219,7 +241,7 @@ PartyQuestReplicaExecutionReport ValidatePlanAndSources(
 
     for (size_t i = 0; i < acPlan.Operations.size(); ++i)
     {
-        const PartyQuestReplicaCopyOperation& operation = acPlan.Operations[i];
+        const auto& operation = acPlan.Operations[i];
         if (operation.SourcePath.empty() || operation.DestinationPath.empty() || operation.ExpectedDigest == 0)
             return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidPlan, i);
 
@@ -233,6 +255,7 @@ PartyQuestReplicaExecutionReport ValidatePlanAndSources(
             aRevisionScoped,
             aCampaignWorldRevision);
         const auto expectedRoot = expectedRootRaw ? AbsoluteNormalized(*expectedRootRaw) : std::nullopt;
+
         if (!source)
             return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidSourcePath, i, operation.SourcePath);
         if (!destination || !expectedRoot ||
@@ -242,20 +265,19 @@ PartyQuestReplicaExecutionReport ValidatePlanAndSources(
         {
             return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidDestination, i, operation.DestinationPath);
         }
-
-        if (*source == *destination)
-            return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidDestination, i, *destination);
-        if (!sources.emplace(*source).second || !destinations.emplace(*destination).second)
+        if (*source == *destination ||
+            !sources.emplace(*source).second ||
+            !destinations.emplace(*destination).second)
+        {
             return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidPlan, i, *destination);
+        }
 
         if (!aCheckpoint)
         {
             if (IsInside(*playerRoot, *source))
             {
                 return MakeFailure(
-                    PartyQuestReplicaExecutionStatus::ImportSourceInsidePlayerRoot,
-                    i,
-                    *source);
+                    PartyQuestReplicaExecutionStatus::ImportSourceInsidePlayerRoot, i, *source);
             }
         }
         else
@@ -263,21 +285,17 @@ PartyQuestReplicaExecutionReport ValidatePlanAndSources(
             if (!IsInside(*playerRoot, *source))
             {
                 return MakeFailure(
-                    PartyQuestReplicaExecutionStatus::CheckpointSourceOutsidePlayerRoot,
-                    i,
-                    *source);
+                    PartyQuestReplicaExecutionStatus::CheckpointSourceOutsidePlayerRoot, i, *source);
             }
             if (IsInside(*checkpointTree, *source))
             {
                 return MakeFailure(
-                    PartyQuestReplicaExecutionStatus::CheckpointSourceInsideCheckpointTree,
-                    i,
-                    *source);
+                    PartyQuestReplicaExecutionStatus::CheckpointSourceInsideCheckpointTree, i, *source);
             }
         }
 
         PartyQuestReplicaFileObservation observation;
-        const PartyQuestReplicaExecutionStatus observationStatus = ObserveDetailed(*source, observation);
+        const auto observationStatus = ObserveDetailed(*source, observation);
         if (observationStatus != PartyQuestReplicaExecutionStatus::Success)
             return MakeFailure(observationStatus, i, *source);
         if (!MatchesExpected(observation, operation))
@@ -301,21 +319,83 @@ PartyQuestReplicaExecutionReport ValidatePlanAndSources(
 bool CleanupPaths(const std::vector<std::filesystem::path>& acPaths) noexcept
 {
     bool success = true;
-    for (const std::filesystem::path& path : acPaths)
+    for (const auto& path : acPaths)
     {
         std::error_code ec;
         const bool removed = std::filesystem::remove(path, ec);
-        if (ec)
-            success = false;
-        else if (!removed)
+        if (IsMissingError(ec))
         {
-            std::error_code statusError;
-            const auto status = std::filesystem::symlink_status(path, statusError);
-            if (statusError || status.type() != std::filesystem::file_type::not_found)
-                success = false;
+            ec.clear();
+            continue;
         }
+        if (ec)
+        {
+            success = false;
+            continue;
+        }
+        if (removed)
+            continue;
+
+        std::error_code statusError;
+        const auto status = std::filesystem::symlink_status(path, statusError);
+        if (status.type() == std::filesystem::file_type::not_found || IsMissingError(statusError))
+            continue;
+        if (statusError || status.type() != std::filesystem::file_type::not_found)
+            success = false;
     }
     return success;
+}
+
+bool PrepareDestinationParents(
+    const std::filesystem::path& acCanonicalPlayerRoot,
+    const std::vector<NormalizedOperation>& acOperations,
+    PartyQuestReplicaExecutionReport& aFailure) noexcept
+{
+    for (size_t i = 0; i < acOperations.size(); ++i)
+    {
+        const auto parent = acOperations[i].Destination.parent_path();
+        std::error_code ec;
+        const auto weakParent = std::filesystem::weakly_canonical(parent, ec);
+        if (ec || weakParent.empty())
+        {
+            aFailure = MakeFailure(PartyQuestReplicaExecutionStatus::IoError, i, parent);
+            return false;
+        }
+        if (!IsInside(acCanonicalPlayerRoot, weakParent))
+        {
+            aFailure = MakeFailure(
+                PartyQuestReplicaExecutionStatus::DestinationSymlinkEscape, i, parent);
+            return false;
+        }
+
+        ec.clear();
+        std::filesystem::create_directories(parent, ec);
+        if (ec)
+        {
+            aFailure = MakeFailure(PartyQuestReplicaExecutionStatus::IoError, i, parent);
+            return false;
+        }
+
+        ec.clear();
+        const auto canonicalParent = std::filesystem::weakly_canonical(parent, ec);
+        if (ec || canonicalParent.empty() || !IsInside(acCanonicalPlayerRoot, canonicalParent))
+        {
+            aFailure = MakeFailure(
+                PartyQuestReplicaExecutionStatus::DestinationSymlinkEscape, i, parent);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool DestinationParentStillSafe(
+    const std::filesystem::path& acCanonicalPlayerRoot,
+    const std::filesystem::path& acDestination) noexcept
+{
+    std::error_code ec;
+    const auto canonicalParent = std::filesystem::weakly_canonical(
+        acDestination.parent_path(), ec);
+    return !ec && !canonicalParent.empty() && IsInside(acCanonicalPlayerRoot, canonicalParent);
 }
 
 PartyQuestReplicaExecutionReport ExecuteInternal(
@@ -326,152 +406,173 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
     bool aRevisionScoped,
     uint64_t aCampaignWorldRevision) noexcept
 {
-    std::vector<NormalizedOperation> operations;
-    PartyQuestReplicaExecutionReport validation = ValidatePlanAndSources(
-        acPaths,
-        acPlan,
-        aCheckpoint,
-        aCheckpointKind,
-        aRevisionScoped,
-        aCampaignWorldRevision,
-        operations);
-    if (!validation.IsSuccess())
-        return validation;
-
-    const auto playerRoot = AbsoluteNormalized(acPaths.PlayerDirectory);
-    if (!playerRoot)
-        return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidLayout, 0);
-
-    std::error_code ec;
-    std::filesystem::create_directories(*playerRoot, ec);
-    if (ec)
-        return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, 0, *playerRoot);
-
-    const std::filesystem::path canonicalPlayerRoot = std::filesystem::weakly_canonical(*playerRoot, ec);
-    if (ec || canonicalPlayerRoot.empty())
-        return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, 0, *playerRoot);
-
-    for (size_t i = 0; i < operations.size(); ++i)
+    try
     {
-        const std::filesystem::path parent = operations[i].Destination.parent_path();
-        const std::filesystem::path weakParent = std::filesystem::weakly_canonical(parent, ec);
-        if (ec || weakParent.empty())
-            return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, i, parent);
-        if (!IsInside(canonicalPlayerRoot, weakParent))
-            return MakeFailure(PartyQuestReplicaExecutionStatus::DestinationSymlinkEscape, i, parent);
+        std::vector<NormalizedOperation> operations;
+        auto validation = ValidatePlanAndSources(
+            acPaths,
+            acPlan,
+            aCheckpoint,
+            aCheckpointKind,
+            aRevisionScoped,
+            aCampaignWorldRevision,
+            operations);
+        if (!validation.IsSuccess())
+            return validation;
 
-        std::filesystem::create_directories(parent, ec);
+        const auto playerRoot = AbsoluteNormalized(acPaths.PlayerDirectory);
+        if (!playerRoot)
+            return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidLayout, 0);
+
+        std::error_code ec;
+        std::filesystem::create_directories(*playerRoot, ec);
         if (ec)
-            return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, i, parent);
-
-        const std::filesystem::path canonicalParent = std::filesystem::weakly_canonical(parent, ec);
-        if (ec || !IsInside(canonicalPlayerRoot, canonicalParent))
-            return MakeFailure(PartyQuestReplicaExecutionStatus::DestinationSymlinkEscape, i, parent);
-    }
-
-    const uint64_t nonce = NextCopyNonce();
-    std::vector<std::filesystem::path> staged;
-    std::vector<std::filesystem::path> published;
-    staged.reserve(operations.size());
-    published.reserve(operations.size());
-
-    for (size_t i = 0; i < operations.size(); ++i)
-    {
-        const NormalizedOperation& operation = operations[i];
-        std::filesystem::path temporary = operation.Destination;
-        temporary += ".tpqtmp-" + std::to_string(nonce) + "-" + std::to_string(i);
-
-        std::error_code existsError;
-        if (PathExistsOrIsLink(temporary, existsError))
-        {
-            CleanupPaths(staged);
-            return MakeFailure(PartyQuestReplicaExecutionStatus::DestinationExists, i, temporary);
-        }
-        if (existsError)
-        {
-            CleanupPaths(staged);
-            return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, i, temporary);
-        }
+            return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, 0, *playerRoot);
 
         ec.clear();
-        if (!std::filesystem::copy_file(
-                operation.Source,
-                temporary,
-                std::filesystem::copy_options::none,
-                ec) || ec)
-        {
-            CleanupPaths(staged);
-            return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, i, operation.Source);
-        }
-        staged.push_back(temporary);
+        const auto canonicalPlayerRoot = std::filesystem::weakly_canonical(*playerRoot, ec);
+        if (ec || canonicalPlayerRoot.empty())
+            return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, 0, *playerRoot);
 
-        PartyQuestReplicaFileObservation stagedObservation;
-        const PartyQuestReplicaExecutionStatus stagedStatus = ObserveDetailed(temporary, stagedObservation);
-        if (stagedStatus != PartyQuestReplicaExecutionStatus::Success ||
-            !MatchesExpected(stagedObservation, operation.Operation))
+        PartyQuestReplicaExecutionReport parentFailure;
+        if (!PrepareDestinationParents(canonicalPlayerRoot, operations, parentFailure))
+            return parentFailure;
+
+        const uint64_t nonce = NextCopyNonce();
+        std::vector<std::filesystem::path> staged;
+        std::vector<std::filesystem::path> published;
+        staged.reserve(operations.size());
+        published.reserve(operations.size());
+
+        for (size_t i = 0; i < operations.size(); ++i)
         {
-            CleanupPaths(staged);
-            return MakeFailure(PartyQuestReplicaExecutionStatus::VerificationFailed, i, temporary);
+            const auto& operation = operations[i];
+            std::filesystem::path temporary = operation.Destination;
+            temporary += ".tpqtmp-" + std::to_string(nonce) + "-" + std::to_string(i);
+
+            std::error_code existsError;
+            if (PathExistsOrIsLink(temporary, existsError))
+            {
+                CleanupPaths(staged);
+                return MakeFailure(PartyQuestReplicaExecutionStatus::DestinationExists, i, temporary);
+            }
+            if (existsError)
+            {
+                CleanupPaths(staged);
+                return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, i, temporary);
+            }
+            if (!DestinationParentStillSafe(canonicalPlayerRoot, operation.Destination))
+            {
+                CleanupPaths(staged);
+                return MakeFailure(
+                    PartyQuestReplicaExecutionStatus::DestinationSymlinkEscape,
+                    i,
+                    operation.Destination.parent_path());
+            }
+
+            ec.clear();
+            if (!std::filesystem::copy_file(
+                    operation.Source,
+                    temporary,
+                    std::filesystem::copy_options::none,
+                    ec) || ec)
+            {
+                CleanupPaths(staged);
+                return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, i, operation.Source);
+            }
+            staged.push_back(temporary);
+
+            PartyQuestReplicaFileObservation stagedObservation;
+            const auto stagedStatus = ObserveDetailed(temporary, stagedObservation);
+            if (stagedStatus != PartyQuestReplicaExecutionStatus::Success ||
+                !MatchesExpected(stagedObservation, operation.Operation))
+            {
+                CleanupPaths(staged);
+                return MakeFailure(
+                    PartyQuestReplicaExecutionStatus::VerificationFailed, i, temporary);
+            }
+
+            PartyQuestReplicaFileObservation sourceObservation;
+            if (ObserveDetailed(operation.Source, sourceObservation) !=
+                    PartyQuestReplicaExecutionStatus::Success ||
+                !MatchesExpected(sourceObservation, operation.Operation))
+            {
+                CleanupPaths(staged);
+                return MakeFailure(
+                    PartyQuestReplicaExecutionStatus::SourceChanged, i, operation.Source);
+            }
         }
+
+        for (size_t i = 0; i < operations.size(); ++i)
+        {
+            if (!DestinationParentStillSafe(canonicalPlayerRoot, operations[i].Destination))
+            {
+                const bool rolledBack = CleanupPaths(staged) && CleanupPaths(published);
+                auto report = MakeFailure(
+                    rolledBack ? PartyQuestReplicaExecutionStatus::DestinationSymlinkEscape
+                               : PartyQuestReplicaExecutionStatus::RollbackFailed,
+                    i,
+                    operations[i].Destination.parent_path());
+                report.CompletedOperations = rolledBack ? 0 : published.size();
+                return report;
+            }
+
+            std::error_code existsError;
+            if (PathExistsOrIsLink(operations[i].Destination, existsError) || existsError)
+            {
+                const bool rolledBack = CleanupPaths(staged) && CleanupPaths(published);
+                auto report = MakeFailure(
+                    rolledBack ? PartyQuestReplicaExecutionStatus::DestinationExists
+                               : PartyQuestReplicaExecutionStatus::RollbackFailed,
+                    i,
+                    operations[i].Destination);
+                report.CompletedOperations = rolledBack ? 0 : published.size();
+                return report;
+            }
+
+            ec.clear();
+            std::filesystem::rename(staged[i], operations[i].Destination, ec);
+            if (ec)
+            {
+                const bool rolledBack = CleanupPaths(staged) && CleanupPaths(published);
+                auto report = MakeFailure(
+                    rolledBack ? PartyQuestReplicaExecutionStatus::IoError
+                               : PartyQuestReplicaExecutionStatus::RollbackFailed,
+                    i,
+                    operations[i].Destination);
+                report.CompletedOperations = rolledBack ? 0 : published.size();
+                return report;
+            }
+            published.push_back(operations[i].Destination);
+        }
+
+        for (size_t i = 0; i < operations.size(); ++i)
+        {
+            PartyQuestReplicaFileObservation finalObservation;
+            const auto finalStatus = ObserveDetailed(operations[i].Destination, finalObservation);
+            if (finalStatus != PartyQuestReplicaExecutionStatus::Success ||
+                !MatchesExpected(finalObservation, operations[i].Operation))
+            {
+                const bool rolledBack = CleanupPaths(published);
+                auto report = MakeFailure(
+                    rolledBack ? PartyQuestReplicaExecutionStatus::VerificationFailed
+                               : PartyQuestReplicaExecutionStatus::RollbackFailed,
+                    i,
+                    operations[i].Destination);
+                report.CompletedOperations = rolledBack ? 0 : published.size();
+                return report;
+            }
+        }
+
+        PartyQuestReplicaExecutionReport report;
+        report.Status = PartyQuestReplicaExecutionStatus::Success;
+        report.CompletedOperations = operations.size();
+        return report;
     }
-
-    for (size_t i = 0; i < operations.size(); ++i)
+    catch (...)
     {
-        std::error_code existsError;
-        if (PathExistsOrIsLink(operations[i].Destination, existsError) || existsError)
-        {
-            const bool rolledBack = CleanupPaths(staged) && CleanupPaths(published);
-            PartyQuestReplicaExecutionReport report = MakeFailure(
-                rolledBack ? PartyQuestReplicaExecutionStatus::DestinationExists
-                           : PartyQuestReplicaExecutionStatus::RollbackFailed,
-                i,
-                operations[i].Destination);
-            report.CompletedOperations = rolledBack ? 0 : published.size();
-            return report;
-        }
-
-        ec.clear();
-        std::filesystem::rename(staged[i], operations[i].Destination, ec);
-        if (ec)
-        {
-            std::vector<std::filesystem::path> remainingStaged(
-                staged.begin() + static_cast<std::ptrdiff_t>(i),
-                staged.end());
-            const bool rolledBack = CleanupPaths(remainingStaged) && CleanupPaths(published);
-            PartyQuestReplicaExecutionReport report = MakeFailure(
-                rolledBack ? PartyQuestReplicaExecutionStatus::IoError
-                           : PartyQuestReplicaExecutionStatus::RollbackFailed,
-                i,
-                operations[i].Destination);
-            report.CompletedOperations = rolledBack ? 0 : published.size();
-            return report;
-        }
-        published.push_back(operations[i].Destination);
+        return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, 0);
     }
-
-    for (size_t i = 0; i < operations.size(); ++i)
-    {
-        PartyQuestReplicaFileObservation finalObservation;
-        const PartyQuestReplicaExecutionStatus finalStatus =
-            ObserveDetailed(operations[i].Destination, finalObservation);
-        if (finalStatus != PartyQuestReplicaExecutionStatus::Success ||
-            !MatchesExpected(finalObservation, operations[i].Operation))
-        {
-            const bool rolledBack = CleanupPaths(published);
-            PartyQuestReplicaExecutionReport report = MakeFailure(
-                rolledBack ? PartyQuestReplicaExecutionStatus::VerificationFailed
-                           : PartyQuestReplicaExecutionStatus::RollbackFailed,
-                i,
-                operations[i].Destination);
-            report.CompletedOperations = rolledBack ? 0 : published.size();
-            return report;
-        }
-    }
-
-    PartyQuestReplicaExecutionReport report;
-    report.Status = PartyQuestReplicaExecutionStatus::Success;
-    report.CompletedOperations = operations.size();
-    return report;
 }
 
 PartyQuestReplicaExecutionReport VerifyInternal(
@@ -482,45 +583,57 @@ PartyQuestReplicaExecutionReport VerifyInternal(
     bool aRevisionScoped,
     uint64_t aCampaignWorldRevision) noexcept
 {
-    if (!acPlan.IsReady() || acPlan.Operations.empty())
-        return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidPlan, 0);
-
-    const auto playerRoot = AbsoluteNormalized(acPaths.PlayerDirectory);
-    if (!playerRoot)
-        return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidLayout, 0);
-
-    std::set<std::filesystem::path> destinations;
-    for (size_t i = 0; i < acPlan.Operations.size(); ++i)
+    try
     {
-        const auto& operation = acPlan.Operations[i];
-        const auto destination = AbsoluteNormalized(operation.DestinationPath);
-        const auto expectedRootRaw = ExpectedDestinationRoot(
-            acPaths,
-            operation.Kind,
-            aCheckpoint,
-            aCheckpointKind,
-            aRevisionScoped,
-            aCampaignWorldRevision);
-        const auto expectedRoot = expectedRootRaw ? AbsoluteNormalized(*expectedRootRaw) : std::nullopt;
-        if (!destination || !expectedRoot ||
-            !IsInside(*playerRoot, *destination) ||
-            !IsInside(*expectedRoot, *destination) ||
-            !HasExpectedExtension(operation.Kind, *destination) ||
-            !destinations.emplace(*destination).second)
+        if (!acPlan.IsReady() || acPlan.Operations.empty())
+            return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidPlan, 0);
+
+        const auto playerRoot = AbsoluteNormalized(acPaths.PlayerDirectory);
+        if (!playerRoot)
+            return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidLayout, 0);
+
+        std::set<std::filesystem::path> destinations;
+        for (size_t i = 0; i < acPlan.Operations.size(); ++i)
         {
-            return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidDestination, i, operation.DestinationPath);
+            const auto& operation = acPlan.Operations[i];
+            const auto destination = AbsoluteNormalized(operation.DestinationPath);
+            const auto expectedRootRaw = ExpectedDestinationRoot(
+                acPaths,
+                operation.Kind,
+                aCheckpoint,
+                aCheckpointKind,
+                aRevisionScoped,
+                aCampaignWorldRevision);
+            const auto expectedRoot = expectedRootRaw ? AbsoluteNormalized(*expectedRootRaw) : std::nullopt;
+            if (!destination || !expectedRoot ||
+                !IsInside(*playerRoot, *destination) ||
+                !IsInside(*expectedRoot, *destination) ||
+                !HasExpectedExtension(operation.Kind, *destination) ||
+                !destinations.emplace(*destination).second)
+            {
+                return MakeFailure(
+                    PartyQuestReplicaExecutionStatus::InvalidDestination, i, operation.DestinationPath);
+            }
+
+            PartyQuestReplicaFileObservation observation;
+            const auto status = ObserveDetailed(*destination, observation);
+            if (status != PartyQuestReplicaExecutionStatus::Success ||
+                !MatchesExpected(observation, operation))
+            {
+                return MakeFailure(
+                    PartyQuestReplicaExecutionStatus::VerificationFailed, i, *destination);
+            }
         }
 
-        PartyQuestReplicaFileObservation observation;
-        const PartyQuestReplicaExecutionStatus status = ObserveDetailed(*destination, observation);
-        if (status != PartyQuestReplicaExecutionStatus::Success || !MatchesExpected(observation, operation))
-            return MakeFailure(PartyQuestReplicaExecutionStatus::VerificationFailed, i, *destination);
+        PartyQuestReplicaExecutionReport report;
+        report.Status = PartyQuestReplicaExecutionStatus::Success;
+        report.CompletedOperations = acPlan.Operations.size();
+        return report;
     }
-
-    PartyQuestReplicaExecutionReport report;
-    report.Status = PartyQuestReplicaExecutionStatus::Success;
-    report.CompletedOperations = acPlan.Operations.size();
-    return report;
+    catch (...)
+    {
+        return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, 0);
+    }
 }
 } // namespace
 
@@ -563,7 +676,8 @@ PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::ExecuteImport(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaCopyPlan& acPlan) noexcept
 {
-    return ExecuteInternal(acPaths, acPlan, false, PartyQuestCheckpointKind::PreJoin, false, 0);
+    return ExecuteInternal(
+        acPaths, acPlan, false, PartyQuestCheckpointKind::PreJoin, false, 0);
 }
 
 PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::ExecuteCheckpoint(
@@ -593,7 +707,8 @@ PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::VerifyImport(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaCopyPlan& acPlan) noexcept
 {
-    return VerifyInternal(acPaths, acPlan, false, PartyQuestCheckpointKind::PreJoin, false, 0);
+    return VerifyInternal(
+        acPaths, acPlan, false, PartyQuestCheckpointKind::PreJoin, false, 0);
 }
 
 PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::VerifyCheckpoint(
