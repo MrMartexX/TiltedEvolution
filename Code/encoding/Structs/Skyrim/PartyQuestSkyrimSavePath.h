@@ -6,8 +6,8 @@
 #include <string_view>
 
 /**
- * Pure policy for the Skyrim INI setting sLocalSavePath:General used by a
- * co-op replica session.
+ * Pure, platform-independent policy for the Skyrim INI setting
+ * sLocalSavePath:General used by a co-op replica session.
  *
  * Skyrim and SKSE interpret sLocalSavePath relative to the Skyrim user data
  * directory. The policy therefore never accepts an absolute root or arbitrary
@@ -17,6 +17,9 @@
  * Canonical form:
  *
  *   CoopCampaigns\Campaign_<32HEX>\Player_<32HEX>\saves\
+ *
+ * The resulting string deliberately uses a single Windows separator form so a
+ * later runtime setting scope cannot depend on filesystem normalization rules.
  */
 class PartyQuestSkyrimSavePathPolicy final
 {
