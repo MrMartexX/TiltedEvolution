@@ -7,6 +7,7 @@
 #include <limits>
 #include <set>
 #include <sstream>
+#include <system_error>
 #include <type_traits>
 
 namespace
@@ -17,6 +18,12 @@ constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
 constexpr uint32_t kMaxOperations = 4096;
 constexpr uint32_t kMaxPathBytes = 1024 * 1024;
+
+bool IsMissingError(const std::error_code& acError) noexcept
+{
+    return acError == std::errc::no_such_file_or_directory ||
+        acError == std::errc::not_a_directory;
+}
 
 bool IsKnownCheckpointKind(PartyQuestCheckpointKind aKind) noexcept
 {
@@ -38,7 +45,9 @@ bool IsKnownPhase(PartyQuestReplicaRestoreJournalPhase aPhase) noexcept
         static_cast<uint8_t>(PartyQuestReplicaRestoreJournalPhase::Committed);
 }
 
-bool IsInside(const std::filesystem::path& acRoot, const std::filesystem::path& acPath) noexcept
+bool IsInside(
+    const std::filesystem::path& acRoot,
+    const std::filesystem::path& acPath) noexcept
 {
     try
     {
@@ -59,20 +68,26 @@ std::string FormatRestoreId(uint64_t aRestoreId)
     return stream.str();
 }
 
-bool IsRegularNonSymlink(const std::filesystem::path& acPath, bool& aExists) noexcept
+bool IsRegularNonSymlink(
+    const std::filesystem::path& acPath,
+    bool& aExists) noexcept
 {
+    aExists = false;
     try
     {
         std::error_code ec;
         const auto status = std::filesystem::symlink_status(acPath, ec);
+        if (status.type() == std::filesystem::file_type::not_found || IsMissingError(ec))
+        {
+            aExists = false;
+            return true;
+        }
         if (ec)
             return false;
 
-        aExists = std::filesystem::exists(status);
-        if (!aExists)
-            return true;
-
-        return !std::filesystem::is_symlink(status) && std::filesystem::is_regular_file(status);
+        aExists = true;
+        return !std::filesystem::is_symlink(status) &&
+            std::filesystem::is_regular_file(status);
     }
     catch (...)
     {
@@ -127,12 +142,19 @@ void WriteInteger(std::vector<uint8_t>& aBytes, T aValue)
 }
 
 template <class T>
-bool ReadInteger(const std::vector<uint8_t>& acBytes, size_t& aOffset, size_t aEnd, T& aValue) noexcept
+bool ReadInteger(
+    const std::vector<uint8_t>& acBytes,
+    size_t& aOffset,
+    size_t aEnd,
+    T& aValue) noexcept
 {
     static_assert(std::is_integral_v<T>);
     using Unsigned = std::make_unsigned_t<T>;
-    if (aEnd > acBytes.size() || aOffset > aEnd || aEnd - aOffset < sizeof(Unsigned))
+    if (aEnd > acBytes.size() || aOffset > aEnd ||
+        aEnd - aOffset < sizeof(Unsigned))
+    {
         return false;
+    }
 
     Unsigned value{};
     for (size_t i = 0; i < sizeof(Unsigned); ++i)
@@ -142,7 +164,9 @@ bool ReadInteger(const std::vector<uint8_t>& acBytes, size_t& aOffset, size_t aE
     return true;
 }
 
-void WritePath(std::vector<uint8_t>& aBytes, const std::filesystem::path& acPath)
+void WritePath(
+    std::vector<uint8_t>& aBytes,
+    const std::filesystem::path& acPath)
 {
     const std::string value = acPath.generic_string();
     WriteInteger<uint32_t>(aBytes, static_cast<uint32_t>(value.size()));
@@ -156,7 +180,8 @@ bool ReadPath(
     std::filesystem::path& aPath) noexcept
 {
     uint32_t size{};
-    if (!ReadInteger(acBytes, aOffset, aEnd, size) || size == 0 || size > kMaxPathBytes ||
+    if (!ReadInteger(acBytes, aOffset, aEnd, size) ||
+        size == 0 || size > kMaxPathBytes ||
         aOffset > aEnd || aEnd - aOffset < size)
     {
         return false;
@@ -194,9 +219,11 @@ PartyQuestReplicaRestoreJournalPersistenceStatus ReadFile(
     std::ifstream file(acPath, std::ios::binary | std::ios::ate);
     if (!file.is_open())
     {
-        return std::filesystem::exists(acPath)
-            ? PartyQuestReplicaRestoreJournalPersistenceStatus::IoError
-            : PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound;
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(acPath, ec);
+        if (status.type() == std::filesystem::file_type::not_found || IsMissingError(ec))
+            return PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound;
+        return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
     }
 
     const std::streampos end = file.tellg();
@@ -210,25 +237,34 @@ PartyQuestReplicaRestoreJournalPersistenceStatus ReadFile(
     aBytes.resize(static_cast<size_t>(size));
     file.seekg(0, std::ios::beg);
     if (!aBytes.empty() &&
-        !file.read(reinterpret_cast<char*>(aBytes.data()), static_cast<std::streamsize>(aBytes.size())))
+        !file.read(
+            reinterpret_cast<char*>(aBytes.data()),
+            static_cast<std::streamsize>(aBytes.size())))
     {
         return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
     }
     return PartyQuestReplicaRestoreJournalPersistenceStatus::Success;
 }
 
-bool WriteFile(const std::filesystem::path& acPath, const std::vector<uint8_t>& acBytes)
+bool WriteFile(
+    const std::filesystem::path& acPath,
+    const std::vector<uint8_t>& acBytes)
 {
     std::ofstream file(acPath, std::ios::binary | std::ios::trunc);
     if (!file.is_open())
         return false;
     if (!acBytes.empty())
-        file.write(reinterpret_cast<const char*>(acBytes.data()), static_cast<std::streamsize>(acBytes.size()));
+    {
+        file.write(
+            reinterpret_cast<const char*>(acBytes.data()),
+            static_cast<std::streamsize>(acBytes.size()));
+    }
     file.flush();
     return file.good();
 }
 
-PartyQuestReplicaRestoreJournalPersistenceResult DecodeFile(const std::filesystem::path& acPath)
+PartyQuestReplicaRestoreJournalPersistenceResult DecodeFile(
+    const std::filesystem::path& acPath)
 {
     std::vector<uint8_t> bytes;
     PartyQuestReplicaRestoreJournalPersistenceResult result;
@@ -325,7 +361,8 @@ PartyQuestReplicaRestoreJournalResult PartyQuestReplicaRestoreJournal::Prepare(
 
             if (destinationExists)
             {
-                const auto observation = PartyQuestReplicaFileExecutor::ObserveRegularFile(destination);
+                const auto observation =
+                    PartyQuestReplicaFileExecutor::ObserveRegularFile(destination);
                 if (!observation)
                 {
                     result.Status = PartyQuestReplicaRestoreJournalStatus::DestinationUnsafe;
@@ -382,7 +419,8 @@ bool PartyQuestReplicaRestoreJournal::VerifyRollbackBackups(
 
         if (!backupExists)
             return false;
-        const auto observation = PartyQuestReplicaFileExecutor::ObserveRegularFile(operation.RollbackPath);
+        const auto observation =
+            PartyQuestReplicaFileExecutor::ObserveRegularFile(operation.RollbackPath);
         if (!observation ||
             observation->Size != operation.OriginalSize ||
             observation->Digest != operation.OriginalDigest)
@@ -401,8 +439,9 @@ bool PartyQuestReplicaRestoreJournal::VerifyRestoredTargets(
 
     for (const auto& operation : acState.Operations)
     {
-        const auto observation = PartyQuestReplicaFileExecutor::ObserveRegularFile(
-            operation.ReplicaDestinationPath);
+        const auto observation =
+            PartyQuestReplicaFileExecutor::ObserveRegularFile(
+                operation.ReplicaDestinationPath);
         if (!observation ||
             observation->Size != operation.ExpectedRestoredSize ||
             observation->Digest != operation.ExpectedRestoredDigest)
@@ -455,7 +494,8 @@ PartyQuestReplicaRestoreJournalStatus PartyQuestReplicaRestoreJournal::MarkCommi
     return PartyQuestReplicaRestoreJournalStatus::Ready;
 }
 
-PartyQuestReplicaRestoreRecoveryDisposition PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(
+PartyQuestReplicaRestoreRecoveryDisposition
+PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(
     const PartyQuestReplicaRestoreJournalState& acState) noexcept
 {
     if (!ValidateState(acState))
@@ -512,11 +552,14 @@ std::vector<uint8_t> PartyQuestReplicaRestoreJournalPersistence::Encode(
     WriteInteger<uint16_t>(archive, kFormatVersion);
     WriteInteger<uint64_t>(archive, payload.size());
     archive.insert(archive.end(), payload.begin(), payload.end());
-    WriteInteger<uint64_t>(archive, ComputeChecksum(payload.data(), payload.size()));
+    WriteInteger<uint64_t>(
+        archive,
+        ComputeChecksum(payload.data(), payload.size()));
     return archive;
 }
 
-PartyQuestReplicaRestoreJournalPersistenceResult PartyQuestReplicaRestoreJournalPersistence::Decode(
+PartyQuestReplicaRestoreJournalPersistenceResult
+PartyQuestReplicaRestoreJournalPersistence::Decode(
     const std::vector<uint8_t>& acBytes)
 {
     PartyQuestReplicaRestoreJournalPersistenceResult result;
@@ -569,7 +612,9 @@ PartyQuestReplicaRestoreJournalPersistenceResult PartyQuestReplicaRestoreJournal
         result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::Truncated;
         return result;
     }
-    if (storedChecksum != ComputeChecksum(acBytes.data() + payloadStart, static_cast<size_t>(payloadSize)))
+    if (storedChecksum != ComputeChecksum(
+            acBytes.data() + payloadStart,
+            static_cast<size_t>(payloadSize)))
     {
         result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::ChecksumMismatch;
         return result;
@@ -610,7 +655,8 @@ PartyQuestReplicaRestoreJournalPersistenceResult PartyQuestReplicaRestoreJournal
             !ReadPath(acBytes, offset, payloadEnd, operation.RollbackPath) ||
             !ReadInteger(acBytes, offset, payloadEnd, operation.ExpectedRestoredSize) ||
             !ReadInteger(acBytes, offset, payloadEnd, operation.ExpectedRestoredDigest) ||
-            !ReadInteger(acBytes, offset, payloadEnd, existed) || existed > 1 ||
+            !ReadInteger(acBytes, offset, payloadEnd, existed) ||
+            existed > 1 ||
             !ReadInteger(acBytes, offset, payloadEnd, operation.OriginalSize) ||
             !ReadInteger(acBytes, offset, payloadEnd, operation.OriginalDigest))
         {
@@ -638,7 +684,8 @@ PartyQuestReplicaRestoreJournalPersistenceResult PartyQuestReplicaRestoreJournal
     return result;
 }
 
-PartyQuestReplicaRestoreJournalPersistenceStatus PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
+PartyQuestReplicaRestoreJournalPersistenceStatus
+PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
     const std::filesystem::path& acPath,
     const PartyQuestReplicaRestoreJournalState& acState)
 {
@@ -662,7 +709,10 @@ PartyQuestReplicaRestoreJournalPersistenceStatus PartyQuestReplicaRestoreJournal
         backup += ".bak";
 
         std::filesystem::remove(temporary, ec);
+        if (ec && !IsMissingError(ec))
+            return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
         ec.clear();
+
         if (!WriteFile(temporary, bytes))
             return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
 
@@ -674,11 +724,17 @@ PartyQuestReplicaRestoreJournalPersistenceStatus PartyQuestReplicaRestoreJournal
             return PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
         }
 
-        if (std::filesystem::exists(acPath, ec))
+        ec.clear();
+        const bool primaryExists = std::filesystem::exists(acPath, ec);
+        if (ec && !IsMissingError(ec))
+            return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+        ec.clear();
+
+        if (primaryExists)
         {
-            if (ec)
-                return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
             std::filesystem::remove(backup, ec);
+            if (ec && !IsMissingError(ec))
+                return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
             ec.clear();
             std::filesystem::rename(acPath, backup, ec);
             if (ec)
@@ -689,10 +745,12 @@ PartyQuestReplicaRestoreJournalPersistenceStatus PartyQuestReplicaRestoreJournal
         if (ec)
         {
             std::error_code restoreEc;
-            if (!std::filesystem::exists(acPath, restoreEc) &&
-                std::filesystem::exists(backup, restoreEc))
+            const bool primaryMissing = !std::filesystem::exists(acPath, restoreEc);
+            if (( !restoreEc || IsMissingError(restoreEc)) && primaryMissing)
             {
-                std::filesystem::rename(backup, acPath, restoreEc);
+                restoreEc.clear();
+                if (std::filesystem::exists(backup, restoreEc) && !restoreEc)
+                    std::filesystem::rename(backup, acPath, restoreEc);
             }
             return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
         }
@@ -705,7 +763,8 @@ PartyQuestReplicaRestoreJournalPersistenceStatus PartyQuestReplicaRestoreJournal
     }
 }
 
-PartyQuestReplicaRestoreJournalPersistenceResult PartyQuestReplicaRestoreJournalPersistence::Load(
+PartyQuestReplicaRestoreJournalPersistenceResult
+PartyQuestReplicaRestoreJournalPersistence::Load(
     const std::filesystem::path& acPath)
 {
     PartyQuestReplicaRestoreJournalPersistenceResult primary = DecodeFile(acPath);
@@ -715,12 +774,19 @@ PartyQuestReplicaRestoreJournalPersistenceResult PartyQuestReplicaRestoreJournal
     std::filesystem::path temporary = acPath;
     temporary += ".tmp";
     auto temp = DecodeFile(temporary);
-    if (temp.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success && temp.State)
+    if (temp.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success &&
+        temp.State)
     {
         try
         {
             std::error_code ec;
             std::filesystem::remove(acPath, ec);
+            if (ec && !IsMissingError(ec))
+            {
+                temp.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+                temp.State.reset();
+                return temp;
+            }
             ec.clear();
             std::filesystem::rename(temporary, acPath, ec);
             if (!ec)
