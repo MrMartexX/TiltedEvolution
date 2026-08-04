@@ -154,6 +154,9 @@ public:
     [[nodiscard]] const PartyQuestCheckpointSidecarRequirement* FindRequirement(
         uint64_t aCapabilityId) const noexcept;
 
+    /** Stable capability-id ordering for deterministic coverage/checkpoint plans. */
+    [[nodiscard]] std::vector<PartyQuestCheckpointSidecarRequirement> GetRequirements() const;
+
     [[nodiscard]] size_t GetRequirementCount() const noexcept
     {
         return m_requirements.size();
