@@ -9,6 +9,8 @@
 #include <Structs/Skyrim/PartyQuestRuntimeCheckpoint.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 
+#include <party_quest_pre_repair_checkpoint_test_access.h>
+
 #include <catch2/catch.hpp>
 
 #include <chrono>
@@ -189,6 +191,26 @@ PartyQuestReplicaCopyPlan BuildPreRepairPlan(
     REQUIRE(plan.IsReady());
     return plan;
 }
+
+PartyQuestRuntimeCheckpointResult EnsureLowLevelCheckpoint(
+    PartyQuestRuntimeApplySession& aSession,
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestReplicaCopyPlan& acPlan,
+    uint64_t aTransactionId,
+    uint64_t aTargetWorldRevision)
+{
+    const auto coverage =
+        PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoverageAuthorization(
+            aTransactionId,
+            aTargetWorldRevision,
+            acPlan);
+    REQUIRE(coverage.IsVerified());
+    return PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+        aSession,
+        acPaths,
+        acPlan,
+        coverage);
+}
 } // namespace
 
 TEST_CASE("Runtime checkpoint gate durably publishes exact PreRepair revision before ReadyToApply", "[quest.party-state.runtime-checkpoint]")
@@ -204,10 +226,12 @@ TEST_CASE("Runtime checkpoint gate durably publishes exact PreRepair revision be
         PartyQuestRuntimeApplyState::AwaitingCheckpoint);
 
     const auto plan = BuildPreRepairPlan(paths, request.TargetWorldRevision);
-    const auto result = PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+    const auto result = EnsureLowLevelCheckpoint(
         session,
         paths,
-        plan);
+        plan,
+        request.TransactionId,
+        request.TargetWorldRevision);
     REQUIRE(result.Status == PartyQuestRuntimeCheckpointStatus::Ready);
     REQUIRE(result.SnapshotStatus == PartyQuestReplicaSnapshotStatus::Ready);
     REQUIRE(result.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
@@ -229,6 +253,28 @@ TEST_CASE("Runtime checkpoint gate durably publishes exact PreRepair revision be
     REQUIRE(loaded.Manifest->CampaignWorldRevision == request.TargetWorldRevision);
 }
 
+TEST_CASE("Checkpoint gate rejects an unverified coverage token", "[quest.party-state.runtime-checkpoint]")
+{
+    CheckpointSandbox sandbox;
+    const auto paths = BuildCheckpointPaths(sandbox);
+    DurableCapture capture;
+    auto session = BuildCheckpointSession(capture);
+    const auto request = BuildCheckpointRequest(11006, 1295, GameId(46, 0x1000));
+    REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
+
+    const auto plan = BuildPreRepairPlan(paths, request.TargetWorldRevision);
+    const PartyQuestRuntimeCheckpointCoverageAuthorization unverified;
+    const auto result = PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+        session,
+        paths,
+        plan,
+        unverified);
+    REQUIRE(result.Status == PartyQuestRuntimeCheckpointStatus::InvalidCoverageAuthorization);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::AwaitingCheckpoint);
+    REQUIRE_FALSE(session.GetCoordinator().GetActive()->CheckpointCreated);
+}
+
 TEST_CASE("Checkpoint gate rejects a plan for a different world revision without advancing runtime state", "[quest.party-state.runtime-checkpoint]")
 {
     CheckpointSandbox sandbox;
@@ -239,10 +285,12 @@ TEST_CASE("Checkpoint gate rejects a plan for a different world revision without
     REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
 
     const auto wrongRevisionPlan = BuildPreRepairPlan(paths, request.TargetWorldRevision + 1);
-    const auto result = PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+    const auto result = EnsureLowLevelCheckpoint(
         session,
         paths,
-        wrongRevisionPlan);
+        wrongRevisionPlan,
+        request.TransactionId,
+        request.TargetWorldRevision);
     REQUIRE(result.Status == PartyQuestRuntimeCheckpointStatus::InvalidCheckpointPlan);
     REQUIRE(result.SnapshotStatus == PartyQuestReplicaSnapshotStatus::InvalidPlan);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
@@ -266,10 +314,12 @@ TEST_CASE("Checkpoint publication survives runtime-state persistence failure and
 
     const auto plan = BuildPreRepairPlan(paths, request.TargetWorldRevision);
     capture.Allow = false;
-    const auto failed = PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+    const auto failed = EnsureLowLevelCheckpoint(
         session,
         paths,
-        plan);
+        plan,
+        request.TransactionId,
+        request.TargetWorldRevision);
     REQUIRE(failed.Status == PartyQuestRuntimeCheckpointStatus::RuntimeStatePersistenceFailed);
     REQUIRE(failed.SnapshotStatus == PartyQuestReplicaSnapshotStatus::Ready);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
@@ -278,10 +328,12 @@ TEST_CASE("Checkpoint publication survives runtime-state persistence failure and
     REQUIRE(std::filesystem::exists(failed.ManifestPath));
 
     capture.Allow = true;
-    const auto retried = PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+    const auto retried = EnsureLowLevelCheckpoint(
         session,
         paths,
-        plan);
+        plan,
+        request.TransactionId,
+        request.TargetWorldRevision);
     REQUIRE(retried.Status == PartyQuestRuntimeCheckpointStatus::AlreadyReady);
     REQUIRE(retried.SnapshotStatus == PartyQuestReplicaSnapshotStatus::AlreadyReady);
     REQUIRE(retried.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
@@ -306,10 +358,12 @@ TEST_CASE("Checkpoint gate rejects a path bundle that does not belong to the run
         kCheckpointCampaign,
         kCheckpointPlayer));
 
-    const auto result = PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+    const auto result = EnsureLowLevelCheckpoint(
         session,
         wrongPaths,
-        plan);
+        plan,
+        request.TransactionId,
+        request.TargetWorldRevision);
     REQUIRE(result.Status == PartyQuestRuntimeCheckpointStatus::InvalidLayout);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::AwaitingCheckpoint);
@@ -326,15 +380,19 @@ TEST_CASE("Already-ready runtime checkpoint is reverified instead of trusting th
     REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
 
     const auto plan = BuildPreRepairPlan(paths, request.TargetWorldRevision);
-    REQUIRE(PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+    REQUIRE(EnsureLowLevelCheckpoint(
                 session,
                 paths,
-                plan).IsReady());
+                plan,
+                request.TransactionId,
+                request.TargetWorldRevision).IsReady());
 
-    const auto repeated = PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+    const auto repeated = EnsureLowLevelCheckpoint(
         session,
         paths,
-        plan);
+        plan,
+        request.TransactionId,
+        request.TargetWorldRevision);
     REQUIRE(repeated.Status == PartyQuestRuntimeCheckpointStatus::AlreadyReady);
     REQUIRE(repeated.SnapshotStatus == PartyQuestReplicaSnapshotStatus::Ready);
 
@@ -344,10 +402,12 @@ TEST_CASE("Already-ready runtime checkpoint is reverified instead of trusting th
         request.TargetWorldRevision);
     WriteCheckpointBytes(checkpointRoot / "saves" / "Hero.ess", "CORRUPTED_CHECKPOINT");
 
-    const auto corrupted = PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+    const auto corrupted = EnsureLowLevelCheckpoint(
         session,
         paths,
-        plan);
+        plan,
+        request.TransactionId,
+        request.TargetWorldRevision);
     REQUIRE(corrupted.Status == PartyQuestRuntimeCheckpointStatus::SnapshotFailed);
     REQUIRE(corrupted.SnapshotStatus == PartyQuestReplicaSnapshotStatus::FileVerificationFailed);
     REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::ReadyToApply);
