@@ -11,12 +11,17 @@ constexpr const char* kLocalSavePathSettingName = "sLocalSavePath:General";
 constexpr size_t kSettingListOffset = 0x118;
 constexpr size_t kMaxSettingNodes = 4096;
 
-struct RuntimeSettingNode;
-struct RuntimeIniSettingCollection;
+struct RuntimeSetting
+{
+    void* pVtable{};      // 00
+    char* pStringValue{}; // 08 - Setting::Data::s
+    char* pName{};        // 10
+};
+static_assert(sizeof(RuntimeSetting) == 0x18);
 
 struct RuntimeSettingNode
 {
-    PartyQuestSkyrimSavePathScope::RuntimeSetting* pItem{};
+    RuntimeSetting* pItem{};
     RuntimeSettingNode* pNext{};
 };
 static_assert(sizeof(RuntimeSettingNode) == 0x10);
@@ -27,15 +32,12 @@ struct RuntimeIniSettingCollection
     RuntimeSettingNode Settings;
 };
 static_assert(offsetof(RuntimeIniSettingCollection, Settings) == kSettingListOffset);
-} // namespace
 
-struct PartyQuestSkyrimSavePathScope::RuntimeSetting
+RuntimeSetting* AsRuntimeSetting(void* apSetting) noexcept
 {
-    void* pVtable{};      // 00
-    char* pStringValue{}; // 08 - Setting::Data::s
-    char* pName{};        // 10
-};
-static_assert(sizeof(PartyQuestSkyrimSavePathScope::RuntimeSetting) == 0x18);
+    return static_cast<RuntimeSetting*>(apSetting);
+}
+} // namespace
 
 std::mutex& PartyQuestSkyrimSavePathScope::GetOverrideMutex() noexcept
 {
@@ -43,8 +45,7 @@ std::mutex& PartyQuestSkyrimSavePathScope::GetOverrideMutex() noexcept
     return mutex;
 }
 
-PartyQuestSkyrimSavePathScope::RuntimeSetting*
-PartyQuestSkyrimSavePathScope::FindLocalSavePathSetting() noexcept
+void* PartyQuestSkyrimSavePathScope::FindLocalSavePathSetting() noexcept
 {
     try
     {
@@ -97,11 +98,12 @@ PartyQuestSkyrimSavePathScope::PartyQuestSkyrimSavePathScope(
         m_lock = std::unique_lock<std::mutex>(GetOverrideMutex());
 
         m_pSetting = FindLocalSavePathSetting();
-        if (!m_pSetting || !m_pSetting->pStringValue)
+        RuntimeSetting* pSetting = AsRuntimeSetting(m_pSetting);
+        if (!pSetting || !pSetting->pStringValue)
             return;
 
-        m_pOriginalValue = m_pSetting->pStringValue;
-        m_pSetting->pStringValue = m_relativePath.data();
+        m_pOriginalValue = pSetting->pStringValue;
+        pSetting->pStringValue = m_relativePath.data();
         m_armed = true;
     }
     catch (...)
@@ -118,9 +120,13 @@ PartyQuestSkyrimSavePathScope::~PartyQuestSkyrimSavePathScope()
     if (!m_armed || !m_pSetting)
         return;
 
+    RuntimeSetting* pSetting = AsRuntimeSetting(m_pSetting);
+    if (!pSetting)
+        return;
+
     // Do not clobber an unexpected external replacement. Our storage is about
     // to be destroyed, so restoring is required only while the live setting
     // still points at this exact scope-owned buffer.
-    if (m_pSetting->pStringValue == m_relativePath.data())
-        m_pSetting->pStringValue = m_pOriginalValue;
+    if (pSetting->pStringValue == m_relativePath.data())
+        pSetting->pStringValue = m_pOriginalValue;
 }
