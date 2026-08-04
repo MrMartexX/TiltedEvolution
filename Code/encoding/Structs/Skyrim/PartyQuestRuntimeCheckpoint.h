@@ -54,6 +54,8 @@ struct PartyQuestRuntimeCheckpointResult
  *
  * If step 3/4 fails after checkpoint publication, a retry adopts the already
  * verified immutable checkpoint and attempts only the runtime-state transition.
+ * A caller must treat every non-ready result as a hard mutation barrier and must
+ * not call ArmRuntimeMutation() through a bypass path.
  * No Skyrim/Papyrus/save hook is invoked here.
  */
 class PartyQuestRuntimeCheckpointCoordinator final
