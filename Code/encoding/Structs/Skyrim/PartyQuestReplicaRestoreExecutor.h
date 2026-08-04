@@ -41,11 +41,27 @@ struct PartyQuestReplicaRestoreExecutionReport
     bool RollbackPerformed{};
     bool CleanupPending{};
 
-    [[nodiscard]] bool IsSuccess() const noexcept
+    /** The requested checkpoint bytes are durably present in the live replica. */
+    [[nodiscard]] bool IsCheckpointRestored() const noexcept
     {
         return Status == PartyQuestReplicaRestoreExecutionStatus::Success ||
-            Status == PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted ||
+            Status == PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted;
+    }
+
+    /**
+     * The recovery action itself reached a safe terminal state. RecoveredRollback
+     * is handled but deliberately is not a completed checkpoint restore.
+     */
+    [[nodiscard]] bool IsRecoveryHandled() const noexcept
+    {
+        return IsCheckpointRestored() ||
             Status == PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback;
+    }
+
+    /** Conventional success means the requested restore, not merely rollback, completed. */
+    [[nodiscard]] bool IsSuccess() const noexcept
+    {
+        return IsCheckpointRestored();
     }
 };
 
