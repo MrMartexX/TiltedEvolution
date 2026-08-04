@@ -84,9 +84,11 @@ public:
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkWorldReady(
         uint64_t aTransactionId) noexcept;
 
+    /** Low-level publication gate; callers need assembler-issued coverage. */
     [[nodiscard]] PartyQuestRuntimeCheckpointResult EnsurePreRepairCheckpoint(
         const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestReplicaCopyPlan& acCheckpointPlan) noexcept;
+        const PartyQuestReplicaCopyPlan& acCheckpointPlan,
+        const PartyQuestRuntimeCheckpointCoverageAuthorization& acCoverage) noexcept;
 
     [[nodiscard]] PartyQuestRuntimeGuardResult ArmRuntimeMutation(
         uint64_t aTransactionId) noexcept;
