@@ -11,6 +11,7 @@ namespace
 {
 const PartyQuestCampaignId kIntegrityCampaign{0x1111111122222222ull, 0x3333333344444444ull};
 const PartyQuestPlayerProfileId kIntegrityPlayer{0x5555555566666666ull, 0x7777777788888888ull};
+constexpr uint64_t kIntegrityTransactionId = 22001;
 
 struct IntegritySandbox
 {
@@ -51,7 +52,7 @@ void WriteIntegrityBytes(
 PartyQuestRuntimeRecoveryState BuildIntegrityRecoveryState(uint64_t aWorldRevision)
 {
     PartyQuestRuntimeApplyEntry active;
-    active.TransactionId = 22001;
+    active.TransactionId = kIntegrityTransactionId;
     active.TargetWorldRevision = aWorldRevision;
     active.QuestId = GameId(52, 0x1000);
     active.CanonicalDigest = 0x1234567890ABCDEFull;
@@ -81,7 +82,6 @@ TEST_CASE("Committed restore journal cannot clear runtime barrier after live rep
     REQUIRE(paths.has_value());
 
     constexpr uint64_t kWorldRevision = 1640;
-    constexpr uint64_t kRestoreId = 32001;
     const auto liveSave = paths->SavesDirectory / "Hero.ess";
     WriteIntegrityBytes(liveSave, "PRE_REPAIR_1640");
 
@@ -121,9 +121,9 @@ TEST_CASE("Committed restore journal cannot clear runtime barrier after live rep
 
     const auto first = PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         session,
-        *paths,
-        kRestoreId);
+        *paths);
     REQUIRE(first.Status == PartyQuestRuntimeRecoveryStatus::RuntimeStatePersistenceFailed);
+    REQUIRE(first.RestoreId == kIntegrityTransactionId);
     REQUIRE(first.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
 
@@ -134,9 +134,9 @@ TEST_CASE("Committed restore journal cannot clear runtime barrier after live rep
 
     const auto retry = PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         session,
-        *paths,
-        kRestoreId);
+        *paths);
     REQUIRE(retry.Status == PartyQuestRuntimeRecoveryStatus::RestoreFailed);
+    REQUIRE(retry.RestoreId == kIntegrityTransactionId);
     REQUIRE(retry.RestoreStatus ==
         PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed);
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
