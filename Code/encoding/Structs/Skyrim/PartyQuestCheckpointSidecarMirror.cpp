@@ -1,12 +1,43 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecarMirror.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <set>
+#include <string>
+#include <type_traits>
 #include <unordered_map>
 
 namespace
 {
+constexpr uint64_t kFnvOffset = 1469598103934665603ull;
+constexpr uint64_t kFnvPrime = 1099511628211ull;
+
+void HashBytes(uint64_t& aHash, const void* apData, size_t aSize) noexcept
+{
+    const auto* bytes = static_cast<const uint8_t*>(apData);
+    for (size_t i = 0; i < aSize; ++i)
+    {
+        aHash ^= bytes[i];
+        aHash *= kFnvPrime;
+    }
+}
+
+template <class T>
+void HashValue(uint64_t& aHash, const T& acValue) noexcept
+{
+    static_assert(std::is_trivially_copyable_v<T>);
+    HashBytes(aHash, &acValue, sizeof(T));
+}
+
+void HashString(uint64_t& aHash, const std::string& acValue) noexcept
+{
+    const uint64_t size = static_cast<uint64_t>(acValue.size());
+    HashValue(aHash, size);
+    if (!acValue.empty())
+        HashBytes(aHash, acValue.data(), acValue.size());
+}
+
 bool AuthorizationMatches(
     const PartyQuestCheckpointSidecarAuthorization& acAuthorization,
     const PartyQuestCheckpointSidecarRequirement& acRequirement) noexcept
@@ -77,6 +108,94 @@ bool HasExpectedCapabilityPrefix(
     return first != acRelativePath.end() && first->string() == expected;
 }
 } // namespace
+
+uint64_t PartyQuestCheckpointSidecarMirrorAuthorization::ComputeManifestFingerprint(
+    const PartyQuestCheckpointSidecarManifest& acManifest) noexcept
+{
+    try
+    {
+        uint64_t hash = kFnvOffset;
+        const auto requirements = acManifest.GetRequirements();
+        const uint64_t count = static_cast<uint64_t>(requirements.size());
+        HashValue(hash, count);
+        for (const auto& requirement : requirements)
+        {
+            HashValue(hash, requirement.CapabilityId);
+            HashValue(hash, requirement.SchemaVersion);
+            HashValue(hash, requirement.ProviderFingerprint);
+            HashValue(hash, requirement.RestoreAdapterFingerprint);
+            const auto mode = static_cast<uint8_t>(requirement.Mode);
+            HashValue(hash, mode);
+        }
+        return hash != 0 ? hash : 1;
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
+uint64_t PartyQuestCheckpointSidecarMirrorAuthorization::ComputeFilesFingerprint(
+    const std::vector<PartyQuestReplicaFileSpec>& acFiles) noexcept
+{
+    try
+    {
+        uint64_t hash = kFnvOffset;
+        const uint64_t count = static_cast<uint64_t>(acFiles.size());
+        HashValue(hash, count);
+        for (const auto& file : acFiles)
+        {
+            const auto kind = static_cast<uint8_t>(file.Kind);
+            HashValue(hash, kind);
+            HashString(hash, file.SourcePath.lexically_normal().generic_string());
+            HashString(hash, file.RelativePath.lexically_normal().generic_string());
+            HashValue(hash, file.Size);
+            HashValue(hash, file.Digest);
+        }
+        return hash != 0 ? hash : 1;
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
+PartyQuestCheckpointSidecarMirrorAuthorization::
+PartyQuestCheckpointSidecarMirrorAuthorization(
+    const PartyQuestCheckpointSidecarManifest& acManifest,
+    uint64_t aTransactionId,
+    uint64_t aTargetWorldRevision,
+    const std::vector<PartyQuestReplicaFileSpec>& acFiles) noexcept
+    : m_transactionId(aTransactionId)
+    , m_targetWorldRevision(aTargetWorldRevision)
+    , m_manifestFingerprint(ComputeManifestFingerprint(acManifest))
+    , m_filesFingerprint(ComputeFilesFingerprint(acFiles))
+    , m_fileCount(acFiles.size())
+    , m_verified(
+          aTransactionId != 0 &&
+          aTargetWorldRevision != 0 &&
+          m_manifestFingerprint != 0 &&
+          m_filesFingerprint != 0)
+{
+}
+
+bool PartyQuestCheckpointSidecarMirrorAuthorization::Matches(
+    const PartyQuestCheckpointSidecarManifest& acManifest,
+    uint64_t aTransactionId,
+    uint64_t aTargetWorldRevision,
+    const std::vector<PartyQuestReplicaFileSpec>& acFiles) const noexcept
+{
+    if (!m_verified ||
+        aTransactionId != m_transactionId ||
+        aTargetWorldRevision != m_targetWorldRevision ||
+        acFiles.size() != m_fileCount)
+    {
+        return false;
+    }
+
+    return ComputeManifestFingerprint(acManifest) == m_manifestFingerprint &&
+        ComputeFilesFingerprint(acFiles) == m_filesFingerprint;
+}
 
 std::string PartyQuestCheckpointSidecarMirrorCollector::FormatCapabilityDirectory(
     uint64_t aCapabilityId)
@@ -192,10 +311,15 @@ PartyQuestCheckpointSidecarMirrorCollector::Collect(
             }
         }
 
+        PartyQuestCheckpointSidecarMirrorResult result;
         if (captures.empty())
         {
-            PartyQuestCheckpointSidecarMirrorResult result;
             result.Status = PartyQuestCheckpointSidecarMirrorStatus::Ready;
+            result.Authorization = PartyQuestCheckpointSidecarMirrorAuthorization(
+                acManifest,
+                aTransactionId,
+                aTargetWorldRevision,
+                result.Files);
             return result;
         }
 
@@ -221,7 +345,6 @@ PartyQuestCheckpointSidecarMirrorCollector::Collect(
             return Fail(PartyQuestCheckpointSidecarMirrorStatus::MirrorEscape);
         }
 
-        PartyQuestCheckpointSidecarMirrorResult result;
         std::set<std::filesystem::path> seenSources;
         std::set<std::filesystem::path> seenRelativeFiles;
 
@@ -301,7 +424,21 @@ PartyQuestCheckpointSidecarMirrorCollector::Collect(
             }
         }
 
+        std::sort(result.Files.begin(), result.Files.end(), [](const auto& acLeft, const auto& acRight)
+        {
+            if (acLeft.RelativePath != acRight.RelativePath)
+                return acLeft.RelativePath.generic_string() < acRight.RelativePath.generic_string();
+            return acLeft.SourcePath.generic_string() < acRight.SourcePath.generic_string();
+        });
+
         result.Status = PartyQuestCheckpointSidecarMirrorStatus::Ready;
+        result.Authorization = PartyQuestCheckpointSidecarMirrorAuthorization(
+            acManifest,
+            aTransactionId,
+            aTargetWorldRevision,
+            result.Files);
+        if (!result.Authorization.IsVerified())
+            return Fail(PartyQuestCheckpointSidecarMirrorStatus::SourceInspectionFailed);
         return result;
     }
     catch (...)
