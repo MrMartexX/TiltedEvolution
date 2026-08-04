@@ -21,7 +21,18 @@ struct BGSSaveLoadManager
         char* saveName; // 0xBB0
     };
 
+    static BGSSaveLoadManager* Get() noexcept;
+
     void Save(SaveData* apData);
+
+    /**
+     * Enters Skyrim's normal manual-save pipeline (device id 2) by name.
+     *
+     * The Address Library entry is the hooked Save_Impl address, not the
+     * trampoline/original pointer. Therefore PartyQuestSaveGuard interception
+     * still runs and a critical repair requires PartyQuestControlledSaveScope.
+     */
+    bool SaveByName(const char* acFileName) noexcept;
 
     struct Struct330
     {
