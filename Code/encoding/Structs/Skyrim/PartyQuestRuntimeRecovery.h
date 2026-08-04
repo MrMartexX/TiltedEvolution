@@ -40,7 +40,7 @@ struct PartyQuestRuntimeRecoveryResult
         PartyQuestRuntimeDurableTransitionStatus::InvalidState};
     uint64_t TransactionId{};
     uint64_t TargetWorldRevision{};
-    uint64_t RestoreId{};
+    uint64_t RestoreId{}; // Always equals TransactionId for a valid blocked recovery.
     std::filesystem::path ManifestPath;
     std::filesystem::path RestoreJournalPath;
 
