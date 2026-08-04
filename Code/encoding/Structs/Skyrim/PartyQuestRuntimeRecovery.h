@@ -14,7 +14,6 @@ enum class PartyQuestRuntimeRecoveryStatus : uint8_t
     InvalidIdentity,
     InvalidLayout,
     InvalidRecoveryState,
-    InvalidRestoreId,
     CheckpointMissing,
     CheckpointManifestRecoveryRequired,
     CheckpointManifestInvalid,
@@ -59,13 +58,17 @@ struct PartyQuestRuntimeRecoveryResult
  * PreRepair/Revision_<TargetWorldRevision> checkpoint recorded by the blocked
  * runtime transaction. It does not guess a LastKnownGood fallback.
  *
+ * RestoreId is deterministically the runtime TransactionId. A caller cannot
+ * accidentally fork one blocked quest transaction into multiple filesystem
+ * restore journals by choosing a different id on retry.
+ *
  * Ordering is fail-closed:
  *
  *  1. require a campaign/player-bound crash recovery barrier;
  *  2. load and verify the exact PreRepair revision manifest and bytes;
  *  3. build a confined restore plan;
- *  4. resume an existing durable restore journal when one exists, otherwise
- *     start a new crash-resumable restore with the caller-supplied restore id;
+ *  4. resume the transaction-id-bound durable restore journal when it exists,
+ *     otherwise start a new crash-resumable restore;
  *  5. independently reverify the live replica against the exact restore plan;
  *  6. clear the runtime recovery barrier only when checkpoint bytes are proven
  *     present in the live co-op replica at that instant;
@@ -80,6 +83,5 @@ class PartyQuestRuntimeRecoveryCoordinator final
 public:
     [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveCrashRecovery(
         PartyQuestRuntimeApplySession& aSession,
-        const PartyQuestCoopSavePaths& acPaths,
-        uint64_t aRestoreId) noexcept;
+        const PartyQuestCoopSavePaths& acPaths) noexcept;
 };
