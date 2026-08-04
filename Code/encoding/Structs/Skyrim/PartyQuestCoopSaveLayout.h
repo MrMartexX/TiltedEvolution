@@ -55,6 +55,17 @@ public:
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestPlayerProfileId& acProfileId);
 
+    /**
+     * Verifies that a supplied path bundle is exactly the deterministic layout
+     * for the requested campaign/player under its declared Root. This is a
+     * structural identity check only; it performs no filesystem I/O or symlink
+     * resolution. Filesystem executors must still enforce resolved confinement.
+     */
+    [[nodiscard]] static bool Matches(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acProfileId) noexcept;
+
     /** Kind root, e.g. checkpoints/PreRepair. */
     [[nodiscard]] static std::filesystem::path GetCheckpointDirectory(
         const PartyQuestCoopSavePaths& acPaths,
