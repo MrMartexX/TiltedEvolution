@@ -1,6 +1,8 @@
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 
+#include <system_error>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -10,6 +12,106 @@ PartyQuestReplicaSnapshotResult Failure(
     PartyQuestReplicaSnapshotResult result;
     result.Status = aStatus;
     return result;
+}
+
+bool IsMissingError(const std::error_code& acError) noexcept
+{
+    return acError == std::errc::no_such_file_or_directory ||
+        acError == std::errc::not_a_directory;
+}
+
+enum class PartialRevisionPublicationRecovery : uint8_t
+{
+    NotPartial,
+    Recovered,
+    Conflict,
+    CleanupFailed
+};
+
+/**
+ * A revision checkpoint becomes authoritative only when its manifest exists.
+ * If the process dies between individual final-file renames, the next retry may
+ * see an exact subset of the expected final files but no manifest. Such a set
+ * can only be recovered when every published file still matches the immutable
+ * plan byte-for-byte and at least one expected destination is still missing.
+ *
+ * Removing only that exact verified subset is restart-safe: another crash while
+ * cleaning merely leaves a smaller exact subset which the same algorithm can
+ * classify and clean again. Any mismatching, symlink or non-regular destination
+ * remains evidence of a conflict and is never removed automatically.
+ */
+PartialRevisionPublicationRecovery RecoverExactPartialRevisionPublication(
+    const PartyQuestReplicaCopyPlan& acPlan) noexcept
+{
+    try
+    {
+        std::vector<std::filesystem::path> published;
+        published.reserve(acPlan.Operations.size());
+        bool sawMissing{};
+
+        for (const auto& operation : acPlan.Operations)
+        {
+            std::error_code ec;
+            const auto status = std::filesystem::symlink_status(
+                operation.DestinationPath,
+                ec);
+            if (status.type() == std::filesystem::file_type::not_found ||
+                IsMissingError(ec))
+            {
+                sawMissing = true;
+                continue;
+            }
+
+            if (ec ||
+                std::filesystem::is_symlink(status) ||
+                !std::filesystem::is_regular_file(status))
+            {
+                return PartialRevisionPublicationRecovery::Conflict;
+            }
+
+            const auto observed = PartyQuestReplicaFileExecutor::ObserveRegularFile(
+                operation.DestinationPath);
+            if (!observed ||
+                observed->Size != operation.ExpectedSize ||
+                observed->Digest != operation.ExpectedDigest)
+            {
+                return PartialRevisionPublicationRecovery::Conflict;
+            }
+
+            published.push_back(operation.DestinationPath);
+        }
+
+        // No final file exists: normal fresh execution. No expected file is
+        // missing: this is a complete orphan and is handled by exact adoption.
+        if (published.empty() || !sawMissing)
+            return PartialRevisionPublicationRecovery::NotPartial;
+
+        for (const auto& path : published)
+        {
+            std::error_code ec;
+            if (std::filesystem::remove(path, ec))
+                continue;
+            if (IsMissingError(ec))
+                continue;
+            if (ec)
+                return PartialRevisionPublicationRecovery::CleanupFailed;
+
+            std::error_code statusError;
+            const auto status = std::filesystem::symlink_status(path, statusError);
+            if (status.type() == std::filesystem::file_type::not_found ||
+                IsMissingError(statusError))
+            {
+                continue;
+            }
+            return PartialRevisionPublicationRecovery::CleanupFailed;
+        }
+
+        return PartialRevisionPublicationRecovery::Recovered;
+    }
+    catch (...)
+    {
+        return PartialRevisionPublicationRecovery::Conflict;
+    }
 }
 } // namespace
 
@@ -209,13 +311,47 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
             else
                 existingFiles = PartyQuestReplicaFileExecutor::VerifyCheckpoint(m_paths, aKind, acPlan);
 
-            if (!existingFiles.IsSuccess())
+            if (existingFiles.IsSuccess())
+            {
+                result.AdoptedVerifiedFiles = true;
+            }
+            else if (aCheckpoint && aRevisionScoped)
+            {
+                const auto recovery = RecoverExactPartialRevisionPublication(acPlan);
+                if (recovery == PartialRevisionPublicationRecovery::CleanupFailed)
+                {
+                    result.Status = PartyQuestReplicaSnapshotStatus::CopyFailed;
+                    result.CopyStatus = PartyQuestReplicaExecutionStatus::RollbackFailed;
+                    return result;
+                }
+                if (recovery != PartialRevisionPublicationRecovery::Recovered)
+                {
+                    result.Status = PartyQuestReplicaSnapshotStatus::FileVerificationFailed;
+                    result.CopyStatus = existingFiles.Status;
+                    return result;
+                }
+
+                // Retry only after an exact partial publication was removed.
+                // A second crash at any point repeats the same classification on
+                // the next start; no mismatching evidence is ever auto-deleted.
+                copy = PartyQuestReplicaFileExecutor::ExecuteRevisionCheckpoint(
+                    m_paths,
+                    aKind,
+                    aCampaignWorldRevision,
+                    acPlan);
+                result.CopyStatus = copy.Status;
+                if (!copy.IsSuccess())
+                {
+                    result.Status = PartyQuestReplicaSnapshotStatus::CopyFailed;
+                    return result;
+                }
+            }
+            else
             {
                 result.Status = PartyQuestReplicaSnapshotStatus::FileVerificationFailed;
                 result.CopyStatus = existingFiles.Status;
                 return result;
             }
-            result.AdoptedVerifiedFiles = true;
         }
 
         PartyQuestReplicaExecutionReport finalVerification;
