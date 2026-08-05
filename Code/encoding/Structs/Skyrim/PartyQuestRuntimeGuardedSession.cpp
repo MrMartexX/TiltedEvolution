@@ -1,5 +1,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
+#include <atomic>
+#include <chrono>
 #include <utility>
 
 namespace
@@ -38,6 +40,22 @@ bool RequestDefersWorld(const PartyQuestRuntimeApplyRequest& acRequest) noexcept
     return HasPartyQuestApplyAction(
         acRequest.Plan.Actions,
         PartyQuestApplyAction::WaitForWorldTargets);
+}
+
+uint64_t NextCheckpointCaptureEpochId() noexcept
+{
+    static std::atomic<uint64_t> sequence{1};
+    const uint64_t counter = sequence.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t now = static_cast<uint64_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+
+    uint64_t value = now ^ (counter * 0x9E3779B97F4A7C15ull);
+    value ^= value >> 30;
+    value *= 0xBF58476D1CE4E5B9ull;
+    value ^= value >> 27;
+    value *= 0x94D049BB133111EBull;
+    value ^= value >> 31;
+    return value != 0 ? value : counter;
 }
 } // namespace
 
@@ -167,7 +185,8 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::MarkWorldReady(
     result.TransactionId = aTransactionId;
 
     const auto* active = m_session.GetCoordinator().GetActive();
-    if (!active ||
+    if (m_checkpointCaptureEpoch.IsVerified() ||
+        !active ||
         active->TransactionId != aTransactionId ||
         active->State != PartyQuestRuntimeApplyState::DeferredWorld ||
         active->SaveGuardActive)
@@ -192,6 +211,123 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::MarkWorldReady(
         result.GuardHeld = HasGuard(aTransactionId);
     }
     return result;
+}
+
+PartyQuestCheckpointCaptureEpochResult
+PartyQuestRuntimeGuardedSession::BeginCheckpointCaptureEpoch() noexcept
+{
+    PartyQuestCheckpointCaptureEpochResult result;
+    const auto* active = m_session.GetCoordinator().GetActive();
+    if (!active ||
+        active->State != PartyQuestRuntimeApplyState::AwaitingCheckpoint ||
+        !active->SaveGuardActive ||
+        active->CheckpointCreated ||
+        active->RuntimeMutationMayHaveOccurred ||
+        active->TransactionId == 0 ||
+        active->TargetWorldRevision == 0 ||
+        active->SidecarManifestFingerprint == 0)
+    {
+        result.Status = PartyQuestCheckpointCaptureEpochStatus::InvalidRuntimeState;
+        return result;
+    }
+
+    if (!HasGuard(active->TransactionId))
+    {
+        result.Status = PartyQuestCheckpointCaptureEpochStatus::GuardMismatch;
+        return result;
+    }
+
+    if (m_checkpointCaptureEpoch.IsVerified())
+    {
+        result.Status = PartyQuestCheckpointCaptureEpochStatus::AlreadyActive;
+        return result;
+    }
+
+    const uint64_t epochId = NextCheckpointCaptureEpochId();
+    m_checkpointCaptureEpoch = PartyQuestCheckpointCaptureEpoch(
+        epochId,
+        active->TransactionId,
+        active->TargetWorldRevision,
+        active->SidecarManifestFingerprint);
+    if (!m_checkpointCaptureEpoch.IsVerified())
+    {
+        m_checkpointCaptureEpoch = {};
+        result.Status = PartyQuestCheckpointCaptureEpochStatus::InvalidRuntimeState;
+        return result;
+    }
+
+    result.Status = PartyQuestCheckpointCaptureEpochStatus::Ready;
+    result.Epoch = m_checkpointCaptureEpoch;
+    return result;
+}
+
+bool PartyQuestRuntimeGuardedSession::IsCheckpointCaptureEpochActive(
+    const PartyQuestCheckpointCaptureEpoch& acEpoch) const noexcept
+{
+    if (!m_checkpointCaptureEpoch.IsVerified() ||
+        !acEpoch.IsVerified() ||
+        m_checkpointCaptureEpoch.m_epochId != acEpoch.m_epochId)
+    {
+        return false;
+    }
+
+    const auto* active = m_session.GetCoordinator().GetActive();
+    if (!active ||
+        (active->State != PartyQuestRuntimeApplyState::AwaitingCheckpoint &&
+         active->State != PartyQuestRuntimeApplyState::ReadyToApply) ||
+        !active->SaveGuardActive ||
+        active->RuntimeMutationMayHaveOccurred ||
+        !HasGuard(active->TransactionId))
+    {
+        return false;
+    }
+
+    return acEpoch.MatchesContext(
+        active->TransactionId,
+        active->TargetWorldRevision,
+        active->SidecarManifestFingerprint) &&
+        m_checkpointCaptureEpoch.MatchesContext(
+            active->TransactionId,
+            active->TargetWorldRevision,
+            active->SidecarManifestFingerprint);
+}
+
+bool PartyQuestRuntimeGuardedSession::CompleteCheckpointCaptureEpoch(
+    const PartyQuestCheckpointCaptureEpoch& acEpoch) noexcept
+{
+    if (!IsCheckpointCaptureEpochActive(acEpoch))
+        return false;
+
+    const auto* active = m_session.GetCoordinator().GetActive();
+    if (!active ||
+        active->State != PartyQuestRuntimeApplyState::ReadyToApply ||
+        !active->CheckpointCreated ||
+        active->RuntimeMutationMayHaveOccurred)
+    {
+        return false;
+    }
+
+    m_checkpointCaptureEpoch = {};
+    return true;
+}
+
+bool PartyQuestRuntimeGuardedSession::AbortCheckpointCaptureEpoch(
+    const PartyQuestCheckpointCaptureEpoch& acEpoch) noexcept
+{
+    if (!IsCheckpointCaptureEpochActive(acEpoch))
+        return false;
+
+    const auto* active = m_session.GetCoordinator().GetActive();
+    if (!active ||
+        active->State != PartyQuestRuntimeApplyState::AwaitingCheckpoint ||
+        active->CheckpointCreated ||
+        active->RuntimeMutationMayHaveOccurred)
+    {
+        return false;
+    }
+
+    m_checkpointCaptureEpoch = {};
+    return true;
 }
 
 PartyQuestRuntimeCheckpointResult
@@ -224,13 +360,16 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::ArmRuntimeMutation
     uint64_t aTransactionId) noexcept
 {
     const auto* active = m_session.GetCoordinator().GetActive();
-    if (!active ||
+    if (m_checkpointCaptureEpoch.IsVerified() ||
+        !active ||
         active->TransactionId != aTransactionId ||
         !active->SaveGuardActive ||
         !HasGuard(aTransactionId))
     {
         PartyQuestRuntimeGuardResult result;
-        result.Status = PartyQuestRuntimeGuardStatus::GuardMismatch;
+        result.Status = m_checkpointCaptureEpoch.IsVerified()
+            ? PartyQuestRuntimeGuardStatus::InvalidState
+            : PartyQuestRuntimeGuardStatus::GuardMismatch;
         result.TransactionId = aTransactionId;
         result.GuardHeld = HasGuard(aTransactionId);
         return result;
@@ -285,6 +424,7 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::Commit(
     auto result = Transition(aTransactionId, m_session.Commit(aTransactionId));
     if (result.TransitionStatus == PartyQuestRuntimeDurableTransitionStatus::Applied)
     {
+        m_checkpointCaptureEpoch = {};
         if (!m_saveGuard.Release(aTransactionId))
             result.Status = PartyQuestRuntimeGuardStatus::GuardReleaseFailed;
         result.GuardHeld = HasGuard(aTransactionId);
@@ -322,11 +462,15 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::AbortBeforeMutatio
 
     const bool hadGuard = active->SaveGuardActive;
     auto result = Transition(aTransactionId, m_session.AbortBeforeMutation(aTransactionId));
-    if (result.TransitionStatus == PartyQuestRuntimeDurableTransitionStatus::Applied && hadGuard)
+    if (result.TransitionStatus == PartyQuestRuntimeDurableTransitionStatus::Applied)
     {
-        if (!m_saveGuard.Release(aTransactionId))
-            result.Status = PartyQuestRuntimeGuardStatus::GuardReleaseFailed;
-        result.GuardHeld = HasGuard(aTransactionId);
+        m_checkpointCaptureEpoch = {};
+        if (hadGuard)
+        {
+            if (!m_saveGuard.Release(aTransactionId))
+                result.Status = PartyQuestRuntimeGuardStatus::GuardReleaseFailed;
+            result.GuardHeld = HasGuard(aTransactionId);
+        }
     }
     return result;
 }
@@ -347,6 +491,7 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::CompleteLiveCheckp
         m_session.CompleteLiveCheckpointRestore(aTransactionId));
     if (result.TransitionStatus == PartyQuestRuntimeDurableTransitionStatus::Applied)
     {
+        m_checkpointCaptureEpoch = {};
         if (!m_saveGuard.Release(aTransactionId))
             result.Status = PartyQuestRuntimeGuardStatus::GuardReleaseFailed;
         result.GuardHeld = HasGuard(aTransactionId);
@@ -359,6 +504,14 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::ReconcileLoadedSta
     PartyQuestRuntimeGuardResult result;
     const auto& coordinator = m_session.GetCoordinator();
     const PartyQuestRuntimeApplyEntry* required = nullptr;
+
+    if (m_checkpointCaptureEpoch.IsVerified())
+    {
+        result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+        result.GuardHeld = m_saveGuard.IsActive();
+        result.TransactionId = m_checkpointCaptureEpoch.GetTransactionId();
+        return result;
+    }
 
     if (coordinator.IsRecoveryBlocked())
         required = coordinator.GetRecoveryRecord();
@@ -415,6 +568,7 @@ PartyQuestRuntimeRecoveryResult PartyQuestRuntimeGuardedSession::ResolveCrashRec
         acPaths);
     if (result.IsResolved())
     {
+        m_checkpointCaptureEpoch = {};
         if (!m_saveGuard.Release(transactionId))
             result.Status = PartyQuestRuntimeRecoveryStatus::SaveGuardReleaseFailed;
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestCheckpointCaptureEpoch.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCheckpoint.h>
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
 #include <Structs/Skyrim/PartyQuestSaveGuard.h>
@@ -84,6 +85,28 @@ public:
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkWorldReady(
         uint64_t aTransactionId) noexcept;
 
+    /**
+     * Begin one process-local logical checkpoint capture epoch for the exact
+     * AwaitingCheckpoint transaction/revision/sidecar contract. Overlapping
+     * epochs are rejected; callers must complete or explicitly abort the active
+     * epoch before recapturing.
+     */
+    [[nodiscard]] PartyQuestCheckpointCaptureEpochResult BeginCheckpointCaptureEpoch() noexcept;
+
+    [[nodiscard]] bool IsCheckpointCaptureEpochActive(
+        const PartyQuestCheckpointCaptureEpoch& acEpoch) const noexcept;
+
+    /**
+     * Release an epoch only after the durable checkpoint transition reached
+     * ReadyToApply. Runtime mutation remains blocked while any epoch is active.
+     */
+    [[nodiscard]] bool CompleteCheckpointCaptureEpoch(
+        const PartyQuestCheckpointCaptureEpoch& acEpoch) noexcept;
+
+    /** Safe recapture path while no checkpoint/mutation has been published. */
+    [[nodiscard]] bool AbortCheckpointCaptureEpoch(
+        const PartyQuestCheckpointCaptureEpoch& acEpoch) noexcept;
+
     /** Low-level publication gate; callers need assembler-issued coverage. */
     [[nodiscard]] PartyQuestRuntimeCheckpointResult EnsurePreRepairCheckpoint(
         const PartyQuestCoopSavePaths& acPaths,
@@ -161,4 +184,5 @@ private:
 
     PartyQuestRuntimeApplySession& m_session;
     PartyQuestSaveGuard& m_saveGuard;
+    PartyQuestCheckpointCaptureEpoch m_checkpointCaptureEpoch;
 };
