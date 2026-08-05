@@ -6,6 +6,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
+#include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 
@@ -67,6 +68,7 @@ PartyQuestRuntimeApplyRequest BuildSessionRequest(uint64_t aTransactionId, GameI
     PartyQuestRuntimeApplyRequest request;
     request.TransactionId = aTransactionId;
     request.TargetWorldRevision = 25;
+    request.SidecarManifestFingerprint = PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     request.CanonicalSnapshot = snapshot;
     request.Plan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(
         BuildSessionAdmission(aQuestId),

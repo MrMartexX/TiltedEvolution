@@ -1,3 +1,4 @@
+#include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimePreRepairCheckpoint.h>
 
 #include <party_quest_pre_repair_checkpoint_test_access.h>
@@ -81,6 +82,7 @@ PartyQuestRuntimeApplyRequest BuildAssemblerRequest(
     PartyQuestRuntimeApplyRequest request;
     request.TransactionId = aTransactionId;
     request.TargetWorldRevision = aWorldRevision;
+    request.SidecarManifestFingerprint = PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     request.CanonicalSnapshot = snapshot;
     request.Plan.Safety.Status = PartyQuestRuntimeSafetyStatus::RuntimeSafe;
     request.Plan.Safety.Reason = PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;

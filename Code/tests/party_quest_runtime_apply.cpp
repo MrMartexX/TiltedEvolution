@@ -6,6 +6,7 @@
 #include <glm/vec2.hpp>
 #include <glm/vec3.hpp>
 
+#include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeApply.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 
@@ -76,6 +77,7 @@ PartyQuestRuntimeApplyRequest BuildRuntimeRequest(
     PartyQuestRuntimeApplyRequest request;
     request.TransactionId = aTransactionId;
     request.TargetWorldRevision = 50;
+    request.SidecarManifestFingerprint = PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     request.CanonicalSnapshot = snapshot;
     request.Plan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(
         BuildRuntimeAdmission(aQuestId),
@@ -113,6 +115,7 @@ TEST_CASE("Runtime apply lifecycle refuses provisional stage-only plans", "[ques
     PartyQuestRuntimeApplyRequest request;
     request.TransactionId = 1001;
     request.TargetWorldRevision = 10;
+    request.SidecarManifestFingerprint = PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     request.CanonicalSnapshot = snapshot;
     request.Plan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(
         BuildRuntimeAdmission(questId),

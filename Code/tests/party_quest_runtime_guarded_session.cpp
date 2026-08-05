@@ -1,3 +1,4 @@
+#include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
 #include <catch2/catch.hpp>
@@ -28,6 +29,7 @@ PartyQuestRuntimeApplyRequest BuildGuardRequest(
     PartyQuestRuntimeApplyRequest request;
     request.TransactionId = aTransactionId;
     request.TargetWorldRevision = 1800 + aTransactionId;
+    request.SidecarManifestFingerprint = PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     request.CanonicalSnapshot = snapshot;
     request.Plan.Safety.Status = PartyQuestRuntimeSafetyStatus::RuntimeSafe;
     request.Plan.Safety.Reason = PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;
