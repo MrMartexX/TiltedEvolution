@@ -1,6 +1,36 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 
 #include <algorithm>
+#include <type_traits>
+
+namespace
+{
+constexpr uint64_t kFnvOffset = 1469598103934665603ull;
+constexpr uint64_t kFnvPrime = 1099511628211ull;
+
+void HashBytes(uint64_t& aHash, const void* apData, size_t aSize) noexcept
+{
+    const auto* bytes = static_cast<const uint8_t*>(apData);
+    for (size_t i = 0; i < aSize; ++i)
+    {
+        aHash ^= bytes[i];
+        aHash *= kFnvPrime;
+    }
+}
+
+template <class T>
+void HashValue(uint64_t& aHash, const T& acValue) noexcept
+{
+    static_assert(std::is_trivially_copyable_v<T>);
+    HashBytes(aHash, &acValue, sizeof(T));
+}
+
+bool IsValidMode(PartyQuestCheckpointSidecarRequirementMode aMode) noexcept
+{
+    return aMode == PartyQuestCheckpointSidecarRequirementMode::Required ||
+        aMode == PartyQuestCheckpointSidecarRequirementMode::Optional;
+}
+} // namespace
 
 bool PartyQuestCheckpointSidecarPolicy::IsValidRequirement(
     const PartyQuestCheckpointSidecarRequirement& acRequirement) noexcept
@@ -8,7 +38,8 @@ bool PartyQuestCheckpointSidecarPolicy::IsValidRequirement(
     return acRequirement.CapabilityId != 0 &&
         acRequirement.SchemaVersion != 0 &&
         acRequirement.ProviderFingerprint != 0 &&
-        acRequirement.RestoreAdapterFingerprint != 0;
+        acRequirement.RestoreAdapterFingerprint != 0 &&
+        IsValidMode(acRequirement.Mode);
 }
 
 bool PartyQuestCheckpointSidecarPolicy::IsValidFacts(
@@ -127,4 +158,36 @@ PartyQuestCheckpointSidecarManifest::GetRequirements() const
         return acLeft.CapabilityId < acRight.CapabilityId;
     });
     return requirements;
+}
+
+uint64_t PartyQuestCheckpointSidecarManifest::ComputeFingerprint() const noexcept
+{
+    try
+    {
+        uint64_t hash = kFnvOffset;
+        const auto requirements = GetRequirements();
+        const uint64_t count = static_cast<uint64_t>(requirements.size());
+        HashValue(hash, count);
+
+        for (const auto& requirement : requirements)
+        {
+            if (!PartyQuestCheckpointSidecarPolicy::IsValidRequirement(requirement))
+                return 0;
+
+            HashValue(hash, requirement.CapabilityId);
+            HashValue(hash, requirement.SchemaVersion);
+            HashValue(hash, requirement.ProviderFingerprint);
+            HashValue(hash, requirement.RestoreAdapterFingerprint);
+            const auto mode = static_cast<uint8_t>(requirement.Mode);
+            HashValue(hash, mode);
+        }
+
+        // FNV is not an authentication primitive; this value is only an
+        // internal deterministic contract identity. Reserve zero as invalid.
+        return hash != 0 ? hash : 1;
+    }
+    catch (...)
+    {
+        return 0;
+    }
 }
