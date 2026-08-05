@@ -515,6 +515,12 @@ PartyQuestCheckpointSidecarMirrorCollector::Collect(
         for (const auto& capture : acCaptures)
         {
             const uint64_t capabilityId = capture.Authorization.GetCapabilityId();
+            if (!capture.Authorization.SupportsCoherentCapture())
+            {
+                return Fail(
+                    PartyQuestCheckpointSidecarMirrorStatus::CaptureConsistencyUnavailable,
+                    capabilityId);
+            }
             if (capture.CaptureEpochId != acEpoch.GetEpochId())
             {
                 return Fail(

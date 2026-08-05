@@ -30,6 +30,14 @@ bool IsValidMode(PartyQuestCheckpointSidecarRequirementMode aMode) noexcept
     return aMode == PartyQuestCheckpointSidecarRequirementMode::Required ||
         aMode == PartyQuestCheckpointSidecarRequirementMode::Optional;
 }
+
+bool IsValidCaptureConsistency(
+    PartyQuestCheckpointSidecarCaptureConsistency aConsistency) noexcept
+{
+    return aConsistency == PartyQuestCheckpointSidecarCaptureConsistency::Unspecified ||
+        aConsistency == PartyQuestCheckpointSidecarCaptureConsistency::AtomicSnapshot ||
+        aConsistency == PartyQuestCheckpointSidecarCaptureConsistency::FrozenUntilEpochRelease;
+}
 } // namespace
 
 bool PartyQuestCheckpointSidecarPolicy::IsValidRequirement(
@@ -48,7 +56,8 @@ bool PartyQuestCheckpointSidecarPolicy::IsValidFacts(
     return acFacts.CapabilityId != 0 &&
         acFacts.SchemaVersion != 0 &&
         acFacts.ProviderFingerprint != 0 &&
-        acFacts.RestoreAdapterFingerprint != 0;
+        acFacts.RestoreAdapterFingerprint != 0 &&
+        IsValidCaptureConsistency(acFacts.CaptureConsistency);
 }
 
 PartyQuestCheckpointSidecarDecision PartyQuestCheckpointSidecarPolicy::Evaluate(
@@ -119,7 +128,8 @@ PartyQuestCheckpointSidecarDecision PartyQuestCheckpointSidecarPolicy::Evaluate(
         acRequirement.CapabilityId,
         acRequirement.SchemaVersion,
         acRequirement.ProviderFingerprint,
-        acRequirement.RestoreAdapterFingerprint);
+        acRequirement.RestoreAdapterFingerprint,
+        apFacts->CaptureConsistency);
     return decision;
 }
 

@@ -14,6 +14,25 @@ enum class PartyQuestCheckpointSidecarRequirementMode : uint8_t
 };
 
 /**
+ * Local temporal-consistency contract implemented by a trusted sidecar
+ * provider. This is intentionally not part of the network manifest: the server
+ * requires restorable capability identity, while the client chooses how its
+ * local adapter obtains a coherent snapshot.
+ *
+ * AtomicSnapshot means the provider can materialize one immutable logical state
+ * without requiring an externally held freeze. FrozenUntilEpochRelease means
+ * the provider contract requires its live state to remain quiesced/frozen until
+ * the logical checkpoint capture epoch is released. Unspecified is diagnostic
+ * only and is rejected by the production epoch-bound mirror collector.
+ */
+enum class PartyQuestCheckpointSidecarCaptureConsistency : uint8_t
+{
+    Unspecified,
+    AtomicSnapshot,
+    FrozenUntilEpochRelease
+};
+
+/**
  * Network/campaign-safe description of one external state capability that may
  * participate in a save checkpoint. It intentionally contains no filesystem
  * path. A server/profile can require a capability, but cannot make a client read
@@ -38,6 +57,11 @@ struct PartyQuestCheckpointSidecarRequirement
 /**
  * Local evidence registered by a trusted sidecar provider/native adapter. No
  * path is carried here; path binding is a separate local-only layer.
+ *
+ * CaptureConsistency is a provider contract, not a timestamp label. Production
+ * epoch-bound checkpoint capture accepts only AtomicSnapshot or
+ * FrozenUntilEpochRelease. Unspecified remains available for legacy diagnostic
+ * capability checks that cannot cross the production PreRepair assembler.
  */
 struct PartyQuestCheckpointSidecarFacts
 {
@@ -45,6 +69,8 @@ struct PartyQuestCheckpointSidecarFacts
     uint32_t SchemaVersion{};
     uint64_t ProviderFingerprint{};
     uint64_t RestoreAdapterFingerprint{};
+    PartyQuestCheckpointSidecarCaptureConsistency CaptureConsistency{
+        PartyQuestCheckpointSidecarCaptureConsistency::Unspecified};
     bool CaptureAvailable{};
     bool RestoreAvailable{};
 
@@ -68,7 +94,8 @@ enum class PartyQuestCheckpointSidecarStatus : uint8_t
 
 /**
  * Capability authorization token. Callers can only construct an unverified
- * default token; exact verified capability identity is issued by the policy.
+ * default token; exact verified capability identity and the trusted provider's
+ * local capture-consistency contract are issued by the policy.
  */
 class PartyQuestCheckpointSidecarAuthorization final
 {
@@ -83,17 +110,29 @@ public:
     {
         return m_restoreAdapterFingerprint;
     }
+    [[nodiscard]] PartyQuestCheckpointSidecarCaptureConsistency GetCaptureConsistency() const noexcept
+    {
+        return m_captureConsistency;
+    }
+    [[nodiscard]] bool SupportsCoherentCapture() const noexcept
+    {
+        return m_verified &&
+            (m_captureConsistency == PartyQuestCheckpointSidecarCaptureConsistency::AtomicSnapshot ||
+             m_captureConsistency == PartyQuestCheckpointSidecarCaptureConsistency::FrozenUntilEpochRelease);
+    }
 
 private:
     PartyQuestCheckpointSidecarAuthorization(
         uint64_t aCapabilityId,
         uint32_t aSchemaVersion,
         uint64_t aProviderFingerprint,
-        uint64_t aRestoreAdapterFingerprint) noexcept
+        uint64_t aRestoreAdapterFingerprint,
+        PartyQuestCheckpointSidecarCaptureConsistency aCaptureConsistency) noexcept
         : m_capabilityId(aCapabilityId)
         , m_schemaVersion(aSchemaVersion)
         , m_providerFingerprint(aProviderFingerprint)
         , m_restoreAdapterFingerprint(aRestoreAdapterFingerprint)
+        , m_captureConsistency(aCaptureConsistency)
         , m_verified(true)
     {
     }
@@ -102,6 +141,8 @@ private:
     uint32_t m_schemaVersion{};
     uint64_t m_providerFingerprint{};
     uint64_t m_restoreAdapterFingerprint{};
+    PartyQuestCheckpointSidecarCaptureConsistency m_captureConsistency{
+        PartyQuestCheckpointSidecarCaptureConsistency::Unspecified};
     bool m_verified{};
 
     friend class PartyQuestCheckpointSidecarPolicy;
@@ -139,6 +180,10 @@ public:
     /**
      * Evaluate one requirement. Passing nullptr is an explicit statement that
      * the local provider/capability is unavailable.
+     *
+     * A verified authorization with Unspecified consistency is intentionally
+     * usable only by legacy diagnostics. Production epoch-bound collection also
+     * requires Authorization::SupportsCoherentCapture().
      */
     [[nodiscard]] static PartyQuestCheckpointSidecarDecision Evaluate(
         const PartyQuestCheckpointSidecarRequirement& acRequirement,

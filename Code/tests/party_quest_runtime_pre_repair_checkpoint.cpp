@@ -153,6 +153,7 @@ PartyQuestCheckpointSidecarAuthorization AuthorizeSidecar(
     facts.SchemaVersion = acRequirement.SchemaVersion;
     facts.ProviderFingerprint = acRequirement.ProviderFingerprint;
     facts.RestoreAdapterFingerprint = acRequirement.RestoreAdapterFingerprint;
+    facts.CaptureConsistency = PartyQuestCheckpointSidecarCaptureConsistency::AtomicSnapshot;
     facts.CaptureAvailable = true;
     facts.RestoreAvailable = true;
     const auto decision = PartyQuestCheckpointSidecarPolicy::Evaluate(

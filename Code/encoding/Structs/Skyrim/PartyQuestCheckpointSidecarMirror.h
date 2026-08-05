@@ -20,6 +20,9 @@ class PartyQuestCheckpointSidecarMirrorCollector;
  * CaptureEpochId is mandatory for the production epoch-bound collector. A zero
  * value is accepted only by the legacy diagnostic overload, which cannot cross
  * the runtime PreRepair publication gate.
+ *
+ * For production use, Authorization must also carry an explicit coherent
+ * provider contract: AtomicSnapshot or FrozenUntilEpochRelease.
  */
 struct PartyQuestCheckpointSidecarCapture
 {
@@ -36,6 +39,7 @@ enum class PartyQuestCheckpointSidecarMirrorStatus : uint8_t
     InvalidContext,
     InvalidLayout,
     CaptureEpochMismatch,
+    CaptureConsistencyUnavailable,
     UnexpectedCapability,
     DuplicateCapabilityCapture,
     MissingRequiredCapture,
@@ -127,8 +131,10 @@ struct PartyQuestCheckpointSidecarMirrorResult
  * co-op replica. This layer never reads arbitrary external plugin paths.
  *
  * The epoch-bound overload is the only form accepted by the runtime PreRepair
- * assembler. The legacy tx/revision overload remains for isolated diagnostics
- * and produces an epochless authorization that the assembler rejects.
+ * assembler. In addition to epoch identity it requires each present provider to
+ * carry an explicit coherent-capture contract. The legacy tx/revision overload
+ * remains for isolated diagnostics and produces an epochless authorization that
+ * the assembler rejects.
  */
 class PartyQuestCheckpointSidecarMirrorCollector final
 {
