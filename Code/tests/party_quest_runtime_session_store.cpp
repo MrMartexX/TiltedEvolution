@@ -1,3 +1,4 @@
+#include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionStore.h>
 
 #include <catch2/catch.hpp>
@@ -211,14 +212,17 @@ TEST_CASE("Runtime store never silently promotes a stale backup-only journal", "
                 first) == PartyQuestRuntimeApplyPersistenceStatus::Success);
 
     auto second = first;
-    second.Committed.push_back({
-        23004,
-        1730,
-        GameId(61, 0x2000),
-        0xDEADBEEF12345678ull,
-        PartyQuestApplyAction::StageTransition |
-            PartyQuestApplyAction::WaitForPapyrusQuiescence |
-            PartyQuestApplyAction::ResnapshotAndVerify});
+    PartyQuestRuntimeCommittedRecord committed;
+    committed.TransactionId = 23004;
+    committed.TargetWorldRevision = 1730;
+    committed.QuestId = GameId(61, 0x2000);
+    committed.CanonicalDigest = 0xDEADBEEF12345678ull;
+    committed.SidecarManifestFingerprint =
+        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
+    committed.Actions = PartyQuestApplyAction::StageTransition |
+        PartyQuestApplyAction::WaitForPapyrusQuiescence |
+        PartyQuestApplyAction::ResnapshotAndVerify;
+    second.Committed.push_back(committed);
     REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(
                 paths.RuntimeApplySidecar,
                 second) == PartyQuestRuntimeApplyPersistenceStatus::Success);
