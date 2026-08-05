@@ -157,6 +157,13 @@ public:
     /** Stable capability-id ordering for deterministic coverage/checkpoint plans. */
     [[nodiscard]] std::vector<PartyQuestCheckpointSidecarRequirement> GetRequirements() const;
 
+    /**
+     * Stable non-zero fingerprint of the authoritative requirement set. The
+     * explicit empty manifest also has a non-zero fingerprint, so zero remains
+     * reserved for "no contract was bound to this transaction".
+     */
+    [[nodiscard]] uint64_t ComputeFingerprint() const noexcept;
+
     [[nodiscard]] size_t GetRequirementCount() const noexcept
     {
         return m_requirements.size();
