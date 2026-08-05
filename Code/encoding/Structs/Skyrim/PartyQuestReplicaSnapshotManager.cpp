@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 
+#include <optional>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -28,6 +29,12 @@ enum class PartialRevisionPublicationRecovery : uint8_t
     CleanupFailed
 };
 
+struct PublishedRevisionFile
+{
+    size_t OperationIndex{};
+    std::filesystem::path ConfinedPath;
+};
+
 std::filesystem::path ExpectedRevisionDestinationRoot(
     const PartyQuestCoopSavePaths& acPaths,
     PartyQuestCheckpointKind aKind,
@@ -46,6 +53,127 @@ std::filesystem::path ExpectedRevisionDestinationRoot(
     return revisionRoot / "saves";
 }
 
+std::optional<std::filesystem::path> ResolveConfinedRevisionDestination(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
+    const PartyQuestReplicaCopyOperation& acOperation) noexcept
+{
+    try
+    {
+        std::error_code ec;
+        const auto root = std::filesystem::absolute(acPaths.Root, ec).lexically_normal();
+        if (ec || root.empty())
+            return std::nullopt;
+
+        ec.clear();
+        const auto playerRoot = std::filesystem::absolute(
+            acPaths.PlayerDirectory,
+            ec).lexically_normal();
+        if (ec || playerRoot.empty() ||
+            !PartyQuestReplicaFilePlanner::IsContainedBy(root, playerRoot))
+        {
+            return std::nullopt;
+        }
+
+        const auto expectedRootRaw = ExpectedRevisionDestinationRoot(
+            acPaths,
+            aKind,
+            aCampaignWorldRevision,
+            acOperation.Kind);
+        ec.clear();
+        const auto expectedRoot = std::filesystem::absolute(
+            expectedRootRaw,
+            ec).lexically_normal();
+        if (ec || expectedRoot.empty() ||
+            !PartyQuestReplicaFilePlanner::IsContainedBy(playerRoot, expectedRoot))
+        {
+            return std::nullopt;
+        }
+
+        ec.clear();
+        const auto destination = std::filesystem::absolute(
+            acOperation.DestinationPath,
+            ec).lexically_normal();
+        if (ec || destination.empty() ||
+            !PartyQuestReplicaFilePlanner::IsContainedBy(expectedRoot, destination))
+        {
+            return std::nullopt;
+        }
+
+        ec.clear();
+        const auto canonicalRoot = std::filesystem::weakly_canonical(root, ec);
+        if (ec || canonicalRoot.empty())
+            return std::nullopt;
+
+        ec.clear();
+        const auto canonicalPlayerRoot = std::filesystem::weakly_canonical(playerRoot, ec);
+        const auto playerRelative = playerRoot.lexically_relative(root).lexically_normal();
+        const auto expectedCanonicalPlayerRoot =
+            (canonicalRoot / playerRelative).lexically_normal();
+        if (ec || canonicalPlayerRoot.empty() ||
+            !PartyQuestReplicaFilePlanner::IsSafeRelativePath(playerRelative) ||
+            canonicalPlayerRoot != expectedCanonicalPlayerRoot)
+        {
+            return std::nullopt;
+        }
+
+        ec.clear();
+        const auto canonicalExpectedRoot = std::filesystem::weakly_canonical(expectedRoot, ec);
+        const auto expectedRelative = expectedRoot.lexically_relative(playerRoot).lexically_normal();
+        const auto expectedCanonicalRoot =
+            (canonicalPlayerRoot / expectedRelative).lexically_normal();
+        if (ec || canonicalExpectedRoot.empty() ||
+            !PartyQuestReplicaFilePlanner::IsSafeRelativePath(expectedRelative) ||
+            canonicalExpectedRoot != expectedCanonicalRoot)
+        {
+            return std::nullopt;
+        }
+
+        const auto destinationRelative =
+            destination.lexically_relative(expectedRoot).lexically_normal();
+        if (!PartyQuestReplicaFilePlanner::IsSafeRelativePath(destinationRelative))
+            return std::nullopt;
+
+        const auto confinedDestination =
+            (canonicalExpectedRoot / destinationRelative).lexically_normal();
+        ec.clear();
+        const auto canonicalParent = std::filesystem::weakly_canonical(
+            destination.parent_path(),
+            ec);
+        if (ec || canonicalParent.empty() ||
+            canonicalParent != confinedDestination.parent_path())
+        {
+            return std::nullopt;
+        }
+
+        return confinedDestination;
+    }
+    catch (...)
+    {
+        return std::nullopt;
+    }
+}
+
+bool MatchesPublishedRevisionFile(
+    const std::filesystem::path& acPath,
+    const PartyQuestReplicaCopyOperation& acOperation) noexcept
+{
+    std::error_code ec;
+    const auto status = std::filesystem::symlink_status(acPath, ec);
+    if (ec ||
+        std::filesystem::is_symlink(status) ||
+        !std::filesystem::is_regular_file(status))
+    {
+        return false;
+    }
+
+    const auto observed = PartyQuestReplicaFileExecutor::ObserveRegularFile(acPath);
+    return observed &&
+        observed->Size == acOperation.ExpectedSize &&
+        observed->Digest == acOperation.ExpectedDigest;
+}
+
 /**
  * A revision checkpoint becomes authoritative only when its manifest exists.
  * If the process dies between individual final-file renames, the next retry may
@@ -53,13 +181,13 @@ std::filesystem::path ExpectedRevisionDestinationRoot(
  * can only be recovered when every published file still matches the immutable
  * plan byte-for-byte and at least one expected destination is still missing.
  *
- * The cleanup does not trust a mutable ready plan. It independently confines
- * every destination to the exact revision/type namespace before inspecting or
- * deleting anything. Removing only that exact verified subset is restart-safe:
- * another crash while cleaning merely leaves a smaller exact subset which the
- * same algorithm can classify and clean again. Any mismatching, symlink,
- * non-regular or out-of-namespace destination remains evidence of a conflict
- * and is never removed automatically.
+ * The cleanup does not trust a mutable ready plan or post-crash directory
+ * topology. Every destination is resolved through the configured co-op root,
+ * player root and exact revision/type namespace. A symlink/reparse-point change
+ * below the configured root is therefore a conflict, even when the bytes at the
+ * redirected destination happen to match. The entire published subset is
+ * revalidated before the first remove so ambiguous evidence is never partially
+ * cleaned merely because an earlier operation happened to verify first.
  */
 PartialRevisionPublicationRecovery RecoverExactPartialRevisionPublication(
     const PartyQuestCoopSavePaths& acPaths,
@@ -69,31 +197,23 @@ PartialRevisionPublicationRecovery RecoverExactPartialRevisionPublication(
 {
     try
     {
-        std::vector<std::filesystem::path> published;
+        std::vector<PublishedRevisionFile> published;
         published.reserve(acPlan.Operations.size());
         bool sawMissing{};
 
-        for (const auto& operation : acPlan.Operations)
+        for (size_t i = 0; i < acPlan.Operations.size(); ++i)
         {
-            const auto expectedRoot = ExpectedRevisionDestinationRoot(
+            const auto& operation = acPlan.Operations[i];
+            const auto confined = ResolveConfinedRevisionDestination(
                 acPaths,
                 aKind,
                 aCampaignWorldRevision,
-                operation.Kind);
-            if (expectedRoot.empty() ||
-                !expectedRoot.is_absolute() ||
-                !operation.DestinationPath.is_absolute() ||
-                !PartyQuestReplicaFilePlanner::IsContainedBy(
-                    expectedRoot,
-                    operation.DestinationPath))
-            {
+                operation);
+            if (!confined)
                 return PartialRevisionPublicationRecovery::Conflict;
-            }
 
             std::error_code ec;
-            const auto status = std::filesystem::symlink_status(
-                operation.DestinationPath,
-                ec);
+            const auto status = std::filesystem::symlink_status(*confined, ec);
             if (status.type() == std::filesystem::file_type::not_found ||
                 IsMissingError(ec))
             {
@@ -101,23 +221,10 @@ PartialRevisionPublicationRecovery RecoverExactPartialRevisionPublication(
                 continue;
             }
 
-            if (ec ||
-                std::filesystem::is_symlink(status) ||
-                !std::filesystem::is_regular_file(status))
-            {
+            if (!MatchesPublishedRevisionFile(*confined, operation))
                 return PartialRevisionPublicationRecovery::Conflict;
-            }
 
-            const auto observed = PartyQuestReplicaFileExecutor::ObserveRegularFile(
-                operation.DestinationPath);
-            if (!observed ||
-                observed->Size != operation.ExpectedSize ||
-                observed->Digest != operation.ExpectedDigest)
-            {
-                return PartialRevisionPublicationRecovery::Conflict;
-            }
-
-            published.push_back(operation.DestinationPath);
+            published.push_back({i, *confined});
         }
 
         // No final file exists: normal fresh execution. No expected file is
@@ -125,10 +232,29 @@ PartialRevisionPublicationRecovery RecoverExactPartialRevisionPublication(
         if (published.empty() || !sawMissing)
             return PartialRevisionPublicationRecovery::NotPartial;
 
-        for (const auto& path : published)
+        // Re-resolve and re-hash the entire subset before the first deletion.
+        // This makes a post-classification topology/byte change fail closed
+        // without deleting any earlier verified evidence from this invocation.
+        for (const auto& file : published)
+        {
+            const auto& operation = acPlan.Operations[file.OperationIndex];
+            const auto confined = ResolveConfinedRevisionDestination(
+                acPaths,
+                aKind,
+                aCampaignWorldRevision,
+                operation);
+            if (!confined ||
+                *confined != file.ConfinedPath ||
+                !MatchesPublishedRevisionFile(*confined, operation))
+            {
+                return PartialRevisionPublicationRecovery::Conflict;
+            }
+        }
+
+        for (const auto& file : published)
         {
             std::error_code ec;
-            if (std::filesystem::remove(path, ec))
+            if (std::filesystem::remove(file.ConfinedPath, ec))
                 continue;
             if (IsMissingError(ec))
                 continue;
@@ -136,7 +262,9 @@ PartialRevisionPublicationRecovery RecoverExactPartialRevisionPublication(
                 return PartialRevisionPublicationRecovery::CleanupFailed;
 
             std::error_code statusError;
-            const auto status = std::filesystem::symlink_status(path, statusError);
+            const auto status = std::filesystem::symlink_status(
+                file.ConfinedPath,
+                statusError);
             if (status.type() == std::filesystem::file_type::not_found ||
                 IsMissingError(statusError))
             {

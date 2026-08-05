@@ -130,3 +130,96 @@ TEST_CASE("Escaped revision destination is rejected before partial cleanup", "[q
             PartyQuestCheckpointKind::PreRepair,
             910)));
 }
+
+TEST_CASE("Partial revision cleanup rejects a symlinked revision destination root", "[quest.party-state.revision-checkpoint][crash][confinement]")
+{
+    CleanupSandbox sandbox;
+    const auto paths = PartyQuestCoopSaveLayout::Build(
+        sandbox.Root / "CoopCampaigns",
+        kCleanupCampaign,
+        kCleanupPlayer);
+    REQUIRE(paths.has_value());
+
+    WriteCleanupFile(paths->SavesDirectory / "Hero.ess", "CLEANUP_SYMLINK_ESS");
+    WriteCleanupFile(paths->SavesDirectory / "Hero.skse", "CLEANUP_SYMLINK_SKSE");
+
+    const auto ess = PartyQuestReplicaFileExecutor::InspectSource(
+        PartyQuestReplicaFileKind::SkyrimSave,
+        paths->SavesDirectory / "Hero.ess",
+        "Hero.ess");
+    const auto skse = PartyQuestReplicaFileExecutor::InspectSource(
+        PartyQuestReplicaFileKind::SkseCosave,
+        paths->SavesDirectory / "Hero.skse",
+        "Hero.skse");
+    REQUIRE(ess.has_value());
+    REQUIRE(skse.has_value());
+
+    const auto plan = PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(
+        *paths,
+        PartyQuestCheckpointKind::PreRepair,
+        911,
+        {*ess, *skse});
+    REQUIRE(plan.IsReady());
+    REQUIRE(plan.Operations.size() == 2);
+
+    const auto revisionSaves = plan.Operations[0].DestinationPath.parent_path();
+    REQUIRE(plan.Operations[1].DestinationPath.parent_path() == revisionSaves);
+
+    const auto external = sandbox.Root / "external_revision_saves";
+    std::error_code ec;
+    std::filesystem::create_directories(external, ec);
+    REQUIRE_FALSE(ec);
+    REQUIRE(std::filesystem::copy_file(
+        plan.Operations[0].SourcePath,
+        external / plan.Operations[0].DestinationPath.filename(),
+        std::filesystem::copy_options::none,
+        ec));
+    REQUIRE_FALSE(ec);
+
+    std::filesystem::create_directories(revisionSaves.parent_path(), ec);
+    REQUIRE_FALSE(ec);
+    std::filesystem::create_directory_symlink(external, revisionSaves, ec);
+#ifdef _WIN32
+    if (ec)
+    {
+        WARN("Directory symlink creation unavailable on this Windows runner: " << ec.message());
+        return;
+    }
+#else
+    REQUIRE_FALSE(ec);
+#endif
+
+    const auto externalPublished =
+        external / plan.Operations[0].DestinationPath.filename();
+    const auto externalBefore = PartyQuestReplicaFileExecutor::ObserveRegularFile(
+        externalPublished);
+    REQUIRE(externalBefore.has_value());
+    REQUIRE(externalBefore->Size == plan.Operations[0].ExpectedSize);
+    REQUIRE(externalBefore->Digest == plan.Operations[0].ExpectedDigest);
+    REQUIRE_FALSE(std::filesystem::exists(
+        external / plan.Operations[1].DestinationPath.filename()));
+
+    // ExecuteRevisionCheckpoint sees the exact first destination through the
+    // symlink and returns DestinationExists. VerifyRevisionCheckpoint then sees
+    // an exact partial set. Recovery must independently reject the redirected
+    // revision root instead of deleting the matching external file.
+    PartyQuestReplicaSnapshotManager manager(
+        *paths,
+        kCleanupCampaign,
+        kCleanupPlayer);
+    const auto result = manager.EnsureRevisionCheckpoint(
+        PartyQuestCheckpointKind::PreRepair,
+        911,
+        plan);
+    REQUIRE(result.Status == PartyQuestReplicaSnapshotStatus::FileVerificationFailed);
+
+    const auto externalAfter = PartyQuestReplicaFileExecutor::ObserveRegularFile(
+        externalPublished);
+    REQUIRE(externalAfter == externalBefore);
+    REQUIRE(std::filesystem::is_symlink(std::filesystem::symlink_status(revisionSaves)));
+    REQUIRE_FALSE(std::filesystem::exists(
+        PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
+            *paths,
+            PartyQuestCheckpointKind::PreRepair,
+            911)));
+}
