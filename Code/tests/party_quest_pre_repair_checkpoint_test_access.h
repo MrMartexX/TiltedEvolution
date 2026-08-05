@@ -5,6 +5,7 @@
 class PartyQuestRuntimePreRepairCheckpointTestAccess final
 {
 public:
+    /** Legacy diagnostic authorization; production assembler rejects epochless proof. */
     [[nodiscard]] static PartyQuestRuntimePreRepairCoreAuthorization MakeCoreAuthorization(
         uint64_t aTransactionId,
         uint64_t aTargetWorldRevision,
@@ -14,6 +15,13 @@ public:
             aTransactionId,
             aTargetWorldRevision,
             acCoreFiles);
+    }
+
+    [[nodiscard]] static PartyQuestRuntimePreRepairCoreAuthorization MakeCoreAuthorization(
+        const PartyQuestCheckpointCaptureEpoch& acEpoch,
+        const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept
+    {
+        return PartyQuestRuntimePreRepairCoreAuthorization(acEpoch, acCoreFiles);
     }
 
     [[nodiscard]] static PartyQuestRuntimeCheckpointCoverageAuthorization MakeCoverageAuthorization(

@@ -185,6 +185,27 @@ PartyQuestRuntimePreRepairCoreAuthorization(
 {
 }
 
+PartyQuestRuntimePreRepairCoreAuthorization::
+PartyQuestRuntimePreRepairCoreAuthorization(
+    const PartyQuestCheckpointCaptureEpoch& acEpoch,
+    const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept
+    : m_captureEpochId(acEpoch.GetEpochId())
+    , m_transactionId(acEpoch.GetTransactionId())
+    , m_targetWorldRevision(acEpoch.GetTargetWorldRevision())
+    , m_sidecarManifestFingerprint(acEpoch.GetSidecarManifestFingerprint())
+    , m_filesFingerprint(ComputeFilesFingerprint(acCoreFiles))
+    , m_fileCount(acCoreFiles.size())
+    , m_verified(
+          acEpoch.IsVerified() &&
+          m_captureEpochId != 0 &&
+          m_transactionId != 0 &&
+          m_targetWorldRevision != 0 &&
+          m_sidecarManifestFingerprint != 0 &&
+          !acCoreFiles.empty() &&
+          m_filesFingerprint != 0)
+{
+}
+
 bool PartyQuestRuntimePreRepairCoreAuthorization::Matches(
     uint64_t aTransactionId,
     uint64_t aTargetWorldRevision,
@@ -197,10 +218,26 @@ bool PartyQuestRuntimePreRepairCoreAuthorization::Matches(
         ComputeFilesFingerprint(acCoreFiles) == m_filesFingerprint;
 }
 
+bool PartyQuestRuntimePreRepairCoreAuthorization::Matches(
+    const PartyQuestCheckpointCaptureEpoch& acEpoch,
+    const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) const noexcept
+{
+    return m_verified &&
+        m_captureEpochId != 0 &&
+        acEpoch.IsVerified() &&
+        acEpoch.GetEpochId() == m_captureEpochId &&
+        acEpoch.GetTransactionId() == m_transactionId &&
+        acEpoch.GetTargetWorldRevision() == m_targetWorldRevision &&
+        acEpoch.GetSidecarManifestFingerprint() == m_sidecarManifestFingerprint &&
+        acCoreFiles.size() == m_fileCount &&
+        ComputeFilesFingerprint(acCoreFiles) == m_filesFingerprint;
+}
+
 PartyQuestRuntimePreRepairCheckpointResult
 PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
     PartyQuestRuntimeGuardedSession& aGuardedSession,
     const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCheckpointCaptureEpoch& acEpoch,
     const PartyQuestRuntimePreRepairCoreAuthorization& acCoreAuthorization,
     const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles,
     const PartyQuestCheckpointSidecarManifest& acSidecarManifest,
@@ -233,6 +270,16 @@ PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
             return result;
         }
 
+        if (!aGuardedSession.IsCheckpointCaptureEpochActive(acEpoch) ||
+            !acEpoch.MatchesContext(
+                active->TransactionId,
+                active->TargetWorldRevision,
+                active->SidecarManifestFingerprint))
+        {
+            result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidCaptureEpoch;
+            return result;
+        }
+
         if (!PartyQuestCoopSaveLayout::Matches(
                 acPaths,
                 session.GetCampaignId(),
@@ -245,16 +292,14 @@ PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
         const uint64_t sidecarManifestFingerprint =
             acSidecarManifest.ComputeFingerprint();
         if (sidecarManifestFingerprint == 0 ||
-            sidecarManifestFingerprint != active->SidecarManifestFingerprint)
+            sidecarManifestFingerprint != active->SidecarManifestFingerprint ||
+            sidecarManifestFingerprint != acEpoch.GetSidecarManifestFingerprint())
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::SidecarManifestMismatch;
             return result;
         }
 
-        if (!acCoreAuthorization.Matches(
-                active->TransactionId,
-                active->TargetWorldRevision,
-                acCoreFiles))
+        if (!acCoreAuthorization.Matches(acEpoch, acCoreFiles))
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidCoreAuthorization;
             return result;
@@ -263,8 +308,7 @@ PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
         if (!acSidecars.IsReady() ||
             !acSidecars.Authorization.Matches(
                 acSidecarManifest,
-                active->TransactionId,
-                active->TargetWorldRevision,
+                acEpoch,
                 acSidecars.Files))
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidSidecarAuthorization;
@@ -313,9 +357,19 @@ PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
             acPaths,
             plan,
             coverage);
-        result.Status = result.Checkpoint.IsReady()
-            ? PartyQuestRuntimePreRepairCheckpointStatus::Ready
-            : PartyQuestRuntimePreRepairCheckpointStatus::CheckpointFailed;
+        if (!result.Checkpoint.IsReady())
+        {
+            result.Status = PartyQuestRuntimePreRepairCheckpointStatus::CheckpointFailed;
+            return result;
+        }
+
+        if (!aGuardedSession.CompleteCheckpointCaptureEpoch(acEpoch))
+        {
+            result.Status = PartyQuestRuntimePreRepairCheckpointStatus::CaptureEpochCloseFailed;
+            return result;
+        }
+
+        result.Status = PartyQuestRuntimePreRepairCheckpointStatus::Ready;
         return result;
     }
     catch (...)

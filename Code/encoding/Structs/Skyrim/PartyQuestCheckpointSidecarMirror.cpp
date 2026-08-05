@@ -179,6 +179,28 @@ PartyQuestCheckpointSidecarMirrorAuthorization(
 {
 }
 
+PartyQuestCheckpointSidecarMirrorAuthorization::
+PartyQuestCheckpointSidecarMirrorAuthorization(
+    const PartyQuestCheckpointSidecarManifest& acManifest,
+    const PartyQuestCheckpointCaptureEpoch& acEpoch,
+    const std::vector<PartyQuestReplicaFileSpec>& acFiles) noexcept
+    : m_captureEpochId(acEpoch.GetEpochId())
+    , m_transactionId(acEpoch.GetTransactionId())
+    , m_targetWorldRevision(acEpoch.GetTargetWorldRevision())
+    , m_manifestFingerprint(ComputeManifestFingerprint(acManifest))
+    , m_filesFingerprint(ComputeFilesFingerprint(acFiles))
+    , m_fileCount(acFiles.size())
+    , m_verified(
+          acEpoch.IsVerified() &&
+          m_captureEpochId != 0 &&
+          m_transactionId != 0 &&
+          m_targetWorldRevision != 0 &&
+          m_manifestFingerprint != 0 &&
+          m_manifestFingerprint == acEpoch.GetSidecarManifestFingerprint() &&
+          m_filesFingerprint != 0)
+{
+}
+
 bool PartyQuestCheckpointSidecarMirrorAuthorization::Matches(
     const PartyQuestCheckpointSidecarManifest& acManifest,
     uint64_t aTransactionId,
@@ -188,6 +210,27 @@ bool PartyQuestCheckpointSidecarMirrorAuthorization::Matches(
     if (!m_verified ||
         aTransactionId != m_transactionId ||
         aTargetWorldRevision != m_targetWorldRevision ||
+        acFiles.size() != m_fileCount)
+    {
+        return false;
+    }
+
+    return ComputeManifestFingerprint(acManifest) == m_manifestFingerprint &&
+        ComputeFilesFingerprint(acFiles) == m_filesFingerprint;
+}
+
+bool PartyQuestCheckpointSidecarMirrorAuthorization::Matches(
+    const PartyQuestCheckpointSidecarManifest& acManifest,
+    const PartyQuestCheckpointCaptureEpoch& acEpoch,
+    const std::vector<PartyQuestReplicaFileSpec>& acFiles) const noexcept
+{
+    if (!m_verified ||
+        m_captureEpochId == 0 ||
+        !acEpoch.IsVerified() ||
+        acEpoch.GetEpochId() != m_captureEpochId ||
+        acEpoch.GetTransactionId() != m_transactionId ||
+        acEpoch.GetTargetWorldRevision() != m_targetWorldRevision ||
+        acEpoch.GetSidecarManifestFingerprint() != m_manifestFingerprint ||
         acFiles.size() != m_fileCount)
     {
         return false;
@@ -439,6 +482,74 @@ PartyQuestCheckpointSidecarMirrorCollector::Collect(
             result.Files);
         if (!result.Authorization.IsVerified())
             return Fail(PartyQuestCheckpointSidecarMirrorStatus::SourceInspectionFailed);
+        return result;
+    }
+    catch (...)
+    {
+        return Fail(PartyQuestCheckpointSidecarMirrorStatus::SourceInspectionFailed);
+    }
+}
+
+PartyQuestCheckpointSidecarMirrorResult
+PartyQuestCheckpointSidecarMirrorCollector::Collect(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCheckpointSidecarManifest& acManifest,
+    const PartyQuestCheckpointCaptureEpoch& acEpoch,
+    const std::vector<PartyQuestCheckpointSidecarCapture>& acCaptures) noexcept
+{
+    try
+    {
+        const uint64_t manifestFingerprint =
+            PartyQuestCheckpointSidecarMirrorAuthorization::ComputeManifestFingerprint(
+                acManifest);
+        if (!acEpoch.IsVerified() ||
+            manifestFingerprint == 0 ||
+            !acEpoch.MatchesContext(
+                acEpoch.GetTransactionId(),
+                acEpoch.GetTargetWorldRevision(),
+                manifestFingerprint))
+        {
+            return Fail(PartyQuestCheckpointSidecarMirrorStatus::InvalidContext);
+        }
+
+        for (const auto& capture : acCaptures)
+        {
+            const uint64_t capabilityId = capture.Authorization.GetCapabilityId();
+            if (capture.CaptureEpochId != acEpoch.GetEpochId())
+            {
+                return Fail(
+                    PartyQuestCheckpointSidecarMirrorStatus::CaptureEpochMismatch,
+                    capabilityId);
+            }
+            if (capture.TransactionId != acEpoch.GetTransactionId())
+            {
+                return Fail(
+                    PartyQuestCheckpointSidecarMirrorStatus::TransactionMismatch,
+                    capabilityId);
+            }
+            if (capture.TargetWorldRevision != acEpoch.GetTargetWorldRevision())
+            {
+                return Fail(
+                    PartyQuestCheckpointSidecarMirrorStatus::WorldRevisionMismatch,
+                    capabilityId);
+            }
+        }
+
+        auto result = Collect(
+            acPaths,
+            acManifest,
+            acEpoch.GetTransactionId(),
+            acEpoch.GetTargetWorldRevision(),
+            acCaptures);
+        if (!result.IsReady())
+            return result;
+
+        result.Authorization = PartyQuestCheckpointSidecarMirrorAuthorization(
+            acManifest,
+            acEpoch,
+            result.Files);
+        if (!result.Authorization.IsVerified())
+            return Fail(PartyQuestCheckpointSidecarMirrorStatus::InvalidContext);
         return result;
     }
     catch (...)
