@@ -28,6 +28,24 @@ enum class PartialRevisionPublicationRecovery : uint8_t
     CleanupFailed
 };
 
+std::filesystem::path ExpectedRevisionDestinationRoot(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
+    PartyQuestReplicaFileKind aFileKind) noexcept
+{
+    const auto revisionRoot = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        acPaths,
+        aKind,
+        aCampaignWorldRevision);
+    if (revisionRoot.empty())
+        return {};
+
+    if (aFileKind == PartyQuestReplicaFileKind::ExternalSidecar)
+        return revisionRoot / "sidecars" / "external";
+    return revisionRoot / "saves";
+}
+
 /**
  * A revision checkpoint becomes authoritative only when its manifest exists.
  * If the process dies between individual final-file renames, the next retry may
@@ -35,12 +53,18 @@ enum class PartialRevisionPublicationRecovery : uint8_t
  * can only be recovered when every published file still matches the immutable
  * plan byte-for-byte and at least one expected destination is still missing.
  *
- * Removing only that exact verified subset is restart-safe: another crash while
- * cleaning merely leaves a smaller exact subset which the same algorithm can
- * classify and clean again. Any mismatching, symlink or non-regular destination
- * remains evidence of a conflict and is never removed automatically.
+ * The cleanup does not trust a mutable ready plan. It independently confines
+ * every destination to the exact revision/type namespace before inspecting or
+ * deleting anything. Removing only that exact verified subset is restart-safe:
+ * another crash while cleaning merely leaves a smaller exact subset which the
+ * same algorithm can classify and clean again. Any mismatching, symlink,
+ * non-regular or out-of-namespace destination remains evidence of a conflict
+ * and is never removed automatically.
  */
 PartialRevisionPublicationRecovery RecoverExactPartialRevisionPublication(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
     const PartyQuestReplicaCopyPlan& acPlan) noexcept
 {
     try
@@ -51,6 +75,21 @@ PartialRevisionPublicationRecovery RecoverExactPartialRevisionPublication(
 
         for (const auto& operation : acPlan.Operations)
         {
+            const auto expectedRoot = ExpectedRevisionDestinationRoot(
+                acPaths,
+                aKind,
+                aCampaignWorldRevision,
+                operation.Kind);
+            if (expectedRoot.empty() ||
+                !expectedRoot.is_absolute() ||
+                !operation.DestinationPath.is_absolute() ||
+                !PartyQuestReplicaFilePlanner::IsContainedBy(
+                    expectedRoot,
+                    operation.DestinationPath))
+            {
+                return PartialRevisionPublicationRecovery::Conflict;
+            }
+
             std::error_code ec;
             const auto status = std::filesystem::symlink_status(
                 operation.DestinationPath,
@@ -317,7 +356,11 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
             }
             else if (aCheckpoint && aRevisionScoped)
             {
-                const auto recovery = RecoverExactPartialRevisionPublication(acPlan);
+                const auto recovery = RecoverExactPartialRevisionPublication(
+                    m_paths,
+                    aKind,
+                    aCampaignWorldRevision,
+                    acPlan);
                 if (recovery == PartialRevisionPublicationRecovery::CleanupFailed)
                 {
                     result.Status = PartyQuestReplicaSnapshotStatus::CopyFailed;
