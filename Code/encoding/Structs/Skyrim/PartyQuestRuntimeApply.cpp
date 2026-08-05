@@ -17,6 +17,7 @@ PartyQuestRuntimeApplyCoordinator::ValidateAndFingerprint(
 {
     if (acRequest.TransactionId == 0 ||
         acRequest.TargetWorldRevision == 0 ||
+        acRequest.SidecarManifestFingerprint == 0 ||
         !acRequest.CanonicalSnapshot.QuestId ||
         acRequest.CanonicalSnapshot.Revision == 0)
     {
@@ -37,6 +38,7 @@ PartyQuestRuntimeApplyCoordinator::ValidateAndFingerprint(
     fingerprint.QuestId = canonical.QuestId;
     fingerprint.TargetWorldRevision = acRequest.TargetWorldRevision;
     fingerprint.CanonicalDigest = canonical.ComputeDigest();
+    fingerprint.SidecarManifestFingerprint = acRequest.SidecarManifestFingerprint;
     fingerprint.Actions = acRequest.Plan.Actions;
     return fingerprint;
 }
@@ -49,6 +51,7 @@ PartyQuestRuntimeApplyCoordinator::FingerprintActive(
     fingerprint.QuestId = acEntry.QuestId;
     fingerprint.TargetWorldRevision = acEntry.TargetWorldRevision;
     fingerprint.CanonicalDigest = acEntry.CanonicalDigest;
+    fingerprint.SidecarManifestFingerprint = acEntry.SidecarManifestFingerprint;
     fingerprint.Actions = acEntry.Actions;
     return fingerprint;
 }
@@ -60,6 +63,7 @@ bool PartyQuestRuntimeApplyCoordinator::ValidateRecoveryEntry(
         acEntry.TargetWorldRevision == 0 ||
         !acEntry.QuestId ||
         acEntry.CanonicalDigest == 0 ||
+        acEntry.SidecarManifestFingerprint == 0 ||
         acEntry.Actions == PartyQuestApplyAction::None)
     {
         return false;
@@ -112,6 +116,7 @@ PartyQuestRuntimeApplyBeginStatus PartyQuestRuntimeApplyCoordinator::Begin(
 
     if (acRequest.TransactionId == 0 ||
         acRequest.TargetWorldRevision == 0 ||
+        acRequest.SidecarManifestFingerprint == 0 ||
         !acRequest.CanonicalSnapshot.QuestId ||
         acRequest.CanonicalSnapshot.Revision == 0)
     {
@@ -154,6 +159,7 @@ PartyQuestRuntimeApplyBeginStatus PartyQuestRuntimeApplyCoordinator::Begin(
     entry.TargetWorldRevision = acRequest.TargetWorldRevision;
     entry.QuestId = fingerprint->QuestId;
     entry.CanonicalDigest = fingerprint->CanonicalDigest;
+    entry.SidecarManifestFingerprint = fingerprint->SidecarManifestFingerprint;
     entry.Actions = fingerprint->Actions;
 
     if (RequiresWorldTargets(acRequest.Plan))
@@ -318,6 +324,7 @@ PartyQuestRuntimeRecoveryState PartyQuestRuntimeApplyCoordinator::ExportRecovery
             fingerprint.TargetWorldRevision,
             fingerprint.QuestId,
             fingerprint.CanonicalDigest,
+            fingerprint.SidecarManifestFingerprint,
             fingerprint.Actions});
     }
 
@@ -365,6 +372,7 @@ PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplyCoordinator::RestoreR
             record.TargetWorldRevision == 0 ||
             !record.QuestId ||
             record.CanonicalDigest == 0 ||
+            record.SidecarManifestFingerprint == 0 ||
             record.Actions == PartyQuestApplyAction::None ||
             !transactionIds.emplace(record.TransactionId).second)
         {
@@ -376,6 +384,7 @@ PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplyCoordinator::RestoreR
         fingerprint.QuestId = record.QuestId;
         fingerprint.TargetWorldRevision = record.TargetWorldRevision;
         fingerprint.CanonicalDigest = record.CanonicalDigest;
+        fingerprint.SidecarManifestFingerprint = record.SidecarManifestFingerprint;
         fingerprint.Actions = record.Actions;
         m_committed.emplace(record.TransactionId, fingerprint);
     }
