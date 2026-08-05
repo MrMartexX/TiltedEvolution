@@ -262,6 +262,8 @@ TEST_CASE("Loaded crash recovery reconstructs save guard and unresolved recovery
     recovery.TargetWorldRevision = 1907;
     recovery.QuestId = GameId(71, 0x3000);
     recovery.CanonicalDigest = 0xCAFEBABE12345678ull;
+    recovery.SidecarManifestFingerprint =
+        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     recovery.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;

@@ -368,6 +368,8 @@ TEST_CASE("Inconsistent recovery markers fail closed", "[quest.party-state.runti
     active.TargetWorldRevision = 150;
     active.QuestId = GameId(18, 0x1000);
     active.CanonicalDigest = 0x12345678;
+    active.SidecarManifestFingerprint =
+        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     active.Actions = PartyQuestApplyAction::AdapterManaged |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;

@@ -56,6 +56,8 @@ PartyQuestRuntimeApplyEntry BuildStoreEntry(
     entry.TargetWorldRevision = aWorldRevision;
     entry.QuestId = GameId(61, static_cast<uint32_t>(0x1000 + aTransactionId));
     entry.CanonicalDigest = 0xBADC0FFEE0000000ull ^ aTransactionId;
+    entry.SidecarManifestFingerprint =
+        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     entry.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;

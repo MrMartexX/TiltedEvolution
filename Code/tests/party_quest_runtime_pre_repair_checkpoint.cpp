@@ -67,7 +67,8 @@ void WriteBytes(const std::filesystem::path& acPath, const char* acBytes)
 
 PartyQuestRuntimeApplyRequest BuildAssemblerRequest(
     uint64_t aTransactionId,
-    uint64_t aWorldRevision)
+    uint64_t aWorldRevision,
+    const PartyQuestCheckpointSidecarManifest& acSidecarManifest = {})
 {
     QuestSnapshot snapshot;
     snapshot.QuestId = GameId(81, static_cast<uint32_t>(0x4000 + aTransactionId));
@@ -82,7 +83,7 @@ PartyQuestRuntimeApplyRequest BuildAssemblerRequest(
     PartyQuestRuntimeApplyRequest request;
     request.TransactionId = aTransactionId;
     request.TargetWorldRevision = aWorldRevision;
-    request.SidecarManifestFingerprint = PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
+    request.SidecarManifestFingerprint = acSidecarManifest.ComputeFingerprint();
     request.CanonicalSnapshot = snapshot;
     request.Plan.Safety.Status = PartyQuestRuntimeSafetyStatus::RuntimeSafe;
     request.Plan.Safety.Reason = PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;
@@ -231,7 +232,9 @@ TEST_CASE("Required sidecar absence cannot advance full PreRepair coverage", "[q
     auto session = BuildAssemblerSession();
     PartyQuestSaveGuard saveGuard;
     PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
-    const auto request = BuildAssemblerRequest(26002, 36002);
+    PartyQuestCheckpointSidecarManifest manifest;
+    REQUIRE(manifest.AddRequirement(BuildRequiredSidecarRequirement()));
+    const auto request = BuildAssemblerRequest(26002, 36002, manifest);
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
 
     const auto coreFiles = BuildCoreFiles(sandbox);
@@ -241,8 +244,6 @@ TEST_CASE("Required sidecar absence cannot advance full PreRepair coverage", "[q
             request.TargetWorldRevision,
             coreFiles);
 
-    PartyQuestCheckpointSidecarManifest manifest;
-    REQUIRE(manifest.AddRequirement(BuildRequiredSidecarRequirement()));
     const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(
         sandbox.Paths,
         manifest,
@@ -273,7 +274,10 @@ TEST_CASE("Exact required sidecar mirror is included before checkpoint publicati
     auto session = BuildAssemblerSession();
     PartyQuestSaveGuard saveGuard;
     PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
-    const auto request = BuildAssemblerRequest(26003, 36003);
+    const auto requirement = BuildRequiredSidecarRequirement();
+    PartyQuestCheckpointSidecarManifest manifest;
+    REQUIRE(manifest.AddRequirement(requirement));
+    const auto request = BuildAssemblerRequest(26003, 36003, manifest);
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
 
     const auto coreFiles = BuildCoreFiles(sandbox);
@@ -283,9 +287,6 @@ TEST_CASE("Exact required sidecar mirror is included before checkpoint publicati
             request.TargetWorldRevision,
             coreFiles);
 
-    const auto requirement = BuildRequiredSidecarRequirement();
-    PartyQuestCheckpointSidecarManifest manifest;
-    REQUIRE(manifest.AddRequirement(requirement));
     const auto sidecars = CollectRequiredSidecar(
         sandbox,
         manifest,

@@ -1,3 +1,4 @@
+#include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 
@@ -57,6 +58,8 @@ PartyQuestRuntimeRecoveryState BuildIntegrityRecoveryState(uint64_t aWorldRevisi
     active.TargetWorldRevision = aWorldRevision;
     active.QuestId = GameId(52, 0x1000);
     active.CanonicalDigest = 0x1234567890ABCDEFull;
+    active.SidecarManifestFingerprint =
+        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     active.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
