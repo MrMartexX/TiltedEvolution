@@ -21,9 +21,10 @@ enum class PartyQuestCheckpointSidecarRequirementMode : uint8_t
  *
  * AtomicSnapshot means the provider can materialize one immutable logical state
  * without requiring an externally held freeze. FrozenUntilEpochRelease means
- * the provider contract requires its live state to remain quiesced/frozen until
- * the logical checkpoint capture epoch is released. Unspecified is diagnostic
- * only and is rejected by the production epoch-bound mirror collector.
+ * the provider requires a real freeze lease spanning the logical checkpoint
+ * capture epoch. That lease/release orchestration is not wired yet, so the
+ * production collector currently accepts AtomicSnapshot only and fails closed
+ * for FrozenUntilEpochRelease. Unspecified is diagnostic only.
  */
 enum class PartyQuestCheckpointSidecarCaptureConsistency : uint8_t
 {
@@ -59,9 +60,10 @@ struct PartyQuestCheckpointSidecarRequirement
  * path is carried here; path binding is a separate local-only layer.
  *
  * CaptureConsistency is a provider contract, not a timestamp label. Production
- * epoch-bound checkpoint capture accepts only AtomicSnapshot or
- * FrozenUntilEpochRelease. Unspecified remains available for legacy diagnostic
- * capability checks that cannot cross the production PreRepair assembler.
+ * epoch-bound checkpoint capture currently accepts only AtomicSnapshot.
+ * Unspecified remains available for legacy diagnostic capability checks;
+ * FrozenUntilEpochRelease remains represented so future freeze orchestration can
+ * be added without pretending the capability is already safe today.
  */
 struct PartyQuestCheckpointSidecarFacts
 {
@@ -116,9 +118,16 @@ public:
     }
     [[nodiscard]] bool SupportsCoherentCapture() const noexcept
     {
+        // Atomic providers are self-contained. Freeze-based providers are
+        // intentionally rejected until a real epoch-scoped freeze lease and
+        // release hook are part of the production capture orchestration.
         return m_verified &&
-            (m_captureConsistency == PartyQuestCheckpointSidecarCaptureConsistency::AtomicSnapshot ||
-             m_captureConsistency == PartyQuestCheckpointSidecarCaptureConsistency::FrozenUntilEpochRelease);
+            m_captureConsistency == PartyQuestCheckpointSidecarCaptureConsistency::AtomicSnapshot;
+    }
+    [[nodiscard]] bool RequiresEpochFreeze() const noexcept
+    {
+        return m_verified &&
+            m_captureConsistency == PartyQuestCheckpointSidecarCaptureConsistency::FrozenUntilEpochRelease;
     }
 
 private:
@@ -181,8 +190,8 @@ public:
      * Evaluate one requirement. Passing nullptr is an explicit statement that
      * the local provider/capability is unavailable.
      *
-     * A verified authorization with Unspecified consistency is intentionally
-     * usable only by legacy diagnostics. Production epoch-bound collection also
+     * A verified authorization can describe diagnostic-only Unspecified or a
+     * future freeze-based provider, but production epoch-bound collection also
      * requires Authorization::SupportsCoherentCapture().
      */
     [[nodiscard]] static PartyQuestCheckpointSidecarDecision Evaluate(

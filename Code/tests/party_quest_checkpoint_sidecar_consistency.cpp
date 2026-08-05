@@ -66,7 +66,7 @@ PartyQuestRuntimeApplyRequest BuildConsistencyRequest(
 }
 } // namespace
 
-TEST_CASE("Sidecar provider explicitly declares its coherent capture contract", "[quest.party-state.sidecar-consistency]")
+TEST_CASE("Sidecar provider explicitly declares its capture consistency contract", "[quest.party-state.sidecar-consistency]")
 {
     const auto requirement = BuildConsistencyRequirement();
 
@@ -81,6 +81,7 @@ TEST_CASE("Sidecar provider explicitly declares its coherent capture contract", 
         REQUIRE(decision.Authorization.GetCaptureConsistency() ==
             PartyQuestCheckpointSidecarCaptureConsistency::Unspecified);
         REQUIRE_FALSE(decision.Authorization.SupportsCoherentCapture());
+        REQUIRE_FALSE(decision.Authorization.RequiresEpochFreeze());
     }
 
     SECTION("atomic snapshot is production-coherent")
@@ -94,9 +95,10 @@ TEST_CASE("Sidecar provider explicitly declares its coherent capture contract", 
         REQUIRE(decision.Authorization.GetCaptureConsistency() ==
             PartyQuestCheckpointSidecarCaptureConsistency::AtomicSnapshot);
         REQUIRE(decision.Authorization.SupportsCoherentCapture());
+        REQUIRE_FALSE(decision.Authorization.RequiresEpochFreeze());
     }
 
-    SECTION("freeze until epoch release is production-coherent")
+    SECTION("freeze-required provider is recognized but fail-closed until lease orchestration exists")
     {
         const auto facts = BuildConsistencyFacts(
             PartyQuestCheckpointSidecarCaptureConsistency::FrozenUntilEpochRelease);
@@ -106,7 +108,8 @@ TEST_CASE("Sidecar provider explicitly declares its coherent capture contract", 
         REQUIRE(decision.IsAuthorized());
         REQUIRE(decision.Authorization.GetCaptureConsistency() ==
             PartyQuestCheckpointSidecarCaptureConsistency::FrozenUntilEpochRelease);
-        REQUIRE(decision.Authorization.SupportsCoherentCapture());
+        REQUIRE_FALSE(decision.Authorization.SupportsCoherentCapture());
+        REQUIRE(decision.Authorization.RequiresEpochFreeze());
     }
 }
 
@@ -126,7 +129,7 @@ TEST_CASE("Unknown sidecar consistency mode is invalid provider evidence", "[que
     REQUIRE_FALSE(decision.IsAuthorized());
 }
 
-TEST_CASE("Production epoch collector rejects unspecified sidecar consistency before filesystem access", "[quest.party-state.sidecar-consistency][capture-epoch]")
+TEST_CASE("Production epoch collector rejects sidecar consistency without a complete production capture contract", "[quest.party-state.sidecar-consistency][capture-epoch]")
 {
     PartyQuestCheckpointSidecarManifest manifest;
     const auto requirement = BuildConsistencyRequirement();
@@ -148,29 +151,33 @@ TEST_CASE("Production epoch collector rejects unspecified sidecar consistency be
     REQUIRE(epochResult.IsReady());
     const auto epoch = epochResult.Epoch;
 
-    const auto facts = BuildConsistencyFacts(
-        PartyQuestCheckpointSidecarCaptureConsistency::Unspecified);
-    const auto decision = PartyQuestCheckpointSidecarPolicy::Evaluate(
-        requirement,
-        &facts);
-    REQUIRE(decision.IsAuthorized());
-    REQUIRE_FALSE(decision.Authorization.SupportsCoherentCapture());
+    for (const auto unsupported : {
+             PartyQuestCheckpointSidecarCaptureConsistency::Unspecified,
+             PartyQuestCheckpointSidecarCaptureConsistency::FrozenUntilEpochRelease})
+    {
+        const auto facts = BuildConsistencyFacts(unsupported);
+        const auto decision = PartyQuestCheckpointSidecarPolicy::Evaluate(
+            requirement,
+            &facts);
+        REQUIRE(decision.IsAuthorized());
+        REQUIRE_FALSE(decision.Authorization.SupportsCoherentCapture());
 
-    PartyQuestCheckpointSidecarCapture capture;
-    capture.Authorization = decision.Authorization;
-    capture.CaptureEpochId = epoch.GetEpochId();
-    capture.TransactionId = epoch.GetTransactionId();
-    capture.TargetWorldRevision = epoch.GetTargetWorldRevision();
-    capture.MirrorRelativeFiles = {"Capability_434F484552454E54/state.bin"};
+        PartyQuestCheckpointSidecarCapture capture;
+        capture.Authorization = decision.Authorization;
+        capture.CaptureEpochId = epoch.GetEpochId();
+        capture.TransactionId = epoch.GetTransactionId();
+        capture.TargetWorldRevision = epoch.GetTargetWorldRevision();
+        capture.MirrorRelativeFiles = {"Capability_434F484552454E54/state.bin"};
 
-    const PartyQuestCoopSavePaths invalidPaths;
-    const auto result = PartyQuestCheckpointSidecarMirrorCollector::Collect(
-        invalidPaths,
-        manifest,
-        epoch,
-        {capture});
-    REQUIRE(result.Status ==
-        PartyQuestCheckpointSidecarMirrorStatus::CaptureConsistencyUnavailable);
-    REQUIRE(result.FailedCapabilityId == requirement.CapabilityId);
-    REQUIRE(guarded.IsCheckpointCaptureEpochActive(epoch));
+        const PartyQuestCoopSavePaths invalidPaths;
+        const auto result = PartyQuestCheckpointSidecarMirrorCollector::Collect(
+            invalidPaths,
+            manifest,
+            epoch,
+            {capture});
+        REQUIRE(result.Status ==
+            PartyQuestCheckpointSidecarMirrorStatus::CaptureConsistencyUnavailable);
+        REQUIRE(result.FailedCapabilityId == requirement.CapabilityId);
+        REQUIRE(guarded.IsCheckpointCaptureEpochActive(epoch));
+    }
 }
