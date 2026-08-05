@@ -55,6 +55,14 @@ struct PartyQuestRuntimeApplyRequest
 {
     uint64_t TransactionId{};
     uint64_t TargetWorldRevision{};
+
+    /**
+     * Deterministic fingerprint of the authoritative sidecar requirement set
+     * selected before Begin(). Zero means no checkpoint-sidecar contract was
+     * bound and is invalid even when the intended manifest is empty.
+     */
+    uint64_t SidecarManifestFingerprint{};
+
     QuestSnapshot CanonicalSnapshot;
     PartyQuestApplyPlan Plan;
 };
@@ -65,6 +73,7 @@ struct PartyQuestRuntimeApplyEntry
     uint64_t TargetWorldRevision{};
     GameId QuestId{};
     uint64_t CanonicalDigest{};
+    uint64_t SidecarManifestFingerprint{};
     PartyQuestApplyAction Actions{PartyQuestApplyAction::None};
     PartyQuestRuntimeApplyState State{PartyQuestRuntimeApplyState::AwaitingCheckpoint};
     bool SaveGuardActive{};
@@ -82,6 +91,7 @@ struct PartyQuestRuntimeCommittedRecord
     uint64_t TargetWorldRevision{};
     GameId QuestId{};
     uint64_t CanonicalDigest{};
+    uint64_t SidecarManifestFingerprint{};
     PartyQuestApplyAction Actions{PartyQuestApplyAction::None};
 
     bool operator==(const PartyQuestRuntimeCommittedRecord&) const noexcept = default;
@@ -173,6 +183,7 @@ private:
         GameId QuestId{};
         uint64_t TargetWorldRevision{};
         uint64_t CanonicalDigest{};
+        uint64_t SidecarManifestFingerprint{};
         PartyQuestApplyAction Actions{PartyQuestApplyAction::None};
 
         bool operator==(const Fingerprint&) const noexcept = default;
