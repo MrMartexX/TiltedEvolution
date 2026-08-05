@@ -357,3 +357,70 @@ PartyQuestSkyrimPreRepairSave::CaptureCoreSource(
         return result;
     }
 }
+
+PartyQuestSkyrimPreRepairSaveResult
+PartyQuestSkyrimPreRepairSave::CaptureCoreSource(
+    PartyQuestRuntimeGuardedSession& aGuardedSession,
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCheckpointCaptureEpoch& acEpoch) noexcept
+{
+    PartyQuestSkyrimPreRepairSaveResult result;
+    result.CaptureEpochId = acEpoch.GetEpochId();
+    result.TransactionId = acEpoch.GetTransactionId();
+    result.TargetWorldRevision = acEpoch.GetTargetWorldRevision();
+
+    try
+    {
+        if (!acEpoch.IsVerified() ||
+            !aGuardedSession.IsCheckpointCaptureEpochActive(acEpoch))
+        {
+            result.Status = PartyQuestSkyrimPreRepairSaveStatus::CaptureEpochMismatch;
+            return result;
+        }
+
+        result = CaptureCoreSource(aGuardedSession, acPaths);
+        result.CaptureEpochId = acEpoch.GetEpochId();
+        if (!result.IsReady())
+            return result;
+
+        // SaveByName may execute nested engine work. Revalidate the exact epoch
+        // after returning instead of assuming the pre-save control-plane state
+        // is still current. A changed/aborted epoch leaves only confined orphan
+        // files and never yields a production-usable core capability.
+        if (result.TransactionId != acEpoch.GetTransactionId() ||
+            result.TargetWorldRevision != acEpoch.GetTargetWorldRevision() ||
+            !aGuardedSession.IsCheckpointCaptureEpochActive(acEpoch))
+        {
+            result.Status = PartyQuestSkyrimPreRepairSaveStatus::CaptureEpochMismatch;
+            result.Authorization = {};
+            return result;
+        }
+
+        result.Authorization = PartyQuestRuntimePreRepairCoreAuthorization(
+            acEpoch,
+            result.CoreFiles);
+        if (!result.Authorization.IsVerified() ||
+            !result.Authorization.Matches(acEpoch, result.CoreFiles))
+        {
+            result.Status = PartyQuestSkyrimPreRepairSaveStatus::SourceInspectionFailed;
+            result.Authorization = {};
+            return result;
+        }
+
+        result.Status = PartyQuestSkyrimPreRepairSaveStatus::Ready;
+        spdlog::info(
+            "PartyQuest bound PreRepair core save source to capture epoch: epoch={} transaction={} revision={} save={} skse={}",
+            result.CaptureEpochId,
+            result.TransactionId,
+            result.TargetWorldRevision,
+            result.SaveName,
+            result.IncludedSkseCosave);
+        return result;
+    }
+    catch (...)
+    {
+        result.Status = PartyQuestSkyrimPreRepairSaveStatus::SourceInspectionFailed;
+        result.Authorization = {};
+        return result;
+    }
+}
