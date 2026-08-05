@@ -218,7 +218,8 @@ PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
             active->CheckpointCreated ||
             active->RuntimeMutationMayHaveOccurred ||
             active->TransactionId == 0 ||
-            active->TargetWorldRevision == 0)
+            active->TargetWorldRevision == 0 ||
+            active->SidecarManifestFingerprint == 0)
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidRuntimeState;
             return result;
@@ -238,6 +239,15 @@ PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
                 session.GetPlayerProfileId()))
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidRuntimeState;
+            return result;
+        }
+
+        const uint64_t sidecarManifestFingerprint =
+            acSidecarManifest.ComputeFingerprint();
+        if (sidecarManifestFingerprint == 0 ||
+            sidecarManifestFingerprint != active->SidecarManifestFingerprint)
+        {
+            result.Status = PartyQuestRuntimePreRepairCheckpointStatus::SidecarManifestMismatch;
             return result;
         }
 
