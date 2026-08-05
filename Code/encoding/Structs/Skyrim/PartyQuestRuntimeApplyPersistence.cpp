@@ -10,7 +10,7 @@
 namespace
 {
 constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'R', 'A', 'P', 'P', 'L'};
-constexpr uint16_t kFormatVersion = 2;
+constexpr uint16_t kFormatVersion = 3;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
 constexpr uint64_t kMaxCommittedEntries = 1000000;
@@ -85,6 +85,7 @@ void WriteFingerprint(
     uint64_t aTargetWorldRevision,
     const GameId& acQuestId,
     uint64_t aCanonicalDigest,
+    uint64_t aSidecarManifestFingerprint,
     PartyQuestApplyAction aActions)
 {
     WriteInteger(aBytes, aTransactionId);
@@ -92,6 +93,7 @@ void WriteFingerprint(
     WriteInteger(aBytes, acQuestId.ModId);
     WriteInteger(aBytes, acQuestId.BaseId);
     WriteInteger(aBytes, aCanonicalDigest);
+    WriteInteger(aBytes, aSidecarManifestFingerprint);
     WriteInteger(aBytes, static_cast<uint32_t>(aActions));
 }
 
@@ -103,6 +105,7 @@ bool ReadFingerprint(
     uint64_t& aTargetWorldRevision,
     GameId& aQuestId,
     uint64_t& aCanonicalDigest,
+    uint64_t& aSidecarManifestFingerprint,
     PartyQuestApplyAction& aActions) noexcept
 {
     uint32_t modId{};
@@ -113,6 +116,7 @@ bool ReadFingerprint(
         !ReadInteger(acBytes, aOffset, aEnd, modId) ||
         !ReadInteger(acBytes, aOffset, aEnd, baseId) ||
         !ReadInteger(acBytes, aOffset, aEnd, aCanonicalDigest) ||
+        !ReadInteger(acBytes, aOffset, aEnd, aSidecarManifestFingerprint) ||
         !ReadInteger(acBytes, aOffset, aEnd, actions))
     {
         return false;
@@ -123,6 +127,7 @@ bool ReadFingerprint(
         aTargetWorldRevision == 0 ||
         !aQuestId ||
         aCanonicalDigest == 0 ||
+        aSidecarManifestFingerprint == 0 ||
         !IsValidActions(actions))
     {
         return false;
@@ -215,6 +220,7 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
             record.TargetWorldRevision == 0 ||
             !record.QuestId ||
             record.CanonicalDigest == 0 ||
+            record.SidecarManifestFingerprint == 0 ||
             !IsValidActions(static_cast<uint32_t>(record.Actions)) ||
             !transactionIds.emplace(record.TransactionId).second)
         {
@@ -227,6 +233,7 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
             record.TargetWorldRevision,
             record.QuestId,
             record.CanonicalDigest,
+            record.SidecarManifestFingerprint,
             record.Actions);
     }
 
@@ -238,6 +245,7 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
             active.TargetWorldRevision == 0 ||
             !active.QuestId ||
             active.CanonicalDigest == 0 ||
+            active.SidecarManifestFingerprint == 0 ||
             !IsValidActions(static_cast<uint32_t>(active.Actions)) ||
             !transactionIds.emplace(active.TransactionId).second)
         {
@@ -250,6 +258,7 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
             active.TargetWorldRevision,
             active.QuestId,
             active.CanonicalDigest,
+            active.SidecarManifestFingerprint,
             active.Actions);
         WriteInteger<uint8_t>(payload, static_cast<uint8_t>(active.State));
         WriteBool(payload, active.SaveGuardActive);
@@ -386,6 +395,7 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
                 record.TargetWorldRevision,
                 record.QuestId,
                 record.CanonicalDigest,
+                record.SidecarManifestFingerprint,
                 record.Actions))
         {
             result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
@@ -417,6 +427,7 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
                 active.TargetWorldRevision,
                 active.QuestId,
                 active.CanonicalDigest,
+                active.SidecarManifestFingerprint,
                 active.Actions) ||
             !transactionIds.emplace(active.TransactionId).second)
         {
