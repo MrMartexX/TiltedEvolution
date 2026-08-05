@@ -51,6 +51,7 @@ enum class PartyQuestRuntimePreRepairCheckpointStatus : uint8_t
     Ready,
     InvalidRuntimeState,
     GuardMismatch,
+    SidecarManifestMismatch,
     InvalidCoreAuthorization,
     InvalidSidecarAuthorization,
     InvalidCoreFileSet,
@@ -79,7 +80,8 @@ struct PartyQuestRuntimePreRepairCheckpointResult
  *
  * It accepts only:
  *  - a controlled core-save authorization issued by the Skyrim capture helper;
- *  - a sidecar coverage authorization issued by the exact manifest collector;
+ *  - the exact sidecar manifest fingerprint bound durably at Begin();
+ *  - a sidecar coverage authorization issued by that exact manifest collector;
  *  - the active guarded runtime transaction.
  *
  * It then validates source namespaces, combines the file sets, builds the exact
