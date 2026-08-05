@@ -47,7 +47,7 @@ void WriteCleanupFile(const std::filesystem::path& acPath, const std::string& ac
 }
 } // namespace
 
-TEST_CASE("Partial revision recovery revalidates every destination before cleanup", "[quest.party-state.revision-checkpoint][crash][confinement]")
+TEST_CASE("Escaped revision destination is rejected before partial cleanup", "[quest.party-state.revision-checkpoint][crash][confinement]")
 {
     CleanupSandbox sandbox;
     const auto paths = PartyQuestCoopSaveLayout::Build(
@@ -91,10 +91,9 @@ TEST_CASE("Partial revision recovery revalidates every destination before cleanu
         ec));
     REQUIRE_FALSE(ec);
 
-    // Mutate a later operation after planning. ExecuteRevisionCheckpoint sees
-    // the first DestinationExists before it can validate this operation. The
-    // recovery path therefore must independently reject the escaped path and
-    // must not delete either piece of evidence.
+    // Mutate a later operation after planning. The snapshot manager rebuilds
+    // the expected manifest before any copy/recovery attempt, so an escaped
+    // destination must fail closed as an invalid plan and preserve all evidence.
     const auto escaped = sandbox.Root / "outside.skse";
     REQUIRE(std::filesystem::copy_file(
         plan.Operations[1].SourcePath,
@@ -118,7 +117,7 @@ TEST_CASE("Partial revision recovery revalidates every destination before cleanu
         PartyQuestCheckpointKind::PreRepair,
         910,
         plan);
-    REQUIRE(result.Status == PartyQuestReplicaSnapshotStatus::FileVerificationFailed);
+    REQUIRE(result.Status == PartyQuestReplicaSnapshotStatus::InvalidPlan);
 
     const auto validPartialAfter = PartyQuestReplicaFileExecutor::ObserveRegularFile(
         plan.Operations[0].DestinationPath);
