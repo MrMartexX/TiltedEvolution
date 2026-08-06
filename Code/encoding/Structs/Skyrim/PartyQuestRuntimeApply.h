@@ -1,7 +1,7 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestCampaign.h>
-#include <Structs/Skyrim/PartyQuestPapyrusQuiescence.h>
+#include <Structs/Skyrim/PartyQuestPapyrusRuntimeMonitor.h>
 #include <Structs/Skyrim/PartyQuestPlayerProfile.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSafety.h>
 
@@ -133,9 +133,42 @@ public:
     bool MarkApplyDispatched(uint64_t aTransactionId) noexcept;
 
     /**
-     * Enters verification only by consuming authorization for the tracker's
-     * exact current stable observation. This is a process-local control-plane
-     * gate; trusted Skyrim/Papyrus observation is a separate integration layer.
+     * Production-capable quiescence transition. The monitor must be in an
+     * authoritative observer session and the supplied one-shot authorization
+     * must belong to its exact current stable observation.
+     */
+    bool MarkPapyrusQuiescent(
+        PartyQuestPapyrusRuntimeMonitor& aMonitor,
+        PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
+    {
+        const uint64_t transactionId = aAuthorization.GetTransactionId();
+        if (!m_active ||
+            transactionId == 0 ||
+            m_active->TransactionId != transactionId ||
+            m_active->State != PartyQuestRuntimeApplyState::WaitingForPapyrus ||
+            !m_active->SaveGuardActive ||
+            !m_active->CheckpointCreated ||
+            !m_active->RuntimeMutationMayHaveOccurred ||
+            aMonitor.GetTransactionId() != transactionId ||
+            aMonitor.GetStatus() != PartyQuestPapyrusRuntimeMonitorStatus::Quiescent ||
+            !aMonitor.IsAuthoritativeSession())
+        {
+            return false;
+        }
+
+        if (!aMonitor.ConsumeAuthoritative(std::move(aAuthorization)))
+            return false;
+
+        m_active->LastObservedDigest = 0;
+        m_active->StableCanonicalSamples = 0;
+        m_active->State = PartyQuestRuntimeApplyState::Verifying;
+        return true;
+    }
+
+    /**
+     * Diagnostic low-level transition retained for isolated state-machine tests.
+     * Production process-guard integration rejects this surface and requires the
+     * authoritative runtime-monitor overload above.
      */
     bool MarkPapyrusQuiescent(
         PartyQuestPapyrusQuiescenceTracker& aTracker,

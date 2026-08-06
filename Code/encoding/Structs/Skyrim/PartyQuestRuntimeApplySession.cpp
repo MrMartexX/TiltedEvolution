@@ -123,6 +123,24 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::ArmRunti
 }
 
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkPapyrusQuiescent(
+    PartyQuestPapyrusRuntimeMonitor& aMonitor,
+    PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization)
+{
+    PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
+    if (!candidate.MarkPapyrusQuiescent(aMonitor, std::move(aAuthorization)))
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+
+    // Trusted observation authorization is consumed before persistence. If
+    // durable publication fails, the live coordinator remains WaitingForPapyrus
+    // and the monitor must gather a fresh authoritative observation sequence.
+    if (!Persist(candidate))
+        return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
+
+    m_coordinator = std::move(candidate);
+    return PartyQuestRuntimeDurableTransitionStatus::Applied;
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkPapyrusQuiescent(
     PartyQuestPapyrusQuiescenceTracker& aTracker,
     PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization)
 {

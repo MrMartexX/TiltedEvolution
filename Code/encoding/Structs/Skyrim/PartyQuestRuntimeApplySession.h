@@ -42,6 +42,8 @@ struct PartyQuestRuntimeDurableVerificationResult
  * caller is allowed to invoke any Skyrim/Papyrus mutation.
  *
  * The session still does not call Skyrim, Papyrus, save APIs or file I/O itself.
+ * Production runtime integration must couple it to PartyQuestRuntimeGuardedSession
+ * so the physical process SaveGuard participates in every critical transition.
  */
 class PartyQuestRuntimeApplySession final
 {
@@ -67,6 +69,15 @@ public:
      */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutation(uint64_t aTransactionId);
 
+    /** Durable transition using capability-backed trusted runtime observations. */
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkPapyrusQuiescent(
+        PartyQuestPapyrusRuntimeMonitor& aMonitor,
+        PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization);
+
+    /**
+     * Diagnostic low-level surface retained for isolated state-machine tests.
+     * The process-guarded production wrapper rejects this path.
+     */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkPapyrusQuiescent(
         PartyQuestPapyrusQuiescenceTracker& aTracker,
         PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization);

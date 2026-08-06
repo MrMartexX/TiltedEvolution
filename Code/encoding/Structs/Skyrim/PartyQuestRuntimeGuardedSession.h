@@ -117,11 +117,58 @@ public:
     [[nodiscard]] PartyQuestRuntimeGuardResult ArmRuntimeMutation(
         uint64_t aTransactionId) noexcept;
 
+    /**
+     * Production quiescence gate. Only the process SaveGuard may cross into the
+     * authoritative monitor path; the monitor itself must then consume trusted
+     * observer-backed one-shot evidence before the durable transition occurs.
+     */
+    [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
+        PartyQuestPapyrusRuntimeMonitor& aMonitor,
+        PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
+    {
+        const uint64_t transactionId = aAuthorization.GetTransactionId();
+        const auto* active = m_session.GetCoordinator().GetActive();
+        auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+        if (&m_saveGuard != &processGuard ||
+            !active ||
+            transactionId == 0 ||
+            active->TransactionId != transactionId ||
+            !active->SaveGuardActive ||
+            !HasGuard(transactionId))
+        {
+            PartyQuestRuntimeGuardResult result;
+            result.Status = &m_saveGuard == &processGuard
+                ? PartyQuestRuntimeGuardStatus::GuardMismatch
+                : PartyQuestRuntimeGuardStatus::InvalidState;
+            result.TransactionId = transactionId;
+            result.GuardHeld = HasGuard(transactionId);
+            return result;
+        }
+
+        return Transition(
+            transactionId,
+            m_session.MarkPapyrusQuiescent(aMonitor, std::move(aAuthorization)));
+    }
+
+    /**
+     * Diagnostic low-level quiescence surface. It is deliberately rejected when
+     * this wrapper owns the real process SaveGuard, so manually observed tracker
+     * state cannot advance a production repair into Verifying.
+     */
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
         PartyQuestPapyrusQuiescenceTracker& aTracker,
         PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
     {
         const uint64_t transactionId = aAuthorization.GetTransactionId();
+        if (&m_saveGuard == &PartyQuestSaveGuard::GetProcessGuard())
+        {
+            PartyQuestRuntimeGuardResult result;
+            result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+            result.TransactionId = transactionId;
+            result.GuardHeld = HasGuard(transactionId);
+            return result;
+        }
+
         const auto* active = m_session.GetCoordinator().GetActive();
         if (!active ||
             transactionId == 0 ||
@@ -173,8 +220,8 @@ public:
         return m_saveGuard.CanSave(aKind);
     }
 
-    /** Read-only ownership bridge for the Skyrim-specific checkpoint creator. */
-    [[nodiscard]] PartyQuestRuntimeApplySession& GetRuntimeSession() noexcept
+    /** Read-only ownership bridge for Skyrim-specific checkpoint code. */
+    [[nodiscard]] const PartyQuestRuntimeApplySession& GetRuntimeSession() noexcept
     {
         return m_session;
     }
