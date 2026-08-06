@@ -134,7 +134,8 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
         PartyQuestRuntimeApplyState::WaitingForPapyrus);
 
     // The same transaction advances only after an exact-instance-authorized
-    // runtime monitor produces the stable one-shot observation proof.
+    // runtime monitor produces the stable one-shot observation proof, while the
+    // bounded verification window starts in the same guarded transition.
     ProcessIdleObserver observer(80);
     const auto observerAuthorization =
         PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(observer);
@@ -148,27 +149,43 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
     auto monitorAuthorization = monitor.Authorize();
     REQUIRE(monitorAuthorization.has_value());
 
+    PartyQuestRuntimeVerificationMonitor verificationMonitor;
     const auto accepted = guarded.MarkPapyrusQuiescent(
         monitor,
-        std::move(*monitorAuthorization));
+        std::move(*monitorAuthorization),
+        verificationMonitor,
+        120);
     REQUIRE(accepted.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(accepted.GuardHeld);
     REQUIRE_FALSE(monitorAuthorization->IsVerified());
     REQUIRE(monitor.GetStatus() == PartyQuestPapyrusRuntimeMonitorStatus::Inactive);
+    REQUIRE(verificationMonitor.GetTransactionId() == transactionId);
+    REQUIRE(verificationMonitor.GetStatus() ==
+        PartyQuestRuntimeVerificationMonitorStatus::Waiting);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::Verifying);
 
-    const auto first = guarded.SubmitResnapshot(
+    const auto first = guarded.SubmitVerificationResnapshot(
+        verificationMonitor,
         transactionId,
+        130,
         request.CanonicalSnapshot);
+    REQUIRE(first.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(first.Verification ==
         PartyQuestRuntimeVerificationStatus::NeedsStableSample);
+    REQUIRE(first.MonitorStatus ==
+        PartyQuestRuntimeVerificationMonitorStatus::Waiting);
     REQUIRE_FALSE(first.PersistenceFailed);
 
-    const auto second = guarded.SubmitResnapshot(
+    const auto second = guarded.SubmitVerificationResnapshot(
+        verificationMonitor,
         transactionId,
+        140,
         request.CanonicalSnapshot);
+    REQUIRE(second.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(second.Verification == PartyQuestRuntimeVerificationStatus::Stable);
+    REQUIRE(second.MonitorStatus ==
+        PartyQuestRuntimeVerificationMonitorStatus::Stable);
     REQUIRE_FALSE(second.PersistenceFailed);
 
     const auto committed = guarded.Commit(transactionId);

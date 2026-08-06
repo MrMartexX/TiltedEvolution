@@ -3,6 +3,7 @@
 #include <Structs/Skyrim/PartyQuestCheckpointCaptureEpoch.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCheckpoint.h>
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
+#include <Structs/Skyrim/PartyQuestRuntimeVerificationMonitor.h>
 #include <Structs/Skyrim/PartyQuestSaveGuard.h>
 
 #include <cstdint>
@@ -42,6 +43,18 @@ struct PartyQuestRuntimeGuardResult
             Status == PartyQuestRuntimeGuardStatus::DuplicatePending ||
             Status == PartyQuestRuntimeGuardStatus::DuplicateCommitted;
     }
+};
+
+struct PartyQuestRuntimeGuardedVerificationResult
+{
+    PartyQuestRuntimeGuardStatus Status{PartyQuestRuntimeGuardStatus::InvalidState};
+    PartyQuestRuntimeVerificationStatus Verification{
+        PartyQuestRuntimeVerificationStatus::InvalidState};
+    PartyQuestRuntimeVerificationMonitorStatus MonitorStatus{
+        PartyQuestRuntimeVerificationMonitorStatus::Inactive};
+    uint64_t TransactionId{};
+    bool GuardHeld{};
+    bool PersistenceFailed{};
 };
 
 /**
@@ -188,13 +201,16 @@ public:
     }
 
     /**
-     * Production quiescence gate. Only the process SaveGuard may cross into the
-     * authoritative monitor path; the monitor itself must then consume trusted
-     * observer-backed one-shot evidence before the durable transition occurs.
+     * Production quiescence gate. The verification budget begins before the
+     * durable transition into Verifying and is cancelled if that transition is
+     * not published. This prevents a caller from delaying the first resnapshot
+     * indefinitely or restarting the deadline after mutation.
      */
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
         PartyQuestPapyrusRuntimeMonitor& aMonitor,
-        PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
+        PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization,
+        PartyQuestRuntimeVerificationMonitor& aVerificationMonitor,
+        uint64_t aNowMs) noexcept
     {
         const uint64_t transactionId = aAuthorization.GetTransactionId();
         const auto* active = m_session.GetCoordinator().GetActive();
@@ -204,12 +220,53 @@ public:
             transactionId == 0 ||
             active->TransactionId != transactionId ||
             !active->SaveGuardActive ||
-            !HasGuard(transactionId))
+            !HasGuard(transactionId) ||
+            !aVerificationMonitor.Begin(transactionId, aNowMs))
         {
             PartyQuestRuntimeGuardResult result;
             result.Status = &m_saveGuard == &processGuard
-                ? PartyQuestRuntimeGuardStatus::GuardMismatch
-                : PartyQuestRuntimeGuardStatus::InvalidState;
+                ? PartyQuestRuntimeGuardStatus::InvalidState
+                : PartyQuestRuntimeGuardStatus::GuardMismatch;
+            result.TransactionId = transactionId;
+            result.GuardHeld = HasGuard(transactionId);
+            return result;
+        }
+
+        const auto transition =
+            m_session.MarkPapyrusQuiescent(aMonitor, std::move(aAuthorization));
+        if (transition != PartyQuestRuntimeDurableTransitionStatus::Applied)
+            aVerificationMonitor.Cancel(transactionId);
+        return Transition(transactionId, transition);
+    }
+
+    /**
+     * Legacy runtime-monitor surface. The real process SaveGuard rejects it so
+     * production cannot enter Verifying without starting the bounded verification
+     * window. It remains usable with an explicit test guard for low-level tests.
+     */
+    [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
+        PartyQuestPapyrusRuntimeMonitor& aMonitor,
+        PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
+    {
+        const uint64_t transactionId = aAuthorization.GetTransactionId();
+        if (&m_saveGuard == &PartyQuestSaveGuard::GetProcessGuard())
+        {
+            PartyQuestRuntimeGuardResult result;
+            result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+            result.TransactionId = transactionId;
+            result.GuardHeld = HasGuard(transactionId);
+            return result;
+        }
+
+        const auto* active = m_session.GetCoordinator().GetActive();
+        if (!active ||
+            transactionId == 0 ||
+            active->TransactionId != transactionId ||
+            !active->SaveGuardActive ||
+            !HasGuard(transactionId))
+        {
+            PartyQuestRuntimeGuardResult result;
+            result.Status = PartyQuestRuntimeGuardStatus::GuardMismatch;
             result.TransactionId = transactionId;
             result.GuardHeld = HasGuard(transactionId);
             return result;
@@ -262,6 +319,145 @@ public:
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
         uint64_t aTransactionId) noexcept;
 
+    /**
+     * Bounded production resnapshot path. Divergence is tolerated only within
+     * the fixed process-local budget. Budget exhaustion, deadline expiry, clock
+     * regression or an impossible verification state after the mutation barrier
+     * immediately require exact PreRepair recovery while retaining SaveGuard.
+     */
+    [[nodiscard]] PartyQuestRuntimeGuardedVerificationResult SubmitVerificationResnapshot(
+        PartyQuestRuntimeVerificationMonitor& aMonitor,
+        uint64_t aTransactionId,
+        uint64_t aNowMs,
+        QuestSnapshot aObservedSnapshot) noexcept
+    {
+        PartyQuestRuntimeGuardedVerificationResult result;
+        result.TransactionId = aTransactionId;
+        result.GuardHeld = HasGuard(aTransactionId);
+        result.MonitorStatus = aMonitor.GetStatus();
+
+        const auto* active = m_session.GetCoordinator().GetActive();
+        if (&m_saveGuard != &PartyQuestSaveGuard::GetProcessGuard() ||
+            !active ||
+            aTransactionId == 0 ||
+            active->TransactionId != aTransactionId ||
+            active->State != PartyQuestRuntimeApplyState::Verifying ||
+            !active->SaveGuardActive ||
+            !active->CheckpointCreated ||
+            !active->RuntimeMutationMayHaveOccurred ||
+            !HasGuard(aTransactionId) ||
+            aMonitor.GetTransactionId() != aTransactionId ||
+            aMonitor.GetStatus() != PartyQuestRuntimeVerificationMonitorStatus::Waiting)
+        {
+            result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+            return result;
+        }
+
+        const auto verification =
+            m_session.SubmitResnapshot(aTransactionId, std::move(aObservedSnapshot));
+        result.Verification = verification.Verification;
+        result.PersistenceFailed = verification.PersistenceFailed;
+        result.GuardHeld = HasGuard(aTransactionId);
+        if (verification.PersistenceFailed)
+        {
+            result.Status = PartyQuestRuntimeGuardStatus::PersistenceFailure;
+            return result;
+        }
+
+        result.MonitorStatus = aMonitor.Observe(
+            aTransactionId,
+            aNowMs,
+            verification.Verification);
+        switch (result.MonitorStatus)
+        {
+        case PartyQuestRuntimeVerificationMonitorStatus::Waiting:
+        case PartyQuestRuntimeVerificationMonitorStatus::Stable:
+            result.Status = PartyQuestRuntimeGuardStatus::Ready;
+            return result;
+
+        case PartyQuestRuntimeVerificationMonitorStatus::TimedOut:
+        case PartyQuestRuntimeVerificationMonitorStatus::DivergenceBudgetExceeded:
+        case PartyQuestRuntimeVerificationMonitorStatus::InvalidClock:
+        case PartyQuestRuntimeVerificationMonitorStatus::InvalidVerification:
+        {
+            const auto recovery = Transition(
+                aTransactionId,
+                m_session.AbortBeforeMutation(aTransactionId));
+            result.Status = recovery.Status;
+            result.GuardHeld = recovery.GuardHeld;
+            return result;
+        }
+
+        case PartyQuestRuntimeVerificationMonitorStatus::Inactive:
+        case PartyQuestRuntimeVerificationMonitorStatus::InvalidTransaction:
+            result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+            return result;
+        }
+
+        result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+        return result;
+    }
+
+    /** Deadline check when no resnapshot arrives. */
+    [[nodiscard]] PartyQuestRuntimeGuardedVerificationResult PollVerification(
+        PartyQuestRuntimeVerificationMonitor& aMonitor,
+        uint64_t aTransactionId,
+        uint64_t aNowMs) noexcept
+    {
+        PartyQuestRuntimeGuardedVerificationResult result;
+        result.TransactionId = aTransactionId;
+        result.GuardHeld = HasGuard(aTransactionId);
+        result.MonitorStatus = aMonitor.GetStatus();
+
+        const auto* active = m_session.GetCoordinator().GetActive();
+        if (&m_saveGuard != &PartyQuestSaveGuard::GetProcessGuard() ||
+            !active ||
+            aTransactionId == 0 ||
+            active->TransactionId != aTransactionId ||
+            (active->State != PartyQuestRuntimeApplyState::Verifying &&
+             active->State != PartyQuestRuntimeApplyState::ReadyToCommit) ||
+            !active->SaveGuardActive ||
+            !active->CheckpointCreated ||
+            !active->RuntimeMutationMayHaveOccurred ||
+            !HasGuard(aTransactionId) ||
+            aMonitor.GetTransactionId() != aTransactionId)
+        {
+            result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+            return result;
+        }
+
+        result.MonitorStatus = aMonitor.Poll(aTransactionId, aNowMs);
+        switch (result.MonitorStatus)
+        {
+        case PartyQuestRuntimeVerificationMonitorStatus::Waiting:
+        case PartyQuestRuntimeVerificationMonitorStatus::Stable:
+            result.Status = PartyQuestRuntimeGuardStatus::Ready;
+            return result;
+
+        case PartyQuestRuntimeVerificationMonitorStatus::TimedOut:
+        case PartyQuestRuntimeVerificationMonitorStatus::DivergenceBudgetExceeded:
+        case PartyQuestRuntimeVerificationMonitorStatus::InvalidClock:
+        case PartyQuestRuntimeVerificationMonitorStatus::InvalidVerification:
+        {
+            const auto recovery = Transition(
+                aTransactionId,
+                m_session.AbortBeforeMutation(aTransactionId));
+            result.Status = recovery.Status;
+            result.GuardHeld = recovery.GuardHeld;
+            return result;
+        }
+
+        case PartyQuestRuntimeVerificationMonitorStatus::Inactive:
+        case PartyQuestRuntimeVerificationMonitorStatus::InvalidTransaction:
+            result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+            return result;
+        }
+
+        result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+        return result;
+    }
+
+    /** Diagnostic compatibility path; rejected for the real process guard. */
     [[nodiscard]] PartyQuestRuntimeDurableVerificationResult SubmitResnapshot(
         uint64_t aTransactionId,
         QuestSnapshot aObservedSnapshot) noexcept;
