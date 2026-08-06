@@ -56,7 +56,8 @@ public:
         return {
             PartyQuestPapyrusRuntimeObservationStatus::Idle,
             0,
-            900};
+            900,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains};
     }
 };
 
