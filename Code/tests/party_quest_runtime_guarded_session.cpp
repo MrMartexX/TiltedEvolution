@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <utility>
 #include <vector>
 
 namespace
@@ -71,6 +72,22 @@ PartyQuestRuntimeApplySession BuildGuardSession(GuardDurability& aDurability)
         });
 }
 
+PartyQuestRuntimeGuardResult MarkGuardedPapyrusQuiescent(
+    PartyQuestRuntimeGuardedSession& aGuarded,
+    uint64_t aTransactionId,
+    uint64_t aGeneration = 1)
+{
+    PartyQuestPapyrusQuiescenceTracker tracker;
+    REQUIRE(tracker.Begin(aTransactionId));
+    REQUIRE(tracker.Observe(aTransactionId, 0, aGeneration) ==
+        PartyQuestPapyrusQuiescenceStatus::Waiting);
+    REQUIRE(tracker.Observe(aTransactionId, 0, aGeneration) ==
+        PartyQuestPapyrusQuiescenceStatus::Quiescent);
+    auto authorization = tracker.Authorize();
+    REQUIRE(authorization.has_value());
+    return aGuarded.MarkPapyrusQuiescent(tracker, std::move(*authorization));
+}
+
 void AdvanceToReadyToCommit(
     PartyQuestRuntimeGuardedSession& aGuarded,
     PartyQuestRuntimeApplySession& aSession,
@@ -80,7 +97,7 @@ void AdvanceToReadyToCommit(
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(aGuarded.ArmRuntimeMutation(acRequest.TransactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
-    REQUIRE(aGuarded.MarkPapyrusQuiescent(acRequest.TransactionId).Status ==
+    REQUIRE(MarkGuardedPapyrusQuiescent(aGuarded, acRequest.TransactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(aGuarded.SubmitResnapshot(
                 acRequest.TransactionId,
@@ -205,6 +222,32 @@ TEST_CASE("World-ready persistence failure releases lease and leaves transaction
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::DeferredWorld);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->SaveGuardActive);
+}
+
+TEST_CASE("Guarded quiescence refuses naked transaction assertion and keeps save guard", "[quest.party-state.runtime-guard][quiescence]")
+{
+    PartyQuestSaveGuard saveGuard;
+    GuardDurability durability{&saveGuard};
+    auto session = BuildGuardSession(durability);
+    PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
+    const auto request = BuildGuardRequest(24009);
+
+    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(guarded.ArmRuntimeMutation(request.TransactionId).Status ==
+        PartyQuestRuntimeGuardStatus::Ready);
+
+    const auto naked = guarded.MarkPapyrusQuiescent(request.TransactionId);
+    REQUIRE(naked.Status == PartyQuestRuntimeGuardStatus::InvalidState);
+    REQUIRE(naked.GuardHeld);
+    REQUIRE(saveGuard.GetTransactionId() == request.TransactionId);
+    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::WaitingForPapyrus);
+
+    const auto authorized = MarkGuardedPapyrusQuiescent(guarded, request.TransactionId, 90);
+    REQUIRE(authorized.Status == PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(authorized.GuardHeld);
+    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::Verifying);
 }
 
 TEST_CASE("Durable commit is published while guard is held and releases it afterward", "[quest.party-state.runtime-guard]")

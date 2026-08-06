@@ -12,6 +12,7 @@
 
 #include <catch2/catch.hpp>
 
+#include <utility>
 #include <vector>
 
 namespace
@@ -105,6 +106,22 @@ PartyQuestRuntimeApplySession BuildSession(DurableCapture& aCapture)
             return aCapture.Persist(acState);
         });
 }
+
+PartyQuestRuntimeDurableTransitionStatus MarkSessionPapyrusQuiescent(
+    PartyQuestRuntimeApplySession& aSession,
+    uint64_t aTransactionId,
+    uint64_t aGeneration = 1)
+{
+    PartyQuestPapyrusQuiescenceTracker tracker;
+    REQUIRE(tracker.Begin(aTransactionId));
+    REQUIRE(tracker.Observe(aTransactionId, 0, aGeneration) ==
+        PartyQuestPapyrusQuiescenceStatus::Waiting);
+    REQUIRE(tracker.Observe(aTransactionId, 0, aGeneration) ==
+        PartyQuestPapyrusQuiescenceStatus::Quiescent);
+    auto authorization = tracker.Authorize();
+    REQUIRE(authorization.has_value());
+    return aSession.MarkPapyrusQuiescent(tracker, std::move(*authorization));
+}
 } // namespace
 
 TEST_CASE("Durable runtime session persists every critical transition before publishing it", "[quest.party-state.runtime-apply.session]")
@@ -127,7 +144,10 @@ TEST_CASE("Durable runtime session persists every critical transition before pub
     REQUIRE(capture.States.back().Active->RuntimeMutationMayHaveOccurred);
     REQUIRE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
 
-    REQUIRE(session.MarkPapyrusQuiescent(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(session.MarkPapyrusQuiescent(request.TransactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::InvalidState);
+    REQUIRE(MarkSessionPapyrusQuiescent(session, request.TransactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(capture.States.back().Active->State == PartyQuestRuntimeApplyState::Verifying);
 
     const auto firstSample = session.SubmitResnapshot(request.TransactionId, request.CanonicalSnapshot);
@@ -177,6 +197,37 @@ TEST_CASE("Mutation arm persistence failure leaves runtime mutation explicitly u
     REQUIRE(session.GetCoordinator().IsSaveGuardActive());
 }
 
+TEST_CASE("Quiescence persistence failure consumes proof and requires fresh observation", "[quest.party-state.runtime-apply.session][quiescence]")
+{
+    DurableCapture capture;
+    auto session = BuildSession(capture);
+    const auto request = BuildSessionRequest(3501, GameId(33, 0x1500));
+
+    REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
+    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+
+    PartyQuestPapyrusQuiescenceTracker tracker;
+    REQUIRE(tracker.Begin(request.TransactionId));
+    REQUIRE(tracker.Observe(request.TransactionId, 0, 35) == PartyQuestPapyrusQuiescenceStatus::Waiting);
+    REQUIRE(tracker.Observe(request.TransactionId, 0, 35) == PartyQuestPapyrusQuiescenceStatus::Quiescent);
+    auto authorization = tracker.Authorize();
+    REQUIRE(authorization.has_value());
+
+    capture.Allow = false;
+    REQUIRE(session.MarkPapyrusQuiescent(tracker, std::move(*authorization)) ==
+        PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure);
+    REQUIRE(tracker.GetTransactionId() == 0);
+    REQUIRE_FALSE(authorization->IsVerified());
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
+    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::WaitingForPapyrus);
+
+    capture.Allow = true;
+    REQUIRE(MarkSessionPapyrusQuiescent(session, request.TransactionId, 36) ==
+        PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::Verifying);
+}
+
 TEST_CASE("Commit persistence failure keeps verified repair guarded and uncommitted", "[quest.party-state.runtime-apply.session]")
 {
     DurableCapture capture;
@@ -186,7 +237,8 @@ TEST_CASE("Commit persistence failure keeps verified repair guarded and uncommit
     REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
     REQUIRE(session.MarkCheckpointCreated(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(session.ArmRuntimeMutation(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
-    REQUIRE(session.MarkPapyrusQuiescent(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(MarkSessionPapyrusQuiescent(session, request.TransactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE_FALSE(session.SubmitResnapshot(request.TransactionId, request.CanonicalSnapshot).PersistenceFailed);
     REQUIRE(session.SubmitResnapshot(request.TransactionId, request.CanonicalSnapshot).Verification ==
         PartyQuestRuntimeVerificationStatus::Stable);

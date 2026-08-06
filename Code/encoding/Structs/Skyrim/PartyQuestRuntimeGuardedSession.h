@@ -6,6 +6,7 @@
 #include <Structs/Skyrim/PartyQuestSaveGuard.h>
 
 #include <cstdint>
+#include <utility>
 
 enum class PartyQuestRuntimeGuardStatus : uint8_t
 {
@@ -116,6 +117,31 @@ public:
     [[nodiscard]] PartyQuestRuntimeGuardResult ArmRuntimeMutation(
         uint64_t aTransactionId) noexcept;
 
+    [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
+        PartyQuestPapyrusQuiescenceTracker& aTracker,
+        PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
+    {
+        const uint64_t transactionId = aAuthorization.GetTransactionId();
+        const auto* active = m_session.GetCoordinator().GetActive();
+        if (!active ||
+            transactionId == 0 ||
+            active->TransactionId != transactionId ||
+            !active->SaveGuardActive ||
+            !HasGuard(transactionId))
+        {
+            PartyQuestRuntimeGuardResult result;
+            result.Status = PartyQuestRuntimeGuardStatus::GuardMismatch;
+            result.TransactionId = transactionId;
+            result.GuardHeld = HasGuard(transactionId);
+            return result;
+        }
+
+        return Transition(
+            transactionId,
+            m_session.MarkPapyrusQuiescent(aTracker, std::move(aAuthorization)));
+    }
+
+    /** Legacy compatibility surface: naked transaction assertions fail closed. */
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
         uint64_t aTransactionId) noexcept;
 

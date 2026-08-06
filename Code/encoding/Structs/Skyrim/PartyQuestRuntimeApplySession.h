@@ -67,6 +67,11 @@ public:
      */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutation(uint64_t aTransactionId);
 
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkPapyrusQuiescent(
+        PartyQuestPapyrusQuiescenceTracker& aTracker,
+        PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization);
+
+    /** Legacy compatibility surface: naked transaction assertions fail closed. */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkPapyrusQuiescent(uint64_t aTransactionId);
 
     [[nodiscard]] PartyQuestRuntimeDurableVerificationResult SubmitResnapshot(

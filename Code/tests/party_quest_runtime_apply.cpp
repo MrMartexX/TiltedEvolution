@@ -12,6 +12,8 @@
 
 #include <catch2/catch.hpp>
 
+#include <utility>
+
 namespace
 {
 PartyQuestAdmissionDecision BuildRuntimeAdmission(GameId aQuestId)
@@ -94,6 +96,24 @@ PartyQuestRuntimeApplyRequest BuildRuntimeRequest(
     return request;
 }
 
+bool MarkCoordinatorPapyrusQuiescent(
+    PartyQuestRuntimeApplyCoordinator& aCoordinator,
+    uint64_t aTransactionId,
+    uint64_t aGeneration = 1)
+{
+    PartyQuestPapyrusQuiescenceTracker tracker;
+    REQUIRE(tracker.Begin(aTransactionId));
+    REQUIRE(tracker.Observe(aTransactionId, 0, aGeneration) ==
+        PartyQuestPapyrusQuiescenceStatus::Waiting);
+    REQUIRE(tracker.Observe(aTransactionId, 0, aGeneration) ==
+        PartyQuestPapyrusQuiescenceStatus::Quiescent);
+    auto authorization = tracker.Authorize();
+    REQUIRE(authorization.has_value());
+    return aCoordinator.MarkPapyrusQuiescent(
+        tracker,
+        std::move(*authorization));
+}
+
 void AdvanceToVerification(
     PartyQuestRuntimeApplyCoordinator& aCoordinator,
     const PartyQuestRuntimeApplyRequest& acRequest)
@@ -106,7 +126,7 @@ void AdvanceToVerification(
 
     REQUIRE(aCoordinator.MarkCheckpointCreated(acRequest.TransactionId));
     REQUIRE(aCoordinator.MarkApplyDispatched(acRequest.TransactionId));
-    REQUIRE(aCoordinator.MarkPapyrusQuiescent(acRequest.TransactionId));
+    REQUIRE(MarkCoordinatorPapyrusQuiescent(aCoordinator, acRequest.TransactionId));
     REQUIRE(aCoordinator.GetActive() != nullptr);
     REQUIRE(aCoordinator.GetActive()->State == PartyQuestRuntimeApplyState::Verifying);
 }
@@ -194,7 +214,7 @@ TEST_CASE("Critical repair sequence requires checkpoint quiescence stable verifi
 
     REQUIRE(coordinator.SubmitResnapshot(request.TransactionId, request.CanonicalSnapshot) ==
         PartyQuestRuntimeVerificationStatus::InvalidState);
-    REQUIRE(coordinator.MarkPapyrusQuiescent(request.TransactionId));
+    REQUIRE(MarkCoordinatorPapyrusQuiescent(coordinator, request.TransactionId));
 
     REQUIRE(coordinator.SubmitResnapshot(request.TransactionId, request.CanonicalSnapshot) ==
         PartyQuestRuntimeVerificationStatus::NeedsStableSample);
@@ -211,6 +231,37 @@ TEST_CASE("Critical repair sequence requires checkpoint quiescence stable verifi
     REQUIRE(coordinator.IsCommitted(request.TransactionId));
 }
 
+TEST_CASE("Runtime apply rejects stale or unverified quiescence capability", "[quest.party-state.runtime-apply][quiescence]")
+{
+    const auto request = BuildRuntimeRequest(2501, GameId(9, 0x2500));
+    PartyQuestRuntimeApplyCoordinator coordinator;
+    REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Started);
+    REQUIRE(coordinator.MarkCheckpointCreated(request.TransactionId));
+    REQUIRE(coordinator.MarkApplyDispatched(request.TransactionId));
+
+    PartyQuestPapyrusQuiescenceTracker tracker;
+    PartyQuestPapyrusQuiescenceAuthorization invalid;
+    REQUIRE_FALSE(coordinator.MarkPapyrusQuiescent(tracker, std::move(invalid)));
+    REQUIRE(coordinator.GetActive()->State == PartyQuestRuntimeApplyState::WaitingForPapyrus);
+
+    REQUIRE(tracker.Begin(request.TransactionId));
+    REQUIRE(tracker.Observe(request.TransactionId, 0, 70) == PartyQuestPapyrusQuiescenceStatus::Waiting);
+    REQUIRE(tracker.Observe(request.TransactionId, 0, 70) == PartyQuestPapyrusQuiescenceStatus::Quiescent);
+    auto stale = tracker.Authorize();
+    REQUIRE(stale.has_value());
+
+    REQUIRE(tracker.Observe(request.TransactionId, 1, 71) == PartyQuestPapyrusQuiescenceStatus::Waiting);
+    REQUIRE_FALSE(coordinator.MarkPapyrusQuiescent(tracker, std::move(*stale)));
+    REQUIRE(coordinator.GetActive()->State == PartyQuestRuntimeApplyState::WaitingForPapyrus);
+
+    REQUIRE(tracker.Observe(request.TransactionId, 0, 71) == PartyQuestPapyrusQuiescenceStatus::Waiting);
+    REQUIRE(tracker.Observe(request.TransactionId, 0, 71) == PartyQuestPapyrusQuiescenceStatus::Quiescent);
+    auto current = tracker.Authorize();
+    REQUIRE(current.has_value());
+    REQUIRE(coordinator.MarkPapyrusQuiescent(tracker, std::move(*current)));
+    REQUIRE(coordinator.GetActive()->State == PartyQuestRuntimeApplyState::Verifying);
+}
+
 TEST_CASE("Runtime apply transaction ids are idempotent and conflict-safe", "[quest.party-state.runtime-apply]")
 {
     auto request = BuildRuntimeRequest(3001, GameId(9, 0x3000));
@@ -224,7 +275,7 @@ TEST_CASE("Runtime apply transaction ids are idempotent and conflict-safe", "[qu
 
     REQUIRE(coordinator.MarkCheckpointCreated(request.TransactionId));
     REQUIRE(coordinator.MarkApplyDispatched(request.TransactionId));
-    REQUIRE(coordinator.MarkPapyrusQuiescent(request.TransactionId));
+    REQUIRE(MarkCoordinatorPapyrusQuiescent(coordinator, request.TransactionId));
     REQUIRE(coordinator.SubmitResnapshot(request.TransactionId, request.CanonicalSnapshot) ==
         PartyQuestRuntimeVerificationStatus::NeedsStableSample);
     REQUIRE(coordinator.SubmitResnapshot(request.TransactionId, request.CanonicalSnapshot) ==

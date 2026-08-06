@@ -123,17 +123,28 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::ArmRunti
 }
 
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkPapyrusQuiescent(
-    uint64_t aTransactionId)
+    PartyQuestPapyrusQuiescenceTracker& aTracker,
+    PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization)
 {
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
-    if (!candidate.MarkPapyrusQuiescent(aTransactionId))
+    if (!candidate.MarkPapyrusQuiescent(aTracker, std::move(aAuthorization)))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 
+    // Authorization is intentionally consumed before persistence. If durable
+    // publication fails, the live coordinator remains WaitingForPapyrus and a
+    // caller must obtain fresh observations rather than replay stale evidence.
     if (!Persist(candidate))
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkPapyrusQuiescent(
+    uint64_t)
+{
+    // A naked transaction id is not quiescence evidence.
+    return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 }
 
 PartyQuestRuntimeDurableVerificationResult PartyQuestRuntimeApplySession::SubmitResnapshot(

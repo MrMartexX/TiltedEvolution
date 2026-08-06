@@ -1,12 +1,14 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestCampaign.h>
+#include <Structs/Skyrim/PartyQuestPapyrusQuiescence.h>
 #include <Structs/Skyrim/PartyQuestPlayerProfile.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSafety.h>
 
 #include <cstdint>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 enum class PartyQuestRuntimeApplyState : uint8_t
@@ -130,8 +132,36 @@ public:
     /** Records dispatch of the future runtime mutation; does not execute it. */
     bool MarkApplyDispatched(uint64_t aTransactionId) noexcept;
 
-    /** Papyrus/event queue must settle before verification samples are accepted. */
-    bool MarkPapyrusQuiescent(uint64_t aTransactionId) noexcept;
+    /**
+     * Enters verification only by consuming authorization for the tracker's
+     * exact current stable observation. This is a process-local control-plane
+     * gate; trusted Skyrim/Papyrus observation is a separate integration layer.
+     */
+    bool MarkPapyrusQuiescent(
+        PartyQuestPapyrusQuiescenceTracker& aTracker,
+        PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
+    {
+        const uint64_t transactionId = aAuthorization.GetTransactionId();
+        if (!m_active ||
+            transactionId == 0 ||
+            m_active->TransactionId != transactionId ||
+            m_active->State != PartyQuestRuntimeApplyState::WaitingForPapyrus ||
+            !m_active->SaveGuardActive ||
+            !m_active->CheckpointCreated ||
+            !m_active->RuntimeMutationMayHaveOccurred ||
+            aTracker.GetTransactionId() != transactionId)
+        {
+            return false;
+        }
+
+        if (!aTracker.Consume(std::move(aAuthorization)))
+            return false;
+
+        m_active->LastObservedDigest = 0;
+        m_active->StableCanonicalSamples = 0;
+        m_active->State = PartyQuestRuntimeApplyState::Verifying;
+        return true;
+    }
 
     /** Requires two consecutive canonical digests before commit is allowed. */
     [[nodiscard]] PartyQuestRuntimeVerificationStatus SubmitResnapshot(
@@ -195,6 +225,9 @@ private:
         const PartyQuestRuntimeApplyEntry& acEntry) noexcept;
     [[nodiscard]] static bool ValidateRecoveryEntry(
         const PartyQuestRuntimeApplyEntry& acEntry) noexcept;
+
+    /** Legacy tx-only implementation is intentionally not caller-accessible. */
+    bool MarkPapyrusQuiescent(uint64_t aTransactionId) noexcept;
 
     std::optional<PartyQuestRuntimeApplyEntry> m_active;
     std::optional<PartyQuestRuntimeApplyEntry> m_recoveryRecord;
