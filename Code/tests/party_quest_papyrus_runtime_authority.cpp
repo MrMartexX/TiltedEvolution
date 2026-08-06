@@ -36,13 +36,25 @@ private:
 
 static_assert(!std::is_copy_constructible_v<AuthorityTestObserver>);
 static_assert(!std::is_move_constructible_v<AuthorityTestObserver>);
+static_assert(HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(
+    kPartyQuestPapyrusRuntimeRequiredWorkDomains));
 
 PartyQuestPapyrusRuntimeObservation Idle(uint64_t aGeneration)
 {
     return {
         PartyQuestPapyrusRuntimeObservationStatus::Idle,
         0,
-        aGeneration};
+        aGeneration,
+        kPartyQuestPapyrusRuntimeRequiredWorkDomains};
+}
+
+PartyQuestPapyrusRuntimeObservation PartialIdle(uint64_t aGeneration)
+{
+    return {
+        PartyQuestPapyrusRuntimeObservationStatus::Idle,
+        0,
+        aGeneration,
+        static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::VmTaskQueue)};
 }
 } // namespace
 
@@ -71,7 +83,9 @@ TEST_CASE("Papyrus runtime observer authorization is exact-instance scoped", "[q
 
 TEST_CASE("Diagnostic observer sessions cannot produce authoritative quiescence", "[quest.party-state.quiescence][runtime-monitor][observer-authority]")
 {
-    AuthorityTestObserver observer({Idle(20), Idle(20)});
+    AuthorityTestObserver observer({
+        {PartyQuestPapyrusRuntimeObservationStatus::Idle, 0, 20},
+        {PartyQuestPapyrusRuntimeObservationStatus::Idle, 0, 20}});
     PartyQuestPapyrusRuntimeMonitor monitor(observer);
 
     REQUIRE(monitor.Begin(7002, 0, 1000));
@@ -107,6 +121,22 @@ TEST_CASE("Authorized observer session consumes stable quiescence authoritativel
     REQUIRE_FALSE(authorization->IsVerified());
     REQUIRE(monitor.GetStatus() == PartyQuestPapyrusRuntimeMonitorStatus::Inactive);
     REQUIRE_FALSE(monitor.IsAuthoritativeSession());
+}
+
+TEST_CASE("Authoritative idle requires the complete Papyrus work envelope", "[quest.party-state.quiescence][runtime-monitor][observer-authority][work-envelope]")
+{
+    AuthorityTestObserver observer({PartialIdle(40), Idle(40)});
+    const auto observerAuthorization =
+        PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(observer);
+    PartyQuestPapyrusRuntimeMonitor monitor(observer);
+
+    REQUIRE(monitor.Begin(7006, 0, 1000, observerAuthorization));
+    REQUIRE(monitor.IsAuthoritativeSession());
+    REQUIRE(monitor.Poll(7006, 10) ==
+        PartyQuestPapyrusRuntimeMonitorStatus::InvalidObservation);
+    REQUIRE_FALSE(monitor.Authorize().has_value());
+    REQUIRE(monitor.Poll(7006, 20) ==
+        PartyQuestPapyrusRuntimeMonitorStatus::InvalidObservation);
 }
 
 TEST_CASE("Papyrus event generation regression is terminal fail closed", "[quest.party-state.quiescence][runtime-monitor][observer-authority]")

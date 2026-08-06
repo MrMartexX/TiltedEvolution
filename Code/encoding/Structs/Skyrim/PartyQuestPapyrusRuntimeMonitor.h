@@ -6,13 +6,53 @@
 #include <optional>
 
 /**
+ * Logical Papyrus work domains that must all be observed before an
+ * authoritative runtime observer may claim Idle.
+ *
+ * These are semantic domains, not Skyrim object offsets. A concrete adapter
+ * may map multiple runtime queues/containers into one domain only after that
+ * mapping, locking and supported-version contract have been verified.
+ */
+enum class PartyQuestPapyrusRuntimeWorkDomain : uint32_t
+{
+    None = 0,
+    FunctionMessageQueues = 1u << 0,
+    VmTaskQueue = 1u << 1,
+    UiWaitingQueue = 1u << 2,
+    SuspendResumeQueues = 1u << 3,
+    RunningStacks = 1u << 4,
+    LatentReturnQueue = 1u << 5
+};
+
+inline constexpr uint32_t kPartyQuestPapyrusRuntimeRequiredWorkDomains =
+    static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::FunctionMessageQueues) |
+    static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::VmTaskQueue) |
+    static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::UiWaitingQueue) |
+    static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::SuspendResumeQueues) |
+    static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::RunningStacks) |
+    static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::LatentReturnQueue);
+
+[[nodiscard]] constexpr bool IsPartyQuestPapyrusRuntimeWorkDomainMaskValid(
+    uint32_t aMask) noexcept
+{
+    return (aMask & ~kPartyQuestPapyrusRuntimeRequiredWorkDomains) == 0;
+}
+
+[[nodiscard]] constexpr bool HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(
+    uint32_t aMask) noexcept
+{
+    return aMask == kPartyQuestPapyrusRuntimeRequiredWorkDomains;
+}
+
+/**
  * Result of one trusted Papyrus/VM runtime observation.
  *
  * Unsupported means the local runtime/version cannot provide the required
  * observation contract at all. Unknown is a temporary inability to sample.
  * Busy/Idle are valid samples and must carry a self-consistent pending-work
  * count. QuestEventGeneration is a monotonically increasing generation owned
- * by the concrete runtime observer.
+ * by the concrete runtime observer. ObservedWorkDomains identifies exactly
+ * which logical VM work domains contributed to this sample.
  */
 enum class PartyQuestPapyrusRuntimeObservationStatus : uint8_t
 {
@@ -28,12 +68,17 @@ struct PartyQuestPapyrusRuntimeObservation
         PartyQuestPapyrusRuntimeObservationStatus::Unknown};
     uint32_t PendingWorkCount{};
     uint64_t QuestEventGeneration{};
+    uint32_t ObservedWorkDomains{};
 
     [[nodiscard]] bool IsSelfConsistent() const noexcept
     {
+        if (!IsPartyQuestPapyrusRuntimeWorkDomainMaskValid(ObservedWorkDomains))
+            return false;
+
         switch (Status)
         {
         case PartyQuestPapyrusRuntimeObservationStatus::Unsupported:
+            return PendingWorkCount == 0 && ObservedWorkDomains == 0;
         case PartyQuestPapyrusRuntimeObservationStatus::Unknown:
             return PendingWorkCount == 0;
         case PartyQuestPapyrusRuntimeObservationStatus::Busy:
@@ -160,7 +205,10 @@ enum class PartyQuestPapyrusRuntimeMonitorStatus : uint8_t
  *
  * Begin() without observer authorization remains a diagnostic algorithm surface
  * for isolated tests only. ConsumeAuthoritative() succeeds exclusively for a
- * session begun with an exact observer-lifetime-bound authorization.
+ * session begun with an exact observer-lifetime-bound authorization. Such an
+ * authoritative session also requires every Idle sample to prove the complete
+ * logical Papyrus work envelope; partial coverage can never authorize live
+ * quiescence.
  *
  * Monitor state is deliberately non-copyable/non-movable because it owns the
  * tracker session and authoritative observer-lifetime binding. Duplicating that

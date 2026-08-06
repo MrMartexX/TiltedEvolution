@@ -50,6 +50,22 @@ PartyQuestPapyrusRuntimeObservation Busy(
 }
 } // namespace
 
+TEST_CASE("Papyrus runtime work-domain masks reject unknown bits", "[quest.party-state.quiescence][runtime-monitor][work-envelope]")
+{
+    constexpr uint32_t unknownBit = 1u << 31;
+    REQUIRE_FALSE(IsPartyQuestPapyrusRuntimeWorkDomainMaskValid(unknownBit));
+    REQUIRE_FALSE(HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(0));
+    REQUIRE(HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(
+        kPartyQuestPapyrusRuntimeRequiredWorkDomains));
+
+    const PartyQuestPapyrusRuntimeObservation malformed{
+        PartyQuestPapyrusRuntimeObservationStatus::Idle,
+        0,
+        1,
+        unknownBit};
+    REQUIRE_FALSE(malformed.IsSelfConsistent());
+}
+
 TEST_CASE("Runtime Papyrus monitor requires stable trusted idle observations", "[quest.party-state.quiescence][runtime-monitor]")
 {
     ScriptedPapyrusObserver observer({Idle(10), Idle(10)});

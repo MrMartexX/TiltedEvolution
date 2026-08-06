@@ -62,7 +62,8 @@ public:
         return {
             PartyQuestPapyrusRuntimeObservationStatus::Idle,
             0,
-            m_generation};
+            m_generation,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains};
     }
 
 private:

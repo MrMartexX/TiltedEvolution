@@ -162,6 +162,15 @@ PartyQuestPapyrusRuntimeMonitorStatus PartyQuestPapyrusRuntimeMonitor::Poll(
         return EnterTerminal(
             PartyQuestPapyrusRuntimeMonitorStatus::InvalidObservation);
 
+    if (m_authoritativeObserver &&
+        observation.Status == PartyQuestPapyrusRuntimeObservationStatus::Idle &&
+        !HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(
+            observation.ObservedWorkDomains))
+    {
+        return EnterTerminal(
+            PartyQuestPapyrusRuntimeMonitorStatus::InvalidObservation);
+    }
+
     switch (observation.Status)
     {
     case PartyQuestPapyrusRuntimeObservationStatus::Unsupported:
