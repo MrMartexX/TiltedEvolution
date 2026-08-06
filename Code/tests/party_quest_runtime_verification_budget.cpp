@@ -53,7 +53,7 @@ public:
     [[nodiscard]] PartyQuestPapyrusRuntimeObservation Observe(
         uint64_t) noexcept override
     {
-        // This authoritative fixture must prove the complete Papyrus work envelope.
+        // Authoritative fixture: require the complete Papyrus work envelope.
         return {
             PartyQuestPapyrusRuntimeObservationStatus::Idle,
             0,
