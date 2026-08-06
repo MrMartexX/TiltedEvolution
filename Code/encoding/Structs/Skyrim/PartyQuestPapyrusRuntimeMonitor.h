@@ -48,8 +48,10 @@ struct PartyQuestPapyrusRuntimeObservation
 /**
  * Game-specific read-only observation boundary.
  *
- * Implementations may inspect only version-validated runtime state. This
- * interface does not authorize arbitrary VM memory walks or script execution.
+ * Implementations may inspect only version-validated runtime state. Merely
+ * implementing this public interface is not sufficient to authorize a live
+ * repair transition; production observers must also possess the encapsulated
+ * observer authorization below.
  */
 class PartyQuestPapyrusRuntimeObserver
 {
@@ -58,6 +60,48 @@ public:
 
     [[nodiscard]] virtual PartyQuestPapyrusRuntimeObservation Observe(
         uint64_t aTransactionId) noexcept = 0;
+};
+
+class PartyQuestSkyrimPapyrusRuntimeObserver;
+class PartyQuestPapyrusRuntimeObserverTestAccess;
+
+/**
+ * Process-local capability binding an approved observer implementation to its
+ * exact object instance. A fabricated implementation of the public observer
+ * interface cannot construct this capability and therefore cannot authorize a
+ * live runtime transition.
+ *
+ * The concrete Skyrim observer will be the production issuer once its VM
+ * observation envelope is version-validated. Tests use a named friend-only
+ * factory under Code/tests.
+ */
+class PartyQuestPapyrusRuntimeObserverAuthorization final
+{
+public:
+    PartyQuestPapyrusRuntimeObserverAuthorization() noexcept = default;
+
+    [[nodiscard]] bool IsVerified() const noexcept
+    {
+        return m_observer != nullptr;
+    }
+
+    [[nodiscard]] bool Matches(
+        const PartyQuestPapyrusRuntimeObserver& acObserver) const noexcept
+    {
+        return IsVerified() && m_observer == &acObserver;
+    }
+
+private:
+    friend class PartyQuestSkyrimPapyrusRuntimeObserver;
+    friend class PartyQuestPapyrusRuntimeObserverTestAccess;
+
+    explicit PartyQuestPapyrusRuntimeObserverAuthorization(
+        const PartyQuestPapyrusRuntimeObserver& acObserver) noexcept
+        : m_observer(&acObserver)
+    {
+    }
+
+    const PartyQuestPapyrusRuntimeObserver* m_observer{};
 };
 
 enum class PartyQuestPapyrusRuntimeMonitorStatus : uint8_t
@@ -73,18 +117,18 @@ enum class PartyQuestPapyrusRuntimeMonitorStatus : uint8_t
 };
 
 /**
- * Deterministic timeout/fail-closed orchestration over a trusted runtime
- * observer and PartyQuestPapyrusQuiescenceTracker.
+ * Deterministic timeout/fail-closed orchestration over a runtime observer and
+ * PartyQuestPapyrusQuiescenceTracker.
  *
- * The caller supplies monotonic milliseconds. A clock regression, unsupported
- * runtime, malformed sample or timeout is terminal for the current monitor
- * session and can never produce an authorization. Unknown observations reset
- * stability and continue waiting until the deadline. Busy/Idle samples are fed
- * into the existing stable-generation tracker.
+ * The caller supplies monotonic milliseconds. A clock regression, event-
+ * generation regression, unsupported runtime, malformed sample or timeout is
+ * terminal for the current monitor session and can never produce authoritative
+ * quiescence. Unknown observations reset stability and continue waiting until
+ * the deadline. Busy/Idle samples are fed into the stable-generation tracker.
  *
- * This class deliberately does not restore checkpoints itself. A future
- * guarded-session integration must map terminal post-mutation outcomes to exact
- * PreRepair recovery before new work is admitted.
+ * Begin() without observer authorization remains a diagnostic algorithm surface
+ * for isolated tests only. ConsumeAuthoritative() succeeds exclusively for a
+ * session begun with an exact observer-bound authorization.
  */
 class PartyQuestPapyrusRuntimeMonitor final
 {
@@ -95,10 +139,18 @@ public:
     {
     }
 
+    /** Diagnostic-only session; cannot pass ConsumeAuthoritative(). */
     [[nodiscard]] bool Begin(
         uint64_t aTransactionId,
         uint64_t aNowMs,
         uint64_t aTimeoutMs) noexcept;
+
+    /** Authoritative session for an exact approved observer instance. */
+    [[nodiscard]] bool Begin(
+        uint64_t aTransactionId,
+        uint64_t aNowMs,
+        uint64_t aTimeoutMs,
+        const PartyQuestPapyrusRuntimeObserverAuthorization& acAuthorization) noexcept;
 
     [[nodiscard]] PartyQuestPapyrusRuntimeMonitorStatus Poll(
         uint64_t aTransactionId,
@@ -107,7 +159,12 @@ public:
     [[nodiscard]] std::optional<PartyQuestPapyrusQuiescenceAuthorization>
     Authorize() const noexcept;
 
+    /** Diagnostic consume; does not assert observer trust. */
     [[nodiscard]] bool Consume(
+        PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept;
+
+    /** Live-control-plane consume; requires an authorized observer session. */
+    [[nodiscard]] bool ConsumeAuthoritative(
         PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept;
 
     [[nodiscard]] bool Reset(uint64_t aTransactionId) noexcept;
@@ -122,7 +179,17 @@ public:
         return m_status;
     }
 
+    [[nodiscard]] bool IsAuthoritativeSession() const noexcept
+    {
+        return m_authoritativeObserver && m_transactionId != 0;
+    }
+
 private:
+    [[nodiscard]] bool BeginInternal(
+        uint64_t aTransactionId,
+        uint64_t aNowMs,
+        uint64_t aTimeoutMs,
+        bool aAuthoritativeObserver) noexcept;
     [[nodiscard]] bool RestartTracker() noexcept;
     PartyQuestPapyrusRuntimeMonitorStatus EnterTerminal(
         PartyQuestPapyrusRuntimeMonitorStatus aStatus) noexcept;
@@ -134,6 +201,9 @@ private:
     uint64_t m_startedAtMs{};
     uint64_t m_lastNowMs{};
     uint64_t m_timeoutMs{};
+    uint64_t m_lastObservedGeneration{};
+    bool m_hasObservedGeneration{};
+    bool m_authoritativeObserver{};
     PartyQuestPapyrusRuntimeMonitorStatus m_status{
         PartyQuestPapyrusRuntimeMonitorStatus::Inactive};
 };

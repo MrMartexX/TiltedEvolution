@@ -8,13 +8,17 @@ void PartyQuestPapyrusRuntimeMonitor::Clear() noexcept
     m_startedAtMs = 0;
     m_lastNowMs = 0;
     m_timeoutMs = 0;
+    m_lastObservedGeneration = 0;
+    m_hasObservedGeneration = false;
+    m_authoritativeObserver = false;
     m_status = PartyQuestPapyrusRuntimeMonitorStatus::Inactive;
 }
 
-bool PartyQuestPapyrusRuntimeMonitor::Begin(
+bool PartyQuestPapyrusRuntimeMonitor::BeginInternal(
     uint64_t aTransactionId,
     uint64_t aNowMs,
-    uint64_t aTimeoutMs) noexcept
+    uint64_t aTimeoutMs,
+    bool aAuthoritativeObserver) noexcept
 {
     if (aTransactionId == 0 || aTimeoutMs == 0 || m_transactionId != 0)
         return false;
@@ -26,8 +30,39 @@ bool PartyQuestPapyrusRuntimeMonitor::Begin(
     m_startedAtMs = aNowMs;
     m_lastNowMs = aNowMs;
     m_timeoutMs = aTimeoutMs;
+    m_lastObservedGeneration = 0;
+    m_hasObservedGeneration = false;
+    m_authoritativeObserver = aAuthoritativeObserver;
     m_status = PartyQuestPapyrusRuntimeMonitorStatus::Waiting;
     return true;
+}
+
+bool PartyQuestPapyrusRuntimeMonitor::Begin(
+    uint64_t aTransactionId,
+    uint64_t aNowMs,
+    uint64_t aTimeoutMs) noexcept
+{
+    return BeginInternal(
+        aTransactionId,
+        aNowMs,
+        aTimeoutMs,
+        false);
+}
+
+bool PartyQuestPapyrusRuntimeMonitor::Begin(
+    uint64_t aTransactionId,
+    uint64_t aNowMs,
+    uint64_t aTimeoutMs,
+    const PartyQuestPapyrusRuntimeObserverAuthorization& acAuthorization) noexcept
+{
+    if (!acAuthorization.Matches(m_observer))
+        return false;
+
+    return BeginInternal(
+        aTransactionId,
+        aNowMs,
+        aTimeoutMs,
+        true);
 }
 
 bool PartyQuestPapyrusRuntimeMonitor::RestartTracker() noexcept
@@ -114,6 +149,16 @@ PartyQuestPapyrusRuntimeMonitorStatus PartyQuestPapyrusRuntimeMonitor::Poll(
         break;
     }
 
+    if (m_hasObservedGeneration &&
+        observation.QuestEventGeneration < m_lastObservedGeneration)
+    {
+        return EnterTerminal(
+            PartyQuestPapyrusRuntimeMonitorStatus::InvalidObservation);
+    }
+
+    m_lastObservedGeneration = observation.QuestEventGeneration;
+    m_hasObservedGeneration = true;
+
     const auto trackerStatus = m_tracker.Observe(
         aTransactionId,
         observation.PendingWorkCount,
@@ -153,6 +198,15 @@ bool PartyQuestPapyrusRuntimeMonitor::Consume(
 
     Clear();
     return true;
+}
+
+bool PartyQuestPapyrusRuntimeMonitor::ConsumeAuthoritative(
+    PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
+{
+    if (!m_authoritativeObserver)
+        return false;
+
+    return Consume(std::move(aAuthorization));
 }
 
 bool PartyQuestPapyrusRuntimeMonitor::Reset(uint64_t aTransactionId) noexcept
