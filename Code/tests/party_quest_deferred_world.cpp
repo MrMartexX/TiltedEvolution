@@ -73,6 +73,7 @@ PartyQuestRuntimeApplyRequest BuildDeferredRequest(
         snapshot,
         BuildDeferredAuthorization(aQuestId));
     REQUIRE(request.Plan.Safety.IsRuntimeSafe());
+    REQUIRE(request.Plan.MutationAuthorization.IsVerified());
     REQUIRE(HasPartyQuestApplyAction(request.Plan.Actions, PartyQuestApplyAction::WaitForWorldTargets));
     return request;
 }
@@ -131,6 +132,30 @@ TEST_CASE("Deferred world queue is idempotent and detects transaction reuse conf
     conflict.TargetWorldRevision = 71;
     REQUIRE(queue.Enqueue(conflict) == PartyQuestDeferredWorldEnqueueStatus::TransactionConflict);
     REQUIRE(queue.GetPendingCount() == 1);
+}
+
+TEST_CASE("Deferred world queue rejects forged or stale mutation authorization", "[quest.party-state.deferred-world][mutation-authorization]")
+{
+    SECTION("missing authorization")
+    {
+        PartyQuestDeferredWorldQueue queue;
+        auto request = BuildDeferredRequest(3501, GameId(42, 0x2000), 1, 75, 0x6500);
+        request.Plan.MutationAuthorization = {};
+
+        REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::UnsafePlan);
+        REQUIRE(queue.GetPendingCount() == 0);
+    }
+
+    SECTION("snapshot changed after authorization")
+    {
+        PartyQuestDeferredWorldQueue queue;
+        auto request = BuildDeferredRequest(3502, GameId(42, 0x3000), 1, 76, 0x6600);
+        request.CanonicalSnapshot.CurrentStage += 1;
+        request.CanonicalSnapshot.Canonicalize();
+
+        REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::UnsafePlan);
+        REQUIRE(queue.GetPendingCount() == 0);
+    }
 }
 
 TEST_CASE("Same canonical quest revision with different transaction content fails closed", "[quest.party-state.deferred-world]")

@@ -16,6 +16,7 @@ enum class PartyQuestDeferredWorldEnqueueStatus : uint8_t
     Stale,
     TransactionConflict,
     InvalidRequest,
+    UnsafePlan,
     NotDeferred
 };
 
@@ -37,6 +38,11 @@ struct PartyQuestDeferredWorldEntry
  * External runtime hooks must explicitly call MarkReady only after resolving all
  * targets for the queued transaction. Newer canonical revisions replace older
  * pending work for the same quest so stale repairs are never executed later.
+ *
+ * A deferred request also needs the exact compatibility-bound runtime mutation
+ * authorization carried by its apply plan. This is defense in depth: the
+ * RuntimeApply coordinator validates the same proof again before admitting the
+ * transaction.
  */
 class PartyQuestDeferredWorldQueue final
 {

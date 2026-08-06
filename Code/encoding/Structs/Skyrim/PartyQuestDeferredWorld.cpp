@@ -80,6 +80,14 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
         return PartyQuestDeferredWorldEnqueueStatus::NotDeferred;
     }
 
+    if (!aRequest.Plan.MutationAuthorization.Matches(
+            aRequest.CanonicalSnapshot,
+            aRequest.Plan.Actions,
+            aRequest.Plan.DryRunOnly))
+    {
+        return PartyQuestDeferredWorldEnqueueStatus::UnsafePlan;
+    }
+
     aRequest.CanonicalSnapshot.Canonicalize();
     const uint64_t fingerprint = ComputeRequestFingerprint(aRequest);
 
