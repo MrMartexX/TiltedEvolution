@@ -15,6 +15,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <utility>
 
 namespace
 {
@@ -99,7 +100,19 @@ void CommitRecoveryRequest(
 
     REQUIRE(aCoordinator.MarkCheckpointCreated(acRequest.TransactionId));
     REQUIRE(aCoordinator.MarkApplyDispatched(acRequest.TransactionId));
-    REQUIRE(aCoordinator.MarkPapyrusQuiescent(acRequest.TransactionId));
+
+    PartyQuestPapyrusQuiescenceTracker tracker;
+    REQUIRE(tracker.Begin(acRequest.TransactionId));
+    REQUIRE(tracker.Observe(acRequest.TransactionId, 0, 1) ==
+        PartyQuestPapyrusQuiescenceStatus::Waiting);
+    REQUIRE(tracker.Observe(acRequest.TransactionId, 0, 1) ==
+        PartyQuestPapyrusQuiescenceStatus::Quiescent);
+    auto authorization = tracker.Authorize();
+    REQUIRE(authorization.has_value());
+    REQUIRE(aCoordinator.MarkPapyrusQuiescent(
+        tracker,
+        std::move(*authorization)));
+
     REQUIRE(aCoordinator.SubmitResnapshot(acRequest.TransactionId, acRequest.CanonicalSnapshot) ==
         PartyQuestRuntimeVerificationStatus::NeedsStableSample);
     REQUIRE(aCoordinator.SubmitResnapshot(acRequest.TransactionId, acRequest.CanonicalSnapshot) ==
