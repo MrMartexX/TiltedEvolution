@@ -42,7 +42,7 @@ struct PartyQuestRuntimeRecoveryResult
         PartyQuestRuntimeDurableTransitionStatus::InvalidState};
     uint64_t TransactionId{};
     uint64_t TargetWorldRevision{};
-    uint64_t RestoreId{}; // Always equals TransactionId for a valid blocked recovery.
+    uint64_t RestoreId{}; // Always equals TransactionId for a valid exact recovery.
     std::filesystem::path ManifestPath;
     std::filesystem::path RestoreJournalPath;
 
@@ -54,27 +54,32 @@ struct PartyQuestRuntimeRecoveryResult
 };
 
 /**
- * Coordinates crash recovery after a runtime quest mutation may have occurred.
+ * Coordinates exact recovery after a runtime quest mutation may have occurred.
  *
  * This layer intentionally supports only the exact immutable
- * PreRepair/Revision_<TargetWorldRevision> checkpoint recorded by the blocked
- * runtime transaction. It does not guess a LastKnownGood fallback.
+ * PreRepair/Revision_<TargetWorldRevision> checkpoint recorded by the runtime
+ * transaction. It does not guess a LastKnownGood fallback.
  *
  * RestoreId is deterministically the runtime TransactionId. A caller cannot
- * accidentally fork one blocked quest transaction into multiple filesystem
- * restore journals by choosing a different id on retry.
+ * accidentally fork one quest transaction into multiple filesystem restore
+ * journals by choosing a different id on retry.
  *
  * Ordering is fail-closed:
  *
- *  1. require a campaign/player-bound crash recovery barrier;
+ *  1. require the exact campaign/player-bound runtime recovery record;
  *  2. load and verify the exact PreRepair revision manifest and bytes;
  *  3. build a confined restore plan;
  *  4. resume the transaction-id-bound durable restore journal when it exists,
  *     otherwise start a new crash-resumable restore;
  *  5. independently reverify the live replica against the exact restore plan;
- *  6. clear the runtime recovery barrier only when checkpoint bytes are proven
- *     present in the live co-op replica at that instant;
+ *  6. clear the runtime barrier only when checkpoint bytes are proven present
+ *     in the live co-op replica at that instant;
  *  7. persist that cleared runtime state before exposing recovery as resolved.
+ *
+ * ResolveCrashRecovery() consumes a persisted crash barrier. ResolveLiveRecovery()
+ * consumes the still-active post-mutation transaction after a live fail-closed
+ * condition such as a terminal Papyrus monitor outcome. Both use the same exact
+ * PreRepair revision and deterministic RestoreId contract.
  *
  * SaveGuardBusy/SaveGuardReleaseFailed are reserved for the guarded wrapper;
  * this filesystem coordinator itself never manipulates the save lease.
@@ -87,6 +92,10 @@ class PartyQuestRuntimeRecoveryCoordinator final
 {
 public:
     [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveCrashRecovery(
+        PartyQuestRuntimeApplySession& aSession,
+        const PartyQuestCoopSavePaths& acPaths) noexcept;
+
+    [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveLiveRecovery(
         PartyQuestRuntimeApplySession& aSession,
         const PartyQuestCoopSavePaths& acPaths) noexcept;
 };

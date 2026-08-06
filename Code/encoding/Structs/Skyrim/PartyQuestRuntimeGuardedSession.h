@@ -118,6 +118,76 @@ public:
         uint64_t aTransactionId) noexcept;
 
     /**
+     * Poll the authoritative Papyrus runtime monitor under the real process
+     * SaveGuard. Waiting/Quiescent are non-terminal and keep the guarded repair
+     * active. TimedOut/Unsupported/InvalidClock/InvalidObservation after the
+     * durable mutation barrier are mapped immediately to
+     * CheckpointRestoreRequired; the active transaction and physical guard are
+     * intentionally retained until ResolveLiveRecovery() proves the exact
+     * PreRepair bytes restored.
+     *
+     * InvalidTransaction/Inactive are caller/control-plane errors and do not
+     * themselves authorize a filesystem restore.
+     */
+    [[nodiscard]] PartyQuestRuntimeGuardResult PollPapyrusRuntime(
+        PartyQuestPapyrusRuntimeMonitor& aMonitor,
+        uint64_t aTransactionId,
+        uint64_t aNowMs) noexcept
+    {
+        PartyQuestRuntimeGuardResult result;
+        result.TransactionId = aTransactionId;
+        result.GuardHeld = HasGuard(aTransactionId);
+
+        const auto* active = m_session.GetCoordinator().GetActive();
+        auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+        if (&m_saveGuard != &processGuard ||
+            !active ||
+            aTransactionId == 0 ||
+            active->TransactionId != aTransactionId ||
+            active->State != PartyQuestRuntimeApplyState::WaitingForPapyrus ||
+            !active->SaveGuardActive ||
+            !active->CheckpointCreated ||
+            !active->RuntimeMutationMayHaveOccurred ||
+            !HasGuard(aTransactionId) ||
+            !aMonitor.IsAuthoritativeSession() ||
+            aMonitor.GetTransactionId() != aTransactionId)
+        {
+            result.Status = &m_saveGuard == &processGuard
+                ? PartyQuestRuntimeGuardStatus::InvalidState
+                : PartyQuestRuntimeGuardStatus::GuardMismatch;
+            return result;
+        }
+
+        const auto monitorStatus = aMonitor.Poll(aTransactionId, aNowMs);
+        switch (monitorStatus)
+        {
+        case PartyQuestPapyrusRuntimeMonitorStatus::Waiting:
+        case PartyQuestPapyrusRuntimeMonitorStatus::Quiescent:
+            result.Status = PartyQuestRuntimeGuardStatus::Ready;
+            result.GuardHeld = true;
+            return result;
+
+        case PartyQuestPapyrusRuntimeMonitorStatus::TimedOut:
+        case PartyQuestPapyrusRuntimeMonitorStatus::Unsupported:
+        case PartyQuestPapyrusRuntimeMonitorStatus::InvalidClock:
+        case PartyQuestPapyrusRuntimeMonitorStatus::InvalidObservation:
+            return Transition(
+                aTransactionId,
+                m_session.AbortBeforeMutation(aTransactionId));
+
+        case PartyQuestPapyrusRuntimeMonitorStatus::Inactive:
+        case PartyQuestPapyrusRuntimeMonitorStatus::InvalidTransaction:
+            result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+            result.GuardHeld = HasGuard(aTransactionId);
+            return result;
+        }
+
+        result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+        result.GuardHeld = HasGuard(aTransactionId);
+        return result;
+    }
+
+    /**
      * Production quiescence gate. Only the process SaveGuard may cross into the
      * authoritative monitor path; the monitor itself must then consume trusted
      * observer-backed one-shot evidence before the durable transition occurs.
@@ -207,6 +277,53 @@ public:
 
     /** Reconstruct the physical lease required by a loaded durable session. */
     [[nodiscard]] PartyQuestRuntimeGuardResult ReconcileLoadedState() noexcept;
+
+    /**
+     * Resolve an in-process post-mutation failure through the exact PreRepair
+     * checkpoint. Only the real process SaveGuard may perform this restore.
+     * Every unresolved/failure path keeps the lease; success releases it only
+     * after exact live-byte verification and durable runtime-state clearance.
+     */
+    [[nodiscard]] PartyQuestRuntimeRecoveryResult ResolveLiveRecovery(
+        const PartyQuestCoopSavePaths& acPaths) noexcept
+    {
+        const auto* active = m_session.GetCoordinator().GetActive();
+        auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+        if (&m_saveGuard != &processGuard ||
+            !active ||
+            active->TransactionId == 0 ||
+            !active->SaveGuardActive ||
+            !active->CheckpointCreated ||
+            !active->RuntimeMutationMayHaveOccurred ||
+            !HasGuard(active->TransactionId))
+        {
+            PartyQuestRuntimeRecoveryResult result;
+            result.Status = &m_saveGuard == &processGuard
+                ? PartyQuestRuntimeRecoveryStatus::SaveGuardBusy
+                : PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState;
+            if (active)
+            {
+                result.TransactionId = active->TransactionId;
+                result.TargetWorldRevision = active->TargetWorldRevision;
+                result.RestoreId = active->TransactionId;
+            }
+            return result;
+        }
+
+        const uint64_t transactionId = active->TransactionId;
+        auto result = PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
+            m_session,
+            acPaths);
+        if (result.IsResolved())
+        {
+            m_checkpointCaptureEpoch = {};
+            if (!m_saveGuard.Release(transactionId))
+                result.Status = PartyQuestRuntimeRecoveryStatus::SaveGuardReleaseFailed;
+        }
+        // Runtime mutation may have happened, so every unresolved path retains
+        // the physical save lease for a deterministic retry/recovery attempt.
+        return result;
+    }
 
     /**
      * Resolve a crash barrier through the exact PreRepair checkpoint. The guard
