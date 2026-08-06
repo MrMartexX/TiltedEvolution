@@ -93,11 +93,25 @@ enum class PartyQuestPapyrusQuiescenceStatus : uint8_t
  * came from Skyrim; the trusted runtime observer is a separate integration
  * boundary. Any later valid observation changes the revision and makes a prior
  * authorization stale. Consume() is one-shot and resets the tracker session.
+ *
+ * The tracker itself is also one-shot process state. Copying or moving it would
+ * duplicate an already observed session and could preserve replayable evidence
+ * after another copy was consumed, so all copy/move operations are forbidden.
  */
 class PartyQuestPapyrusQuiescenceTracker final
 {
 public:
     static constexpr uint32_t kRequiredStableSamples = 2;
+
+    PartyQuestPapyrusQuiescenceTracker() noexcept = default;
+    PartyQuestPapyrusQuiescenceTracker(
+        const PartyQuestPapyrusQuiescenceTracker&) = delete;
+    PartyQuestPapyrusQuiescenceTracker& operator=(
+        const PartyQuestPapyrusQuiescenceTracker&) = delete;
+    PartyQuestPapyrusQuiescenceTracker(
+        PartyQuestPapyrusQuiescenceTracker&&) = delete;
+    PartyQuestPapyrusQuiescenceTracker& operator=(
+        PartyQuestPapyrusQuiescenceTracker&&) = delete;
 
     bool Begin(uint64_t aTransactionId) noexcept;
 

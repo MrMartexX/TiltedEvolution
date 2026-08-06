@@ -161,6 +161,10 @@ enum class PartyQuestPapyrusRuntimeMonitorStatus : uint8_t
  * Begin() without observer authorization remains a diagnostic algorithm surface
  * for isolated tests only. ConsumeAuthoritative() succeeds exclusively for a
  * session begun with an exact observer-lifetime-bound authorization.
+ *
+ * Monitor state is deliberately non-copyable/non-movable because it owns the
+ * tracker session and authoritative observer-lifetime binding. Duplicating that
+ * state would create a second route to old quiescence evidence.
  */
 class PartyQuestPapyrusRuntimeMonitor final
 {
@@ -170,6 +174,15 @@ public:
         : m_observer(aObserver)
     {
     }
+
+    PartyQuestPapyrusRuntimeMonitor(
+        const PartyQuestPapyrusRuntimeMonitor&) = delete;
+    PartyQuestPapyrusRuntimeMonitor& operator=(
+        const PartyQuestPapyrusRuntimeMonitor&) = delete;
+    PartyQuestPapyrusRuntimeMonitor(
+        PartyQuestPapyrusRuntimeMonitor&&) = delete;
+    PartyQuestPapyrusRuntimeMonitor& operator=(
+        PartyQuestPapyrusRuntimeMonitor&&) = delete;
 
     /** Diagnostic-only session; cannot pass ConsumeAuthoritative(). */
     [[nodiscard]] bool Begin(
