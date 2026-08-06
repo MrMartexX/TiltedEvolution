@@ -399,6 +399,11 @@ PartyQuestRuntimeDurableVerificationResult PartyQuestRuntimeGuardedSession::Subm
     uint64_t aTransactionId,
     QuestSnapshot aObservedSnapshot) noexcept
 {
+    // Production must use SubmitVerificationResnapshot() so every post-mutation
+    // sample participates in the bounded verification window.
+    if (&m_saveGuard == &PartyQuestSaveGuard::GetProcessGuard())
+        return {PartyQuestRuntimeVerificationStatus::InvalidState, false};
+
     const auto* active = m_session.GetCoordinator().GetActive();
     if (!active ||
         active->TransactionId != aTransactionId ||
@@ -411,8 +416,80 @@ PartyQuestRuntimeDurableVerificationResult PartyQuestRuntimeGuardedSession::Subm
 }
 
 PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::Commit(
+    PartyQuestRuntimeVerificationMonitor& aMonitor,
+    uint64_t aTransactionId,
+    uint64_t aNowMs) noexcept
+{
+    PartyQuestRuntimeGuardResult result;
+    result.TransactionId = aTransactionId;
+    result.GuardHeld = HasGuard(aTransactionId);
+
+    const auto* active = m_session.GetCoordinator().GetActive();
+    if (&m_saveGuard != &PartyQuestSaveGuard::GetProcessGuard() ||
+        !active ||
+        aTransactionId == 0 ||
+        active->TransactionId != aTransactionId ||
+        active->State != PartyQuestRuntimeApplyState::ReadyToCommit ||
+        !active->SaveGuardActive ||
+        !active->CheckpointCreated ||
+        !active->RuntimeMutationMayHaveOccurred ||
+        !HasGuard(aTransactionId) ||
+        aMonitor.GetTransactionId() != aTransactionId)
+    {
+        result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+        return result;
+    }
+
+    const auto monitorStatus = aMonitor.Poll(aTransactionId, aNowMs);
+    switch (monitorStatus)
+    {
+    case PartyQuestRuntimeVerificationMonitorStatus::Stable:
+        result = Transition(aTransactionId, m_session.Commit(aTransactionId));
+        if (result.TransitionStatus == PartyQuestRuntimeDurableTransitionStatus::Applied)
+        {
+            aMonitor.Cancel(aTransactionId);
+            m_checkpointCaptureEpoch = {};
+            if (!m_saveGuard.Release(aTransactionId))
+                result.Status = PartyQuestRuntimeGuardStatus::GuardReleaseFailed;
+            result.GuardHeld = HasGuard(aTransactionId);
+        }
+        return result;
+
+    case PartyQuestRuntimeVerificationMonitorStatus::TimedOut:
+    case PartyQuestRuntimeVerificationMonitorStatus::DivergenceBudgetExceeded:
+    case PartyQuestRuntimeVerificationMonitorStatus::InvalidClock:
+    case PartyQuestRuntimeVerificationMonitorStatus::InvalidVerification:
+        return Transition(
+            aTransactionId,
+            m_session.AbortBeforeMutation(aTransactionId));
+
+    case PartyQuestRuntimeVerificationMonitorStatus::Inactive:
+    case PartyQuestRuntimeVerificationMonitorStatus::Waiting:
+    case PartyQuestRuntimeVerificationMonitorStatus::InvalidTransaction:
+        result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+        result.GuardHeld = HasGuard(aTransactionId);
+        return result;
+    }
+
+    result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+    result.GuardHeld = HasGuard(aTransactionId);
+    return result;
+}
+
+PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::Commit(
     uint64_t aTransactionId) noexcept
 {
+    // Production commit must prove that Stable evidence is still inside the
+    // original verification deadline at the instant of publication.
+    if (&m_saveGuard == &PartyQuestSaveGuard::GetProcessGuard())
+    {
+        PartyQuestRuntimeGuardResult result;
+        result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+        result.TransactionId = aTransactionId;
+        result.GuardHeld = HasGuard(aTransactionId);
+        return result;
+    }
+
     if (!HasGuard(aTransactionId))
     {
         PartyQuestRuntimeGuardResult result;
@@ -572,7 +649,5 @@ PartyQuestRuntimeRecoveryResult PartyQuestRuntimeGuardedSession::ResolveCrashRec
         if (!m_saveGuard.Release(transactionId))
             result.Status = PartyQuestRuntimeRecoveryStatus::SaveGuardReleaseFailed;
     }
-    // Any unresolved recovery deliberately keeps the lease, including when this
-    // call acquired it, because runtime mutation may already have happened.
     return result;
 }

@@ -130,18 +130,6 @@ public:
     [[nodiscard]] PartyQuestRuntimeGuardResult ArmRuntimeMutation(
         uint64_t aTransactionId) noexcept;
 
-    /**
-     * Poll the authoritative Papyrus runtime monitor under the real process
-     * SaveGuard. Waiting/Quiescent are non-terminal and keep the guarded repair
-     * active. TimedOut/Unsupported/InvalidClock/InvalidObservation after the
-     * durable mutation barrier are mapped immediately to
-     * CheckpointRestoreRequired; the active transaction and physical guard are
-     * intentionally retained until ResolveLiveRecovery() proves the exact
-     * PreRepair bytes restored.
-     *
-     * InvalidTransaction/Inactive are caller/control-plane errors and do not
-     * themselves authorize a filesystem restore.
-     */
     [[nodiscard]] PartyQuestRuntimeGuardResult PollPapyrusRuntime(
         PartyQuestPapyrusRuntimeMonitor& aMonitor,
         uint64_t aTransactionId,
@@ -200,12 +188,6 @@ public:
         return result;
     }
 
-    /**
-     * Production quiescence gate. The verification budget begins before the
-     * durable transition into Verifying and is cancelled if that transition is
-     * not published. This prevents a caller from delaying the first resnapshot
-     * indefinitely or restarting the deadline after mutation.
-     */
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
         PartyQuestPapyrusRuntimeMonitor& aMonitor,
         PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization,
@@ -239,11 +221,6 @@ public:
         return Transition(transactionId, transition);
     }
 
-    /**
-     * Legacy runtime-monitor surface. The real process SaveGuard rejects it so
-     * production cannot enter Verifying without starting the bounded verification
-     * window. It remains usable with an explicit test guard for low-level tests.
-     */
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
         PartyQuestPapyrusRuntimeMonitor& aMonitor,
         PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
@@ -277,11 +254,6 @@ public:
             m_session.MarkPapyrusQuiescent(aMonitor, std::move(aAuthorization)));
     }
 
-    /**
-     * Diagnostic low-level quiescence surface. It is deliberately rejected when
-     * this wrapper owns the real process SaveGuard, so manually observed tracker
-     * state cannot advance a production repair into Verifying.
-     */
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
         PartyQuestPapyrusQuiescenceTracker& aTracker,
         PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
@@ -315,16 +287,9 @@ public:
             m_session.MarkPapyrusQuiescent(aTracker, std::move(aAuthorization)));
     }
 
-    /** Legacy compatibility surface: naked transaction assertions fail closed. */
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkPapyrusQuiescent(
         uint64_t aTransactionId) noexcept;
 
-    /**
-     * Bounded production resnapshot path. Divergence is tolerated only within
-     * the fixed process-local budget. Budget exhaustion, deadline expiry, clock
-     * regression or an impossible verification state after the mutation barrier
-     * immediately require exact PreRepair recovery while retaining SaveGuard.
-     */
     [[nodiscard]] PartyQuestRuntimeGuardedVerificationResult SubmitVerificationResnapshot(
         PartyQuestRuntimeVerificationMonitor& aMonitor,
         uint64_t aTransactionId,
@@ -398,7 +363,6 @@ public:
         return result;
     }
 
-    /** Deadline check when no resnapshot arrives. */
     [[nodiscard]] PartyQuestRuntimeGuardedVerificationResult PollVerification(
         PartyQuestRuntimeVerificationMonitor& aMonitor,
         uint64_t aTransactionId,
@@ -462,6 +426,18 @@ public:
         uint64_t aTransactionId,
         QuestSnapshot aObservedSnapshot) noexcept;
 
+    /**
+     * Production commit path. The exact verification monitor must still be
+     * Stable and inside its original deadline at the instant of commit. Terminal
+     * monitor state fails closed into exact PreRepair recovery while SaveGuard
+     * remains held.
+     */
+    [[nodiscard]] PartyQuestRuntimeGuardResult Commit(
+        PartyQuestRuntimeVerificationMonitor& aMonitor,
+        uint64_t aTransactionId,
+        uint64_t aNowMs) noexcept;
+
+    /** Diagnostic compatibility path; rejected for the real process guard. */
     [[nodiscard]] PartyQuestRuntimeGuardResult Commit(
         uint64_t aTransactionId) noexcept;
 
@@ -471,15 +447,8 @@ public:
     [[nodiscard]] PartyQuestRuntimeGuardResult CompleteLiveCheckpointRestore(
         uint64_t aTransactionId) noexcept;
 
-    /** Reconstruct the physical lease required by a loaded durable session. */
     [[nodiscard]] PartyQuestRuntimeGuardResult ReconcileLoadedState() noexcept;
 
-    /**
-     * Resolve an in-process post-mutation failure through the exact PreRepair
-     * checkpoint. Only the real process SaveGuard may perform this restore.
-     * Every unresolved/failure path keeps the lease; success releases it only
-     * after exact live-byte verification and durable runtime-state clearance.
-     */
     [[nodiscard]] PartyQuestRuntimeRecoveryResult ResolveLiveRecovery(
         const PartyQuestCoopSavePaths& acPaths) noexcept
     {
@@ -516,15 +485,9 @@ public:
             if (!m_saveGuard.Release(transactionId))
                 result.Status = PartyQuestRuntimeRecoveryStatus::SaveGuardReleaseFailed;
         }
-        // Runtime mutation may have happened, so every unresolved path retains
-        // the physical save lease for a deterministic retry/recovery attempt.
         return result;
     }
 
-    /**
-     * Resolve a crash barrier through the exact PreRepair checkpoint. The guard
-     * is acquired first and retained on every unresolved/failure path.
-     */
     [[nodiscard]] PartyQuestRuntimeRecoveryResult ResolveCrashRecovery(
         const PartyQuestCoopSavePaths& acPaths) noexcept;
 
@@ -533,7 +496,6 @@ public:
         return m_saveGuard.CanSave(aKind);
     }
 
-    /** Read-only ownership bridge for Skyrim-specific checkpoint code. */
     [[nodiscard]] const PartyQuestRuntimeApplySession& GetRuntimeSession() noexcept
     {
         return m_session;
@@ -544,11 +506,6 @@ public:
         return m_session;
     }
 
-    /**
-     * Exposes the exact physical guard owned by this control-plane session so a
-     * Skyrim-specific controlled checkpoint cannot accidentally authorize a
-     * different process-local lease.
-     */
     [[nodiscard]] PartyQuestSaveGuard& GetSaveGuard() noexcept
     {
         return m_saveGuard;

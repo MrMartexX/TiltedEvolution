@@ -112,8 +112,6 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::WaitingForPapyrus);
 
-    // A syntactically valid E1 tracker proof is still not trusted runtime
-    // observation and must not cross the real process SaveGuard boundary.
     PartyQuestPapyrusQuiescenceTracker tracker;
     REQUIRE(tracker.Begin(transactionId));
     REQUIRE(tracker.Observe(transactionId, 0, 70) ==
@@ -133,9 +131,6 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::WaitingForPapyrus);
 
-    // The same transaction advances only after an exact-instance-authorized
-    // runtime monitor produces the stable one-shot observation proof, while the
-    // bounded verification window starts in the same guarded transition.
     ProcessIdleObserver observer(80);
     const auto observerAuthorization =
         PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(observer);
@@ -165,6 +160,18 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::Verifying);
 
+    // Raw process-guard resnapshotting must not bypass the bounded monitor.
+    const auto rawResnapshot = guarded.SubmitResnapshot(
+        transactionId,
+        request.CanonicalSnapshot);
+    REQUIRE(rawResnapshot.Verification ==
+        PartyQuestRuntimeVerificationStatus::InvalidState);
+    REQUIRE_FALSE(rawResnapshot.PersistenceFailed);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::Verifying);
+    REQUIRE(verificationMonitor.GetStatus() ==
+        PartyQuestRuntimeVerificationMonitorStatus::Waiting);
+
     const auto first = guarded.SubmitVerificationResnapshot(
         verificationMonitor,
         transactionId,
@@ -188,9 +195,96 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
         PartyQuestRuntimeVerificationMonitorStatus::Stable);
     REQUIRE_FALSE(second.PersistenceFailed);
 
-    const auto committed = guarded.Commit(transactionId);
+    // Raw process-guard commit cannot skip the monitor's final deadline check.
+    const auto rawCommit = guarded.Commit(transactionId);
+    REQUIRE(rawCommit.Status == PartyQuestRuntimeGuardStatus::InvalidState);
+    REQUIRE(rawCommit.GuardHeld);
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::ReadyToCommit);
+
+    const auto committed = guarded.Commit(
+        verificationMonitor,
+        transactionId,
+        150);
     REQUIRE(committed.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE_FALSE(committed.GuardHeld);
     REQUIRE_FALSE(processGuard.IsActive());
+    REQUIRE(verificationMonitor.GetStatus() ==
+        PartyQuestRuntimeVerificationMonitorStatus::Inactive);
     REQUIRE(session.GetCoordinator().IsCommitted(transactionId));
+}
+
+TEST_CASE("Stable verification cannot be committed after its deadline", "[quest.party-state.runtime-guard][verification-budget][commit]")
+{
+    constexpr uint64_t transactionId = 26002;
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    REQUIRE_FALSE(processGuard.IsActive());
+    ProcessGuardCleanup cleanup{transactionId};
+
+    PartyQuestRuntimeApplySession session(
+        kPapyrusAuthorityCampaign,
+        kPapyrusAuthorityPlayer,
+        [](const PartyQuestRuntimeRecoveryState&) { return true; });
+    PartyQuestRuntimeGuardedSession guarded(session);
+    const auto request = BuildProcessGuardRequest(transactionId);
+
+    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(session.MarkCheckpointCreated(transactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status ==
+        PartyQuestRuntimeGuardStatus::Ready);
+
+    ProcessIdleObserver observer(90);
+    const auto observerAuthorization =
+        PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(observer);
+    PartyQuestPapyrusRuntimeMonitor papyrusMonitor(observer);
+    REQUIRE(papyrusMonitor.Begin(transactionId, 100, 1000, observerAuthorization));
+    REQUIRE(papyrusMonitor.Poll(transactionId, 110) ==
+        PartyQuestPapyrusRuntimeMonitorStatus::Waiting);
+    REQUIRE(papyrusMonitor.Poll(transactionId, 120) ==
+        PartyQuestPapyrusRuntimeMonitorStatus::Quiescent);
+    auto papyrusAuthorization = papyrusMonitor.Authorize();
+    REQUIRE(papyrusAuthorization.has_value());
+
+    PartyQuestRuntimeVerificationMonitor verificationMonitor;
+    REQUIRE(guarded.MarkPapyrusQuiescent(
+                papyrusMonitor,
+                std::move(*papyrusAuthorization),
+                verificationMonitor,
+                120).Status == PartyQuestRuntimeGuardStatus::Ready);
+
+    REQUIRE(guarded.SubmitVerificationResnapshot(
+                verificationMonitor,
+                transactionId,
+                130,
+                request.CanonicalSnapshot).Verification ==
+        PartyQuestRuntimeVerificationStatus::NeedsStableSample);
+    const auto stable = guarded.SubmitVerificationResnapshot(
+        verificationMonitor,
+        transactionId,
+        140,
+        request.CanonicalSnapshot);
+    REQUIRE(stable.Status == PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(stable.Verification == PartyQuestRuntimeVerificationStatus::Stable);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::ReadyToCommit);
+
+    const auto expired = guarded.Commit(
+        verificationMonitor,
+        transactionId,
+        120 + PartyQuestRuntimeVerificationMonitor::kTimeoutMs);
+    REQUIRE(expired.Status ==
+        PartyQuestRuntimeGuardStatus::CheckpointRestoreRequired);
+    REQUIRE(expired.TransitionStatus ==
+        PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired);
+    REQUIRE(expired.GuardHeld);
+    REQUIRE(verificationMonitor.GetStatus() ==
+        PartyQuestRuntimeVerificationMonitorStatus::TimedOut);
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::ReadyToCommit);
+    REQUIRE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
+    REQUIRE_FALSE(session.GetCoordinator().IsCommitted(transactionId));
+    REQUIRE(processGuard.GetTransactionId() == transactionId);
 }
