@@ -6,6 +6,7 @@
 #include <cstdint>
 
 class PartyQuestRuntimeCompatibilityPolicy;
+class PartyQuestRuntimeSafetyTestAccess;
 
 /**
  * Structural runtime-safety disposition for a canonical quest snapshot.
@@ -81,12 +82,13 @@ struct PartyQuestRuntimeSafetyFacts
 };
 
 /**
- * Quest-specific mutation authorization token.
+ * Quest-specific compatibility capability.
  *
- * Callers can construct only the unverified default. A verified token is issued
- * exclusively by PartyQuestRuntimeCompatibilityPolicy after exact manifest
- * fingerprint matching, preventing an arbitrary boolean from bypassing the
- * structural safety gates.
+ * A verified profile is issued exclusively by
+ * PartyQuestRuntimeCompatibilityPolicy after exact manifest/fact matching. It
+ * is bound to the reviewed QuestId and to a deterministic fingerprint of that
+ * exact compatibility contract, so a profile authorized for Quest A cannot be
+ * reused to classify Quest B RuntimeSafe.
  */
 class PartyQuestRuntimeSafetyProfile final
 {
@@ -95,18 +97,118 @@ public:
 
     [[nodiscard]] bool HasVerifiedNativeAdapter() const noexcept
     {
-        return m_hasVerifiedNativeAdapter;
+        return static_cast<bool>(m_questId) && m_compatibilityFingerprint != 0;
+    }
+
+    [[nodiscard]] bool IsVerifiedFor(const GameId& acQuestId) const noexcept
+    {
+        return HasVerifiedNativeAdapter() && acQuestId == m_questId;
+    }
+
+    [[nodiscard]] const GameId& GetQuestId() const noexcept
+    {
+        return m_questId;
+    }
+
+    [[nodiscard]] uint64_t GetCompatibilityFingerprint() const noexcept
+    {
+        return m_compatibilityFingerprint;
     }
 
 private:
-    explicit PartyQuestRuntimeSafetyProfile(bool aHasVerifiedNativeAdapter) noexcept
-        : m_hasVerifiedNativeAdapter(aHasVerifiedNativeAdapter)
+    PartyQuestRuntimeSafetyProfile(
+        const GameId& acQuestId,
+        uint64_t aCompatibilityFingerprint) noexcept
+        : m_questId(acQuestId)
+        , m_compatibilityFingerprint(aCompatibilityFingerprint)
     {
     }
 
-    bool m_hasVerifiedNativeAdapter{};
+    GameId m_questId{};
+    uint64_t m_compatibilityFingerprint{};
 
     friend class PartyQuestRuntimeCompatibilityPolicy;
+};
+
+/**
+ * Unforgeable capability for one exact runtime apply plan.
+ *
+ * Public callers can only construct the unverified default. A verified token is
+ * issued by PartyQuestRuntimeSafetyPolicy after a quest-scoped compatibility
+ * profile has classified the exact canonical snapshot RuntimeSafe and after the
+ * final action set is known. The token binds:
+ *
+ *  - QuestId;
+ *  - canonical snapshot digest;
+ *  - exact compatibility-contract fingerprint;
+ *  - exact apply-action bitset;
+ *  - DryRunOnly disposition.
+ *
+ * RuntimeApply validates this token before admitting a new transaction, so
+ * manually setting Safety.Status=RuntimeSafe is not mutation authority.
+ */
+class PartyQuestRuntimeMutationAuthorization final
+{
+public:
+    PartyQuestRuntimeMutationAuthorization() noexcept = default;
+
+    [[nodiscard]] bool IsVerified() const noexcept
+    {
+        return m_verified;
+    }
+
+    [[nodiscard]] uint64_t GetCompatibilityFingerprint() const noexcept
+    {
+        return m_compatibilityFingerprint;
+    }
+
+    [[nodiscard]] bool Matches(
+        const QuestSnapshot& acSnapshot,
+        PartyQuestApplyAction aActions,
+        bool aDryRunOnly) const noexcept
+    {
+        if (!m_verified ||
+            !acSnapshot.QuestId ||
+            acSnapshot.QuestId != m_questId ||
+            aActions != m_actions ||
+            aDryRunOnly != m_dryRunOnly)
+        {
+            return false;
+        }
+
+        return acSnapshot.ComputeDigest() == m_canonicalDigest;
+    }
+
+private:
+    PartyQuestRuntimeMutationAuthorization(
+        const GameId& acQuestId,
+        uint64_t aCanonicalDigest,
+        uint64_t aCompatibilityFingerprint,
+        PartyQuestApplyAction aActions,
+        bool aDryRunOnly) noexcept
+        : m_questId(acQuestId)
+        , m_canonicalDigest(aCanonicalDigest)
+        , m_compatibilityFingerprint(aCompatibilityFingerprint)
+        , m_actions(aActions)
+        , m_dryRunOnly(aDryRunOnly)
+        , m_verified(
+              static_cast<bool>(acQuestId) &&
+              aCanonicalDigest != 0 &&
+              aCompatibilityFingerprint != 0 &&
+              aActions != PartyQuestApplyAction::None)
+    {
+    }
+
+    GameId m_questId{};
+    uint64_t m_canonicalDigest{};
+    uint64_t m_compatibilityFingerprint{};
+    PartyQuestApplyAction m_actions{PartyQuestApplyAction::None};
+    bool m_dryRunOnly{true};
+    bool m_verified{};
+
+    friend class PartyQuestRuntimeSafetyPolicy;
+    // Defined only in Code/tests; no production factory/API exists.
+    friend class PartyQuestRuntimeSafetyTestAccess;
 };
 
 struct PartyQuestRuntimeSafetyDecision
@@ -130,6 +232,7 @@ struct PartyQuestApplyPlan
 {
     PartyQuestRuntimeSafetyDecision Safety;
     PartyQuestApplyAction Actions{PartyQuestApplyAction::None};
+    PartyQuestRuntimeMutationAuthorization MutationAuthorization;
     bool DryRunOnly{true};
 
     [[nodiscard]] bool WouldMutateQuestStage() const noexcept

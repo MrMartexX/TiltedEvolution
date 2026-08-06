@@ -9,6 +9,15 @@ bool RequiresWorldTargets(const PartyQuestApplyPlan& acPlan) noexcept
 {
     return HasPartyQuestApplyAction(acPlan.Actions, PartyQuestApplyAction::WaitForWorldTargets);
 }
+
+bool HasValidMutationAuthorization(
+    const PartyQuestRuntimeApplyRequest& acRequest) noexcept
+{
+    return acRequest.Plan.MutationAuthorization.Matches(
+        acRequest.CanonicalSnapshot,
+        acRequest.Plan.Actions,
+        acRequest.Plan.DryRunOnly);
+}
 } // namespace
 
 std::optional<PartyQuestRuntimeApplyCoordinator::Fingerprint>
@@ -26,7 +35,8 @@ PartyQuestRuntimeApplyCoordinator::ValidateAndFingerprint(
 
     if (acRequest.Plan.Safety.Status != PartyQuestRuntimeSafetyStatus::RuntimeSafe ||
         !HasPartyQuestApplyAction(acRequest.Plan.Actions, PartyQuestApplyAction::WaitForPapyrusQuiescence) ||
-        !HasPartyQuestApplyAction(acRequest.Plan.Actions, PartyQuestApplyAction::ResnapshotAndVerify))
+        !HasPartyQuestApplyAction(acRequest.Plan.Actions, PartyQuestApplyAction::ResnapshotAndVerify) ||
+        !HasValidMutationAuthorization(acRequest))
     {
         return std::nullopt;
     }
@@ -125,7 +135,8 @@ PartyQuestRuntimeApplyBeginStatus PartyQuestRuntimeApplyCoordinator::Begin(
 
     if (acRequest.Plan.Safety.Status != PartyQuestRuntimeSafetyStatus::RuntimeSafe ||
         !HasPartyQuestApplyAction(acRequest.Plan.Actions, PartyQuestApplyAction::WaitForPapyrusQuiescence) ||
-        !HasPartyQuestApplyAction(acRequest.Plan.Actions, PartyQuestApplyAction::ResnapshotAndVerify))
+        !HasPartyQuestApplyAction(acRequest.Plan.Actions, PartyQuestApplyAction::ResnapshotAndVerify) ||
+        !HasValidMutationAuthorization(acRequest))
     {
         return PartyQuestRuntimeApplyBeginStatus::UnsafePlan;
     }

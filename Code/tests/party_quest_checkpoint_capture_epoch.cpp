@@ -1,6 +1,8 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
+#include <party_quest_runtime_safety_test_access.h>
+
 #include <catch2/catch.hpp>
 
 namespace
@@ -31,6 +33,7 @@ PartyQuestRuntimeApplyRequest BuildEpochRequest(uint64_t aTransactionId)
     request.Plan.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
+    PartyQuestRuntimeSafetyTestAccess::AuthorizePlan(request.Plan, snapshot);
     return request;
 }
 

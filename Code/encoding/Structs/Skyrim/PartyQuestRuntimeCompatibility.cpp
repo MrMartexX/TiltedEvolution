@@ -1,5 +1,28 @@
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 
+namespace
+{
+uint64_t MixCompatibilityFingerprint(uint64_t aHash, uint64_t aValue) noexcept
+{
+    aHash ^= aValue + 0x9E3779B97F4A7C15ull + (aHash << 6) + (aHash >> 2);
+    return aHash;
+}
+
+uint64_t ComputeCompatibilityFingerprint(
+    const PartyQuestRuntimeCompatibilityRequirement& acRequirement) noexcept
+{
+    uint64_t hash = 0xA24BAED4963EE407ull;
+    hash = MixCompatibilityFingerprint(hash, acRequirement.QuestId.ModId);
+    hash = MixCompatibilityFingerprint(hash, acRequirement.QuestId.BaseId);
+    hash = MixCompatibilityFingerprint(hash, acRequirement.ProfileVersion);
+    hash = MixCompatibilityFingerprint(hash, acRequirement.ResolvedRecordFingerprint);
+    hash = MixCompatibilityFingerprint(hash, acRequirement.WinningOverrideFingerprint);
+    hash = MixCompatibilityFingerprint(hash, acRequirement.ScriptFingerprint);
+    hash = MixCompatibilityFingerprint(hash, acRequirement.NativeAdapterFingerprint);
+    return hash != 0 ? hash : 1;
+}
+} // namespace
+
 bool PartyQuestRuntimeCompatibilityPolicy::IsValidRequirement(
     const PartyQuestRuntimeCompatibilityRequirement& acRequirement) noexcept
 {
@@ -63,8 +86,18 @@ PartyQuestRuntimeCompatibilityDecision PartyQuestRuntimeCompatibilityPolicy::Eva
         return decision;
     }
 
+    const uint64_t compatibilityFingerprint =
+        ComputeCompatibilityFingerprint(acRequirement);
+    if (compatibilityFingerprint == 0)
+    {
+        decision.Status = PartyQuestRuntimeCompatibilityStatus::InvalidRequirement;
+        return decision;
+    }
+
     decision.Status = PartyQuestRuntimeCompatibilityStatus::Authorized;
-    decision.SafetyProfile = PartyQuestRuntimeSafetyProfile(true);
+    decision.SafetyProfile = PartyQuestRuntimeSafetyProfile(
+        acRequirement.QuestId,
+        compatibilityFingerprint);
     return decision;
 }
 

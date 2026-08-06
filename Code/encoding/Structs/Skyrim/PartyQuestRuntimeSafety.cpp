@@ -49,8 +49,9 @@ PartyQuestRuntimeSafetyDecision PartyQuestRuntimeSafetyPolicy::Evaluate(
     }
 
     // A compatibility-authorized native adapter is the only generic escape
-    // hatch to RuntimeSafe. The token cannot be created by ordinary callers.
-    if (acProfile.HasVerifiedNativeAdapter())
+    // hatch to RuntimeSafe. The profile is quest-scoped and cannot be reused
+    // for a different canonical QuestId.
+    if (acProfile.IsVerifiedFor(acSnapshot.QuestId))
     {
         decision.Status = PartyQuestRuntimeSafetyStatus::RuntimeSafe;
         decision.Reason = PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;
@@ -183,5 +184,18 @@ PartyQuestApplyPlan PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(
     // The executor is intentionally absent. This milestone only produces and
     // validates plans; it never mutates Skyrim runtime state.
     plan.DryRunOnly = true;
+
+    if (plan.Safety.Status == PartyQuestRuntimeSafetyStatus::RuntimeSafe &&
+        acProfile.IsVerifiedFor(acSnapshot.QuestId))
+    {
+        const uint64_t canonicalDigest = acSnapshot.ComputeDigest();
+        plan.MutationAuthorization = PartyQuestRuntimeMutationAuthorization(
+            acSnapshot.QuestId,
+            canonicalDigest,
+            acProfile.GetCompatibilityFingerprint(),
+            plan.Actions,
+            plan.DryRunOnly);
+    }
+
     return plan;
 }

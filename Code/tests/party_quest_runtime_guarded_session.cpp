@@ -1,6 +1,8 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
+#include <party_quest_runtime_safety_test_access.h>
+
 #include <catch2/catch.hpp>
 
 #include <chrono>
@@ -38,6 +40,7 @@ PartyQuestRuntimeApplyRequest BuildGuardRequest(
         PartyQuestApplyAction::ResnapshotAndVerify;
     if (aDeferred)
         request.Plan.Actions |= PartyQuestApplyAction::WaitForWorldTargets;
+    PartyQuestRuntimeSafetyTestAccess::AuthorizePlan(request.Plan, snapshot);
     return request;
 }
 

@@ -86,6 +86,11 @@ PartyQuestRuntimeApplyRequest BuildRuntimeRequest(
 
     REQUIRE(request.Plan.Safety.Status == PartyQuestRuntimeSafetyStatus::RuntimeSafe);
     REQUIRE(request.Plan.DryRunOnly);
+    REQUIRE(request.Plan.MutationAuthorization.IsVerified());
+    REQUIRE(request.Plan.MutationAuthorization.Matches(
+        request.CanonicalSnapshot,
+        request.Plan.Actions,
+        request.Plan.DryRunOnly));
     return request;
 }
 
@@ -127,6 +132,47 @@ TEST_CASE("Runtime apply lifecycle refuses provisional stage-only plans", "[ques
     REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::UnsafePlan);
     REQUIRE(coordinator.GetActive() == nullptr);
     REQUIRE_FALSE(coordinator.IsSaveGuardActive());
+}
+
+TEST_CASE("Runtime apply requires exact mutation authorization rather than public RuntimeSafe fields", "[quest.party-state.runtime-apply][mutation-authorization]")
+{
+    SECTION("default token cannot authorize a forged RuntimeSafe plan")
+    {
+        auto request = BuildRuntimeRequest(1501, GameId(9, 0x1500));
+        request.Plan.MutationAuthorization = {};
+        PartyQuestRuntimeApplyCoordinator coordinator;
+        REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::UnsafePlan);
+        REQUIRE(coordinator.GetActive() == nullptr);
+    }
+
+    SECTION("canonical snapshot change invalidates the token")
+    {
+        auto request = BuildRuntimeRequest(1502, GameId(9, 0x1501));
+        request.CanonicalSnapshot.CurrentStage = 40;
+        request.CanonicalSnapshot.CompletedStages.push_back(40);
+        request.CanonicalSnapshot.Canonicalize();
+        PartyQuestRuntimeApplyCoordinator coordinator;
+        REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::UnsafePlan);
+        REQUIRE(coordinator.GetActive() == nullptr);
+    }
+
+    SECTION("action expansion invalidates the token")
+    {
+        auto request = BuildRuntimeRequest(1503, GameId(9, 0x1502));
+        request.Plan.Actions |= PartyQuestApplyAction::WaitForWorldTargets;
+        PartyQuestRuntimeApplyCoordinator coordinator;
+        REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::UnsafePlan);
+        REQUIRE(coordinator.GetActive() == nullptr);
+    }
+
+    SECTION("dry-run disposition change invalidates the token")
+    {
+        auto request = BuildRuntimeRequest(1504, GameId(9, 0x1503));
+        request.Plan.DryRunOnly = false;
+        PartyQuestRuntimeApplyCoordinator coordinator;
+        REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::UnsafePlan);
+        REQUIRE(coordinator.GetActive() == nullptr);
+    }
 }
 
 TEST_CASE("Critical repair sequence requires checkpoint quiescence stable verification and commit", "[quest.party-state.runtime-apply]")
@@ -191,6 +237,11 @@ TEST_CASE("Runtime apply transaction ids are idempotent and conflict-safe", "[qu
     conflict.CanonicalSnapshot.CurrentStage = 40;
     conflict.CanonicalSnapshot.CompletedStages.push_back(40);
     conflict.CanonicalSnapshot.Canonicalize();
+    conflict.Plan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(
+        BuildRuntimeAdmission(conflict.CanonicalSnapshot.QuestId),
+        conflict.CanonicalSnapshot,
+        BuildRuntimeAuthorization(conflict.CanonicalSnapshot.QuestId));
+    REQUIRE(conflict.Plan.MutationAuthorization.IsVerified());
     REQUIRE(coordinator.Begin(conflict) == PartyQuestRuntimeApplyBeginStatus::TransactionConflict);
 }
 
