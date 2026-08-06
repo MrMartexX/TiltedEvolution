@@ -1,6 +1,26 @@
 #include <Structs/Skyrim/PartyQuestPapyrusRuntimeMonitor.h>
 
+#include <atomic>
 #include <utility>
+
+namespace
+{
+uint64_t NextObserverInstanceNonce() noexcept
+{
+    static std::atomic<uint64_t> sequence{1};
+    for (;;)
+    {
+        const uint64_t value = sequence.fetch_add(1, std::memory_order_relaxed);
+        if (value != 0)
+            return value;
+    }
+}
+} // namespace
+
+PartyQuestPapyrusRuntimeObserver::PartyQuestPapyrusRuntimeObserver() noexcept
+    : m_instanceNonce(NextObserverInstanceNonce())
+{
+}
 
 void PartyQuestPapyrusRuntimeMonitor::Clear() noexcept
 {
@@ -9,6 +29,7 @@ void PartyQuestPapyrusRuntimeMonitor::Clear() noexcept
     m_lastNowMs = 0;
     m_timeoutMs = 0;
     m_lastObservedGeneration = 0;
+    m_authorizedObserverInstanceNonce = 0;
     m_hasObservedGeneration = false;
     m_authoritativeObserver = false;
     m_status = PartyQuestPapyrusRuntimeMonitorStatus::Inactive;
@@ -18,7 +39,7 @@ bool PartyQuestPapyrusRuntimeMonitor::BeginInternal(
     uint64_t aTransactionId,
     uint64_t aNowMs,
     uint64_t aTimeoutMs,
-    bool aAuthoritativeObserver) noexcept
+    uint64_t aAuthorizedObserverInstanceNonce) noexcept
 {
     if (aTransactionId == 0 || aTimeoutMs == 0 || m_transactionId != 0)
         return false;
@@ -31,8 +52,9 @@ bool PartyQuestPapyrusRuntimeMonitor::BeginInternal(
     m_lastNowMs = aNowMs;
     m_timeoutMs = aTimeoutMs;
     m_lastObservedGeneration = 0;
+    m_authorizedObserverInstanceNonce = aAuthorizedObserverInstanceNonce;
     m_hasObservedGeneration = false;
-    m_authoritativeObserver = aAuthoritativeObserver;
+    m_authoritativeObserver = aAuthorizedObserverInstanceNonce != 0;
     m_status = PartyQuestPapyrusRuntimeMonitorStatus::Waiting;
     return true;
 }
@@ -46,7 +68,7 @@ bool PartyQuestPapyrusRuntimeMonitor::Begin(
         aTransactionId,
         aNowMs,
         aTimeoutMs,
-        false);
+        0);
 }
 
 bool PartyQuestPapyrusRuntimeMonitor::Begin(
@@ -58,11 +80,15 @@ bool PartyQuestPapyrusRuntimeMonitor::Begin(
     if (!acAuthorization.Matches(m_observer))
         return false;
 
+    const uint64_t observerInstanceNonce = m_observer.GetInstanceNonce();
+    if (observerInstanceNonce == 0)
+        return false;
+
     return BeginInternal(
         aTransactionId,
         aNowMs,
         aTimeoutMs,
-        true);
+        observerInstanceNonce);
 }
 
 bool PartyQuestPapyrusRuntimeMonitor::RestartTracker() noexcept
@@ -115,6 +141,12 @@ PartyQuestPapyrusRuntimeMonitorStatus PartyQuestPapyrusRuntimeMonitor::Poll(
     case PartyQuestPapyrusRuntimeMonitorStatus::Waiting:
     case PartyQuestPapyrusRuntimeMonitorStatus::Quiescent:
         break;
+    }
+
+    if (m_authoritativeObserver && !IsAuthoritativeSession())
+    {
+        return EnterTerminal(
+            PartyQuestPapyrusRuntimeMonitorStatus::InvalidObservation);
     }
 
     if (aNowMs < m_lastNowMs || aNowMs < m_startedAtMs)
@@ -178,8 +210,11 @@ PartyQuestPapyrusRuntimeMonitorStatus PartyQuestPapyrusRuntimeMonitor::Poll(
 std::optional<PartyQuestPapyrusQuiescenceAuthorization>
 PartyQuestPapyrusRuntimeMonitor::Authorize() const noexcept
 {
-    if (m_status != PartyQuestPapyrusRuntimeMonitorStatus::Quiescent)
+    if (m_status != PartyQuestPapyrusRuntimeMonitorStatus::Quiescent ||
+        (m_authoritativeObserver && !IsAuthoritativeSession()))
+    {
         return std::nullopt;
+    }
 
     return m_tracker.Authorize();
 }
@@ -203,7 +238,7 @@ bool PartyQuestPapyrusRuntimeMonitor::Consume(
 bool PartyQuestPapyrusRuntimeMonitor::ConsumeAuthoritative(
     PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept
 {
-    if (!m_authoritativeObserver)
+    if (!IsAuthoritativeSession())
         return false;
 
     return Consume(std::move(aAuthorization));

@@ -4,6 +4,9 @@
 
 #include <catch2/catch.hpp>
 
+#include <cstddef>
+#include <new>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -31,6 +34,9 @@ private:
     size_t m_next{};
 };
 
+static_assert(!std::is_copy_constructible_v<AuthorityTestObserver>);
+static_assert(!std::is_move_constructible_v<AuthorityTestObserver>);
+
 PartyQuestPapyrusRuntimeObservation Idle(uint64_t aGeneration)
 {
     return {
@@ -55,6 +61,7 @@ TEST_CASE("Papyrus runtime observer authorization is exact-instance scoped", "[q
     REQUIRE(firstAuthorization.IsVerified());
     REQUIRE(firstAuthorization.Matches(first));
     REQUIRE_FALSE(firstAuthorization.Matches(second));
+    REQUIRE(first.GetInstanceNonce() != second.GetInstanceNonce());
 
     PartyQuestPapyrusRuntimeMonitor secondMonitor(second);
     REQUIRE_FALSE(secondMonitor.Begin(7001, 0, 1000, firstAuthorization));
@@ -117,4 +124,36 @@ TEST_CASE("Papyrus event generation regression is terminal fail closed", "[quest
     REQUIRE(monitor.Poll(7004, 30) ==
         PartyQuestPapyrusRuntimeMonitorStatus::InvalidObservation);
     REQUIRE(monitor.IsAuthoritativeSession());
+}
+
+TEST_CASE("Observer address reuse cannot revive stale runtime authority", "[quest.party-state.quiescence][runtime-monitor][observer-authority][lifetime]")
+{
+    alignas(AuthorityTestObserver) std::byte storage[sizeof(AuthorityTestObserver)];
+    auto* first = new (storage) AuthorityTestObserver({Idle(60), Idle(60)});
+    const uint64_t firstNonce = first->GetInstanceNonce();
+    REQUIRE(firstNonce != 0);
+
+    const auto staleAuthorization =
+        PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(*first);
+    REQUIRE(staleAuthorization.Matches(*first));
+
+    {
+        PartyQuestPapyrusRuntimeMonitor monitor(*first);
+        REQUIRE(monitor.Begin(7005, 0, 1000, staleAuthorization));
+        REQUIRE(monitor.IsAuthoritativeSession());
+
+        first->~AuthorityTestObserver();
+        auto* second = new (storage) AuthorityTestObserver({Idle(60), Idle(60)});
+        REQUIRE(second == first);
+        REQUIRE(second->GetInstanceNonce() != 0);
+        REQUIRE(second->GetInstanceNonce() != firstNonce);
+        REQUIRE_FALSE(staleAuthorization.Matches(*second));
+        REQUIRE_FALSE(monitor.IsAuthoritativeSession());
+
+        REQUIRE(monitor.Poll(7005, 10) ==
+            PartyQuestPapyrusRuntimeMonitorStatus::InvalidObservation);
+        REQUIRE_FALSE(monitor.Authorize().has_value());
+
+        second->~AuthorityTestObserver();
+    }
 }

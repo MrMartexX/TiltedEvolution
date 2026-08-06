@@ -48,6 +48,13 @@ struct PartyQuestPapyrusRuntimeObservation
 /**
  * Game-specific read-only observation boundary.
  *
+ * Each observer lifetime receives a process-local nonzero InstanceNonce. The
+ * nonce is identity, not a secret or authentication primitive: it prevents a
+ * capability or monitor session issued to one object lifetime from becoming
+ * valid again if another observer is later constructed at the same address.
+ * Observers are deliberately non-copyable/non-movable so this identity cannot
+ * silently migrate between objects.
+ *
  * Implementations may inspect only version-validated runtime state. Merely
  * implementing this public interface is not sufficient to authorize a live
  * repair transition; production observers must also possess the encapsulated
@@ -58,8 +65,28 @@ class PartyQuestPapyrusRuntimeObserver
 public:
     virtual ~PartyQuestPapyrusRuntimeObserver() = default;
 
+    PartyQuestPapyrusRuntimeObserver(
+        const PartyQuestPapyrusRuntimeObserver&) = delete;
+    PartyQuestPapyrusRuntimeObserver& operator=(
+        const PartyQuestPapyrusRuntimeObserver&) = delete;
+    PartyQuestPapyrusRuntimeObserver(
+        PartyQuestPapyrusRuntimeObserver&&) = delete;
+    PartyQuestPapyrusRuntimeObserver& operator=(
+        PartyQuestPapyrusRuntimeObserver&&) = delete;
+
+    [[nodiscard]] uint64_t GetInstanceNonce() const noexcept
+    {
+        return m_instanceNonce;
+    }
+
     [[nodiscard]] virtual PartyQuestPapyrusRuntimeObservation Observe(
         uint64_t aTransactionId) noexcept = 0;
+
+protected:
+    PartyQuestPapyrusRuntimeObserver() noexcept;
+
+private:
+    uint64_t m_instanceNonce{};
 };
 
 class PartyQuestSkyrimPapyrusRuntimeObserver;
@@ -67,7 +94,7 @@ class PartyQuestPapyrusRuntimeObserverTestAccess;
 
 /**
  * Process-local capability binding an approved observer implementation to its
- * exact object instance. A fabricated implementation of the public observer
+ * exact object lifetime. A fabricated implementation of the public observer
  * interface cannot construct this capability and therefore cannot authorize a
  * live runtime transition.
  *
@@ -82,13 +109,15 @@ public:
 
     [[nodiscard]] bool IsVerified() const noexcept
     {
-        return m_observer != nullptr;
+        return m_observer != nullptr && m_observerInstanceNonce != 0;
     }
 
     [[nodiscard]] bool Matches(
         const PartyQuestPapyrusRuntimeObserver& acObserver) const noexcept
     {
-        return IsVerified() && m_observer == &acObserver;
+        return IsVerified() &&
+            m_observer == &acObserver &&
+            m_observerInstanceNonce == acObserver.GetInstanceNonce();
     }
 
 private:
@@ -98,10 +127,12 @@ private:
     explicit PartyQuestPapyrusRuntimeObserverAuthorization(
         const PartyQuestPapyrusRuntimeObserver& acObserver) noexcept
         : m_observer(&acObserver)
+        , m_observerInstanceNonce(acObserver.GetInstanceNonce())
     {
     }
 
     const PartyQuestPapyrusRuntimeObserver* m_observer{};
+    uint64_t m_observerInstanceNonce{};
 };
 
 enum class PartyQuestPapyrusRuntimeMonitorStatus : uint8_t
@@ -120,15 +151,16 @@ enum class PartyQuestPapyrusRuntimeMonitorStatus : uint8_t
  * Deterministic timeout/fail-closed orchestration over a runtime observer and
  * PartyQuestPapyrusQuiescenceTracker.
  *
- * The caller supplies monotonic milliseconds. A clock regression, event-
- * generation regression, unsupported runtime, malformed sample or timeout is
- * terminal for the current monitor session and can never produce authoritative
- * quiescence. Unknown observations reset stability and continue waiting until
- * the deadline. Busy/Idle samples are fed into the stable-generation tracker.
+ * The caller supplies monotonic milliseconds. A clock regression, observer-
+ * lifetime change, event-generation regression, unsupported runtime, malformed
+ * sample or timeout is terminal for the current monitor session and can never
+ * produce authoritative quiescence. Unknown observations reset stability and
+ * continue waiting until the deadline. Busy/Idle samples are fed into the
+ * stable-generation tracker.
  *
  * Begin() without observer authorization remains a diagnostic algorithm surface
  * for isolated tests only. ConsumeAuthoritative() succeeds exclusively for a
- * session begun with an exact observer-bound authorization.
+ * session begun with an exact observer-lifetime-bound authorization.
  */
 class PartyQuestPapyrusRuntimeMonitor final
 {
@@ -145,7 +177,7 @@ public:
         uint64_t aNowMs,
         uint64_t aTimeoutMs) noexcept;
 
-    /** Authoritative session for an exact approved observer instance. */
+    /** Authoritative session for an exact approved observer lifetime. */
     [[nodiscard]] bool Begin(
         uint64_t aTransactionId,
         uint64_t aNowMs,
@@ -163,7 +195,7 @@ public:
     [[nodiscard]] bool Consume(
         PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept;
 
-    /** Live-control-plane consume; requires an authorized observer session. */
+    /** Live-control-plane consume; requires a current authorized observer lifetime. */
     [[nodiscard]] bool ConsumeAuthoritative(
         PartyQuestPapyrusQuiescenceAuthorization&& aAuthorization) noexcept;
 
@@ -181,7 +213,10 @@ public:
 
     [[nodiscard]] bool IsAuthoritativeSession() const noexcept
     {
-        return m_authoritativeObserver && m_transactionId != 0;
+        return m_authoritativeObserver &&
+            m_transactionId != 0 &&
+            m_authorizedObserverInstanceNonce != 0 &&
+            m_authorizedObserverInstanceNonce == m_observer.GetInstanceNonce();
     }
 
 private:
@@ -189,7 +224,7 @@ private:
         uint64_t aTransactionId,
         uint64_t aNowMs,
         uint64_t aTimeoutMs,
-        bool aAuthoritativeObserver) noexcept;
+        uint64_t aAuthorizedObserverInstanceNonce) noexcept;
     [[nodiscard]] bool RestartTracker() noexcept;
     PartyQuestPapyrusRuntimeMonitorStatus EnterTerminal(
         PartyQuestPapyrusRuntimeMonitorStatus aStatus) noexcept;
@@ -202,6 +237,7 @@ private:
     uint64_t m_lastNowMs{};
     uint64_t m_timeoutMs{};
     uint64_t m_lastObservedGeneration{};
+    uint64_t m_authorizedObserverInstanceNonce{};
     bool m_hasObservedGeneration{};
     bool m_authoritativeObserver{};
     PartyQuestPapyrusRuntimeMonitorStatus m_status{
