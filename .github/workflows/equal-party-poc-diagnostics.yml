@@ -44,6 +44,14 @@ jobs:
           git submodule sync --recursive
           git submodule update --init --force --recursive --depth=1
 
+      - name: Cache xmake dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.xmake/packages
+          key: ${{ runner.os }}-xmake-${{ hashFiles('**/xmake.lua') }}
+          restore-keys: |
+            ${{ runner.os }}-xmake-
+
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
         with:
@@ -102,6 +110,34 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Classify validation scope
+        id: scope
+        shell: pwsh
+        run: |
+          $needsFull = ("${{ github.event_name }}" -ne "pull_request") -or ("${{ github.event.action }}" -ne "synchronize") -or [string]::IsNullOrWhiteSpace("${{ github.event.before }}") -or [string]::IsNullOrWhiteSpace("${{ github.event.after }}")
+          if ($needsFull) {
+            "full=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Full validation: non-synchronize event or missing push range."
+            exit 0
+          }
+
+          $before = "${{ github.event.before }}"
+          $after = "${{ github.event.after }}"
+          $files = @(git diff --name-only $before $after)
+          $isolated = $files.Count -gt 0
+
+          foreach ($file in $files) {
+            $isPartyQuest = ($file -match '^Code/encoding/Structs/Skyrim/PartyQuest') -or ($file -match '^Code/tests/party_quest_')
+            if (-not $isPartyQuest) {
+              $isolated = $false
+              break
+            }
+          }
+
+          $full = (-not $isolated).ToString().ToLowerInvariant()
+          "full=$full" >> $env:GITHUB_OUTPUT
+          Write-Host "PartyQuest-only pushed range: $isolated"
+
       - name: Checkout submodules
         run: |
           git submodule sync --recursive
@@ -112,6 +148,8 @@ jobs:
         with:
           path: ~/AppData/Local/.xmake/packages
           key: ${{ runner.os }}-xmake-${{ hashFiles('**/xmake.lua') }}
+          restore-keys: |
+            ${{ runner.os }}-xmake-
 
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
@@ -121,10 +159,17 @@ jobs:
       - name: Configure
         run: xmake config --arch=x64 --mode=debug --yes -vD
 
-      - name: Build runtime collector and capture diagnostics
+      - name: Build Windows validation target and capture diagnostics
         shell: pwsh
         run: |
-          xmake -y -vD SkyrimTogetherClient *> poc-windows-build.log
+          $target = if ("${{ steps.scope.outputs.full }}" -eq "true") {
+            "SkyrimTogetherClient"
+          } else {
+            "SkyrimEncoding"
+          }
+
+          Write-Host "Building validation target: $target"
+          xmake -y -vD $target *> poc-windows-build.log
           $status = $LASTEXITCODE
 
           $matches = Select-String -Path poc-windows-build.log -Pattern 'error C[0-9]+|fatal error|LNK[0-9]+|error:' | Select-Object -Last 250

@@ -21,6 +21,10 @@ on:
         description: "Skyrim Together version string"
         value: ${{ jobs.build.outputs.version }}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     strategy:
@@ -38,19 +42,50 @@ jobs:
       - uses: actions/checkout@v4
         with:
           # We need full history in order to create a version string (BuildInfo.h)
+          # and to classify the PR diff without a second checkout.
           fetch-depth: 0
 
-      - name: Checkout submodules
+      - name: Classify validation scope
+        id: scope
+        shell: pwsh
         run: |
-          git submodule sync --recursive
-          git submodule update --init --force --recursive --depth=1
+          $needsFull = ("${{ github.event_name }}" -ne "pull_request") -or ("${{ github.event.action }}" -ne "synchronize") -or [string]::IsNullOrWhiteSpace("${{ github.event.before }}") -or [string]::IsNullOrWhiteSpace("${{ github.event.after }}")
+          if ($needsFull) {
+            "full=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Full validation: non-synchronize event or missing push range."
+            exit 0
+          }
+
+          $before = "${{ github.event.before }}"
+          $after = "${{ github.event.after }}"
+          $files = @(git diff --name-only $before $after)
+          $isolated = $files.Count -gt 0
+
+          foreach ($file in $files) {
+            $isPartyQuest = ($file -match '^Code/encoding/Structs/Skyrim/PartyQuest') -or ($file -match '^Code/tests/party_quest_')
+            if (-not $isPartyQuest) {
+              $isolated = $false
+              break
+            }
+          }
+
+          $full = (-not $isolated).ToString().ToLowerInvariant()
+          "full=$full" >> $env:GITHUB_OUTPUT
+          Write-Host "PartyQuest-only pushed range: $isolated"
 
       - name: Checkout master on tag push
         if: github.ref_type == 'tag'
         # Checkout only if the tag was pushed to master
         run: (git rev-parse HEAD) -eq (git rev-parse origin/master) -and (git checkout master)
 
+      - name: Checkout submodules
+        if: steps.scope.outputs.full == 'true'
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive --depth=1
+
       - name: Cache xmake dependencies
+        if: steps.scope.outputs.full == 'true'
         uses: actions/cache@v4
         with:
           path: ~/AppData/Local/.xmake/packages
@@ -58,6 +93,7 @@ jobs:
 
       # Install xmake
       - name: Setup xmake
+        if: steps.scope.outputs.full == 'true'
         uses: xmake-io/github-action-setup-xmake@v1
         with:
           xmake-version: 3.0.9
@@ -65,28 +101,32 @@ jobs:
           actions-cache-key: ${{ matrix.os }}
 
       - name: Configure xmake and install dependencies
+        if: steps.scope.outputs.full == 'true'
         run: xmake config --arch=${{ matrix.arch }} --mode=${{ inputs.build-mode }} --yes -vD
 
       # Build the client
       - name: Build with xmake
+        if: steps.scope.outputs.full == 'true'
         run: |
           xmake -y
           echo "STR_BUILD_DIR=build/windows/${{ matrix.arch }}/${{ inputs.build-mode }}/" >> $env:GITHUB_ENV
 
       # Create distrib
       - name: Output distrib binaries via xmake
+        if: steps.scope.outputs.full == 'true'
         run: |
           xmake install -o distrib
           cp -Force -Recurse distrib/bin/* ${{ env.STR_BUILD_DIR }}
 
       # Building the Together UI
-
       - name: Setup pnpm
+        if: steps.scope.outputs.full == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 9
 
       - name: Setup Node
+        if: steps.scope.outputs.full == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: lts/iron
@@ -94,6 +134,7 @@ jobs:
           cache: 'pnpm'
 
       - name: Build the UI
+        if: steps.scope.outputs.full == 'true'
         run: |
           pnpm --prefix Code/skyrim_ui/ install
           pnpm --prefix Code/skyrim_ui/ deploy:production
@@ -103,7 +144,7 @@ jobs:
         run: echo "version=$(git describe --tags --always)" >> $env:GITHUB_OUTPUT
 
       - name: Upload build files for the next job
-        if: ${{ inputs.upload-build-for-next-job }}
+        if: ${{ inputs.upload-build-for-next-job && steps.scope.outputs.full == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: internal-job-files
