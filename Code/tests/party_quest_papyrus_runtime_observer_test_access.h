@@ -5,13 +5,15 @@
 /**
  * Test-only issuer for observer/runtime-profile trust. Production code cannot
  * obtain a live observer authorization from the public observer interface or
- * from caller-supplied profile metadata alone.
+ * from caller-supplied profile/generation metadata alone.
  */
 class PartyQuestPapyrusRuntimeObserverTestAccess final
 {
 public:
     static constexpr uint64_t kVerifiedTestRuntimeProfileFingerprint =
         0x5051525450524F46ull;
+    static constexpr uint64_t kVerifiedTestGenerationSourceFingerprint =
+        0x505147454E535243ull;
 
     [[nodiscard]] static PartyQuestSkyrimRuntimeIdentityAuthorization
     AuthorizeRuntimeIdentity(
@@ -28,6 +30,20 @@ public:
             aVersionDbSupported);
     }
 
+    [[nodiscard]] static PartyQuestPapyrusRuntimeGenerationAuthorization
+    AuthorizeGenerationSource(
+        uint64_t aSourceFingerprint = kVerifiedTestGenerationSourceFingerprint,
+        uint32_t aCoveredWorkDomains = kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+        bool aMonotonic = true,
+        bool aObservesWorkArrival = true) noexcept
+    {
+        return PartyQuestPapyrusRuntimeGenerationAuthorization(
+            aSourceFingerprint,
+            aCoveredWorkDomains,
+            aMonotonic,
+            aObservesWorkArrival);
+    }
+
     [[nodiscard]] static PartyQuestPapyrusRuntimeProfileAuthorization
     ResolveRuntimeProfileForTesting(
         const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
@@ -40,14 +56,43 @@ public:
         bool aCoherentSnapshot,
         bool aTrustedQuestEventGeneration) noexcept
     {
+        const auto generation = AuthorizeGenerationSource(
+            kVerifiedTestGenerationSourceFingerprint,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            aTrustedQuestEventGeneration,
+            aTrustedQuestEventGeneration);
+        return ResolveRuntimeProfileWithGenerationForTesting(
+            acRuntimeIdentity,
+            generation,
+            aProfileMajor,
+            aProfileMinor,
+            aProfilePatch,
+            aProfileBuild,
+            aRuntimeProfileFingerprint,
+            aObservedWorkDomains,
+            aCoherentSnapshot);
+    }
+
+    [[nodiscard]] static PartyQuestPapyrusRuntimeProfileAuthorization
+    ResolveRuntimeProfileWithGenerationForTesting(
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+        const PartyQuestPapyrusRuntimeGenerationAuthorization& acGeneration,
+        uint32_t aProfileMajor,
+        uint32_t aProfileMinor,
+        uint32_t aProfilePatch,
+        uint32_t aProfileBuild,
+        uint64_t aRuntimeProfileFingerprint,
+        uint32_t aObservedWorkDomains,
+        bool aCoherentSnapshot) noexcept
+    {
         const PartyQuestSkyrimPapyrusRuntimeProfileResolver::ProfileDescriptor profile{
             {aProfileMajor, aProfileMinor, aProfilePatch, aProfileBuild},
             aRuntimeProfileFingerprint,
             aObservedWorkDomains,
-            aCoherentSnapshot,
-            aTrustedQuestEventGeneration};
+            aCoherentSnapshot};
         return PartyQuestSkyrimPapyrusRuntimeProfileResolver::ResolveExactProfile(
             acRuntimeIdentity,
+            acGeneration,
             profile);
     }
 
@@ -72,12 +117,17 @@ public:
         bool aCoherentSnapshot,
         bool aTrustedQuestEventGeneration) noexcept
     {
+        const auto generation = AuthorizeGenerationSource(
+            kVerifiedTestGenerationSourceFingerprint,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            aTrustedQuestEventGeneration,
+            aTrustedQuestEventGeneration);
         const PartyQuestPapyrusRuntimeProfileAuthorization runtimeProfile(
             aRuntimeProfileFingerprint,
             aExactRuntimeMatch,
             aObservedWorkDomains,
             aCoherentSnapshot,
-            aTrustedQuestEventGeneration);
+            generation.IsVerified() ? generation.GetSourceFingerprint() : 0);
         return AuthorizeWithRuntimeProfileAuthorization(acObserver, runtimeProfile);
     }
 
