@@ -38,19 +38,29 @@ static_assert(!std::is_constructible_v<
     uint32_t,
     bool,
     bool>);
+static_assert(!std::is_constructible_v<
+    PartyQuestPapyrusRuntimeSnapshotAuthorization,
+    uint64_t,
+    uint32_t,
+    bool,
+    bool,
+    bool>);
 } // namespace
 
 TEST_CASE("Skyrim runtime identity capability is constructor confined", "[quest.party-state.quiescence][runtime-profile][runtime-identity]")
 {
     const auto generation =
         PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource();
+    const auto snapshot =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot();
     REQUIRE(generation.IsVerified());
+    REQUIRE(snapshot.IsVerified());
 
     PartyQuestSkyrimRuntimeIdentityAuthorization missing;
     REQUIRE_FALSE(missing.IsVerified());
     REQUIRE_FALSE(
         PartyQuestSkyrimPapyrusRuntimeProfileResolver::Resolve(
-            missing, generation).IsVerified());
+            missing, generation, snapshot).IsVerified());
 
     const auto wrongExecutable =
         PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeRuntimeIdentity(
@@ -117,6 +127,69 @@ TEST_CASE("Papyrus generation source authority requires complete monotonic work-
             true);
     REQUIRE(verified.IsVerified());
     REQUIRE(verified.GetSourceFingerprint() == 0x1122334455667788ull);
+    REQUIRE(HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(
+        verified.GetCoveredWorkDomains()));
+}
+
+TEST_CASE("Papyrus snapshot authority requires complete coherent read-only fail-closed coverage", "[quest.party-state.quiescence][runtime-profile][snapshot]")
+{
+    PartyQuestPapyrusRuntimeSnapshotAuthorization missing;
+    REQUIRE_FALSE(missing.IsVerified());
+
+    const auto missingFingerprint =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            0,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true,
+            true);
+    REQUIRE_FALSE(missingFingerprint.IsVerified());
+
+    const auto partialCoverage =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            0x8877665544332211ull,
+            static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::RunningStacks),
+            true,
+            true,
+            true);
+    REQUIRE_FALSE(partialCoverage.IsVerified());
+
+    const auto writableSampling =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            0x8877665544332211ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            false,
+            true,
+            true);
+    REQUIRE_FALSE(writableSampling.IsVerified());
+
+    const auto incoherentAcrossDomains =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            0x8877665544332211ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            false,
+            true);
+    REQUIRE_FALSE(incoherentAcrossDomains.IsVerified());
+
+    const auto bestEffortOnFailure =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            0x8877665544332211ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true,
+            false);
+    REQUIRE_FALSE(bestEffortOnFailure.IsVerified());
+
+    const auto verified =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            0x8877665544332211ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true,
+            true);
+    REQUIRE(verified.IsVerified());
+    REQUIRE(verified.GetSnapshotFingerprint() == 0x8877665544332211ull);
     REQUIRE(HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(
         verified.GetCoveredWorkDomains()));
 }
@@ -221,6 +294,36 @@ TEST_CASE("Exact runtime profile rejects an invalid generation capability", "[qu
     REQUIRE_FALSE(rejectedProfile.IsVerified());
 }
 
+TEST_CASE("Exact runtime profile rejects an invalid snapshot capability", "[quest.party-state.quiescence][runtime-profile][snapshot]")
+{
+    const auto runtimeIdentity =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeRuntimeIdentity(
+            9, 9, 9001, 42);
+    const auto generation =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource();
+    const auto partialSnapshot =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            0x8877665544332211ull,
+            static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::RunningStacks),
+            true,
+            true,
+            true);
+    REQUIRE(runtimeIdentity.IsVerified());
+    REQUIRE(generation.IsVerified());
+    REQUIRE_FALSE(partialSnapshot.IsVerified());
+
+    const auto rejectedProfile =
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            ResolveRuntimeProfileWithEvidenceForTesting(
+                runtimeIdentity,
+                generation,
+                partialSnapshot,
+                9, 9, 9001, 42,
+                0x1122334455667788ull,
+                kPartyQuestPapyrusRuntimeRequiredWorkDomains);
+    REQUIRE_FALSE(rejectedProfile.IsVerified());
+}
+
 TEST_CASE("Production Skyrim runtime profile registry fails closed before VM sampling", "[quest.party-state.quiescence][runtime-profile][fail-closed]")
 {
     const auto runtimeIdentity =
@@ -228,15 +331,18 @@ TEST_CASE("Production Skyrim runtime profile registry fails closed before VM sam
             9, 9, 9001, 42);
     const auto generation =
         PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource();
+    const auto snapshot =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot();
     REQUIRE(runtimeIdentity.IsVerified());
     REQUIRE(generation.IsVerified());
+    REQUIRE(snapshot.IsVerified());
 
-    // No production ABI/layout profile or production generation source is
-    // approved at this milestone. Even test-authorized prerequisites cannot
-    // create a production profile while the registry remains empty.
+    // No production ABI/layout profile, generation source or coherent snapshot
+    // contract is approved at this milestone. Even test-authorized prerequisites
+    // cannot create a production profile while the registry remains empty.
     const auto productionProfile =
         PartyQuestSkyrimPapyrusRuntimeProfileResolver::Resolve(
-            runtimeIdentity, generation);
+            runtimeIdentity, generation, snapshot);
     REQUIRE_FALSE(productionProfile.IsVerified());
 
     RuntimeProfileCountingObserver observer;
