@@ -217,6 +217,18 @@ PartyQuestSkyrimPreRepairSave::CaptureCoreSource(
             return result;
         }
 
+        const auto retentionDecision =
+            PartyQuestPreRepairCaptureAttemptPolicy::ReclaimHistoricalAttempts(
+                acPaths,
+                active->TransactionId,
+                active->TargetWorldRevision);
+        if (!retentionDecision.IsReady())
+        {
+            result.Status =
+                PartyQuestSkyrimPreRepairSaveStatus::CaptureAttemptCleanupFailed;
+            return result;
+        }
+
         const auto attemptDecision =
             PartyQuestPreRepairCaptureAttemptPolicy::Evaluate(
                 acPaths,

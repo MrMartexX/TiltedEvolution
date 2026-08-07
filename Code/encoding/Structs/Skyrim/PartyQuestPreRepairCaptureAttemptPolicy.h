@@ -13,7 +13,9 @@ enum class PartyQuestPreRepairCaptureAttemptStatus : uint8_t
     SaveDirectoryUnavailable,
     DirectoryInspectionFailed,
     DirectoryEntryLimitExceeded,
-    AttemptLimitExceeded
+    AttemptLimitExceeded,
+    RetentionConflict,
+    RetentionCleanupFailed
 };
 
 struct PartyQuestPreRepairCaptureAttemptDecision
@@ -21,6 +23,7 @@ struct PartyQuestPreRepairCaptureAttemptDecision
     PartyQuestPreRepairCaptureAttemptStatus Status{
         PartyQuestPreRepairCaptureAttemptStatus::InvalidContext};
     size_t ExistingAttemptCount{};
+    size_t ReclaimedFileCount{};
 
     [[nodiscard]] bool IsReady() const noexcept
     {
@@ -29,10 +32,11 @@ struct PartyQuestPreRepairCaptureAttemptDecision
 };
 
 /**
- * Immutable local admission bound for engine-generated PreRepair save sources.
- * It never deletes evidence and accepts no remotely supplied limit. Durable
- * reference-aware reclamation is a separate policy; this gate only prevents an
- * active transaction/revision from generating an unbounded retry set.
+ * Immutable local resource policy for engine-generated PreRepair save sources.
+ * It accepts no remotely supplied limit. Admission bounds retries for the
+ * active transaction/revision; reclamation may remove only exact historical
+ * capture sources after proving that durable recovery never references this
+ * scratch namespace. Current transaction/revision evidence is never removed.
  */
 class PartyQuestPreRepairCaptureAttemptPolicy final
 {
@@ -44,4 +48,15 @@ public:
         const PartyQuestCoopSavePaths& acPaths,
         uint64_t aTransactionId,
         uint64_t aTargetWorldRevision) noexcept;
+
+    /**
+     * Removes exact historical capture-source files only. The complete current
+     * transaction/revision namespace is protected. All candidates are confined
+     * and revalidated before the first deletion; ambiguity fails closed.
+     */
+    [[nodiscard]] static PartyQuestPreRepairCaptureAttemptDecision
+    ReclaimHistoricalAttempts(
+        const PartyQuestCoopSavePaths& acPaths,
+        uint64_t aProtectedTransactionId,
+        uint64_t aProtectedWorldRevision) noexcept;
 };

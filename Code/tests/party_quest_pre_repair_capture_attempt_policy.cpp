@@ -127,3 +127,77 @@ TEST_CASE("PreRepair attempt directory scan is locally bounded", "[quest.party-s
     REQUIRE(decision.Status ==
         PartyQuestPreRepairCaptureAttemptStatus::DirectoryEntryLimitExceeded);
 }
+
+TEST_CASE("PreRepair retention removes only exact historical capture sources", "[quest.party-state.pre-repair-attempts]")
+{
+    AttemptPolicySandbox sandbox;
+    const auto currentEss = AttemptName(1, ".ess");
+    const auto currentSkse = AttemptName(1, ".skse");
+    sandbox.Touch(currentEss);
+    sandbox.Touch(currentSkse);
+
+    constexpr uint64_t historicalTransaction = kTransaction + 1;
+    std::array<char, 128> historical{};
+    std::snprintf(
+        historical.data(),
+        historical.size(),
+        "STR_PreRepair_T%016llX_R%016llX_A%016llX.ess",
+        static_cast<unsigned long long>(historicalTransaction),
+        static_cast<unsigned long long>(kRevision),
+        2ull);
+    sandbox.Touch(historical.data());
+    sandbox.Touch("manual-save.ess");
+
+    const auto decision =
+        PartyQuestPreRepairCaptureAttemptPolicy::ReclaimHistoricalAttempts(
+            sandbox.Paths,
+            kTransaction,
+            kRevision);
+    REQUIRE(decision.Status == PartyQuestPreRepairCaptureAttemptStatus::Ready);
+    REQUIRE(decision.ReclaimedFileCount == 1);
+    REQUIRE(std::filesystem::exists(sandbox.Paths.SavesDirectory / currentEss));
+    REQUIRE(std::filesystem::exists(sandbox.Paths.SavesDirectory / currentSkse));
+    REQUIRE(std::filesystem::exists(sandbox.Paths.SavesDirectory / "manual-save.ess"));
+    REQUIRE_FALSE(std::filesystem::exists(
+        sandbox.Paths.SavesDirectory / historical.data()));
+}
+
+TEST_CASE("PreRepair retention validates all historical candidates before deleting", "[quest.party-state.pre-repair-attempts]")
+{
+    AttemptPolicySandbox sandbox;
+    constexpr uint64_t historicalTransaction = kTransaction + 1;
+    std::array<char, 128> regular{};
+    std::array<char, 128> conflict{};
+    std::snprintf(
+        regular.data(),
+        regular.size(),
+        "STR_PreRepair_T%016llX_R%016llX_A%016llX.ess",
+        static_cast<unsigned long long>(historicalTransaction),
+        static_cast<unsigned long long>(kRevision),
+        3ull);
+    std::snprintf(
+        conflict.data(),
+        conflict.size(),
+        "STR_PreRepair_T%016llX_R%016llX_A%016llX.skse",
+        static_cast<unsigned long long>(historicalTransaction),
+        static_cast<unsigned long long>(kRevision),
+        3ull);
+    sandbox.Touch(regular.data());
+    std::error_code ec;
+    std::filesystem::create_directory(
+        sandbox.Paths.SavesDirectory / conflict.data(),
+        ec);
+    REQUIRE_FALSE(ec);
+
+    const auto decision =
+        PartyQuestPreRepairCaptureAttemptPolicy::ReclaimHistoricalAttempts(
+            sandbox.Paths,
+            kTransaction,
+            kRevision);
+    REQUIRE(decision.Status ==
+        PartyQuestPreRepairCaptureAttemptStatus::RetentionConflict);
+    REQUIRE(decision.ReclaimedFileCount == 0);
+    REQUIRE(std::filesystem::exists(sandbox.Paths.SavesDirectory / regular.data()));
+    REQUIRE(std::filesystem::is_directory(
+        sandbox.Paths.SavesDirectory / conflict.data()));
+}
