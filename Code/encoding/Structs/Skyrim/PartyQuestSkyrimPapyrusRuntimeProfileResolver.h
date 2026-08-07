@@ -288,7 +288,9 @@ public:
 
         // Intentionally empty production registry. Do not add an entry from a
         // version string, Address Library support, guessed VM offsets, unlocked
-        // container reads or an unproven generation hook alone.
+        // container reads or an unproven generation hook alone. Any future
+        // entry must bind exact runtime, generation-source and snapshot contract
+        // identities; fingerprints identify audited contracts, not trust them.
         return {};
     }
 
@@ -299,13 +301,17 @@ private:
     {
         PartyQuestSkyrimRuntimeVersion RuntimeVersion{};
         uint64_t RuntimeProfileFingerprint{};
+        uint64_t GenerationSourceFingerprint{};
+        uint64_t SnapshotFingerprint{};
         uint32_t ObservedWorkDomains{};
     };
 
     /**
      * Shared exact-match primitive for future audited registry entries. Kept
      * private so production callers cannot inject profile metadata. Tests reach
-     * it only through the named test-access friend.
+     * it only through the named test-access friend. A valid generic capability
+     * is insufficient: its deterministic contract identity must match the exact
+     * generation/snapshot contract audited for this runtime profile.
      */
     [[nodiscard]] static PartyQuestPapyrusRuntimeProfileAuthorization ResolveExactProfile(
         const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
@@ -317,6 +323,9 @@ private:
             !acGeneration.IsVerified() ||
             !acSnapshot.IsVerified() ||
             !acRuntimeIdentity.GetRuntimeVersion().Matches(acProfile.RuntimeVersion) ||
+            acGeneration.GetSourceFingerprint() != acProfile.GenerationSourceFingerprint ||
+            acSnapshot.GetSnapshotFingerprint() != acProfile.SnapshotFingerprint ||
+            acGeneration.GetCoveredWorkDomains() != acProfile.ObservedWorkDomains ||
             acSnapshot.GetCoveredWorkDomains() != acProfile.ObservedWorkDomains)
         {
             return {};
