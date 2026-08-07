@@ -55,12 +55,14 @@ class PartyQuestPapyrusRuntimeObserverTestAccess;
  * A production resolver may issue this capability only after an exact runtime
  * identity match (using the already validated executable/version identity),
  * and only for a profile whose complete work-domain mapping, coherent snapshot
- * locking and monotonic quest-event generation source are all established.
- * Unknown or partially mapped runtimes must not receive this capability.
+ * locking and independently authorized monotonic work-generation source are all
+ * established. Unknown or partially mapped runtimes must not receive this
+ * capability.
  *
- * RuntimeProfileFingerprint is deterministic profile identity, not a secret or
- * authentication primitive. The capability itself is constructor-confined so
- * arbitrary callers cannot turn a guessed fingerprint into runtime authority.
+ * RuntimeProfileFingerprint and GenerationSourceFingerprint are deterministic
+ * contract identities, not secrets or authentication primitives. The
+ * capability itself is constructor-confined so arbitrary callers cannot turn
+ * guessed fingerprints into runtime authority.
  */
 class PartyQuestPapyrusRuntimeProfileAuthorization final
 {
@@ -70,15 +72,20 @@ public:
     [[nodiscard]] bool IsVerified() const noexcept
     {
         return m_runtimeProfileFingerprint != 0 &&
+            m_generationSourceFingerprint != 0 &&
             m_exactRuntimeMatch &&
             HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(m_observedWorkDomains) &&
-            m_coherentSnapshot &&
-            m_trustedQuestEventGeneration;
+            m_coherentSnapshot;
     }
 
     [[nodiscard]] uint64_t GetRuntimeProfileFingerprint() const noexcept
     {
         return m_runtimeProfileFingerprint;
+    }
+
+    [[nodiscard]] uint64_t GetGenerationSourceFingerprint() const noexcept
+    {
+        return m_generationSourceFingerprint;
     }
 
 private:
@@ -91,20 +98,20 @@ private:
         bool aExactRuntimeMatch,
         uint32_t aObservedWorkDomains,
         bool aCoherentSnapshot,
-        bool aTrustedQuestEventGeneration) noexcept
+        uint64_t aGenerationSourceFingerprint) noexcept
         : m_runtimeProfileFingerprint(aRuntimeProfileFingerprint)
+        , m_generationSourceFingerprint(aGenerationSourceFingerprint)
         , m_observedWorkDomains(aObservedWorkDomains)
         , m_exactRuntimeMatch(aExactRuntimeMatch)
         , m_coherentSnapshot(aCoherentSnapshot)
-        , m_trustedQuestEventGeneration(aTrustedQuestEventGeneration)
     {
     }
 
     uint64_t m_runtimeProfileFingerprint{};
+    uint64_t m_generationSourceFingerprint{};
     uint32_t m_observedWorkDomains{};
     bool m_exactRuntimeMatch{};
     bool m_coherentSnapshot{};
-    bool m_trustedQuestEventGeneration{};
 };
 
 /**
@@ -283,10 +290,10 @@ enum class PartyQuestPapyrusRuntimeMonitorStatus : uint8_t
  * for isolated tests only. ConsumeAuthoritative() succeeds exclusively for a
  * session begun with an exact observer-lifetime-bound authorization whose
  * runtime profile also proved exact identity, complete logical work coverage,
- * coherent snapshot capability and trusted monotonic generation. Such an
- * authoritative session additionally requires every Idle sample to carry the
- * complete logical Papyrus work envelope; partial coverage can never authorize
- * live quiescence.
+ * coherent snapshot capability and an independently authorized monotonic
+ * generation source. Such an authoritative session additionally requires every
+ * Idle sample to carry the complete logical Papyrus work envelope; partial
+ * coverage can never authorize live quiescence.
  *
  * Monitor state is deliberately non-copyable/non-movable because it owns the
  * tracker session and authoritative observer-lifetime binding. Duplicating that
