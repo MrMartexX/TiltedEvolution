@@ -15,6 +15,10 @@ public:
         0x505147454E535243ull;
     static constexpr uint64_t kVerifiedTestSnapshotFingerprint =
         0x5051534E41505348ull;
+    static constexpr uint32_t kVerifiedTestRuntimeMajor = 9;
+    static constexpr uint32_t kVerifiedTestRuntimeMinor = 9;
+    static constexpr uint32_t kVerifiedTestRuntimePatch = 9001;
+    static constexpr uint32_t kVerifiedTestRuntimeBuild = 42;
 
     [[nodiscard]] static PartyQuestSkyrimRuntimeIdentityAuthorization
     AuthorizeRuntimeIdentity(
@@ -57,9 +61,14 @@ public:
         uint32_t aCoveredWorkDomains = kPartyQuestPapyrusRuntimeRequiredWorkDomains,
         bool aMonotonic = true,
         bool aObservesWorkArrival = true,
-        bool aSampleIndependentArrivalEpoch = true) noexcept
+        bool aSampleIndependentArrivalEpoch = true,
+        uint32_t aRuntimeMajor = kVerifiedTestRuntimeMajor,
+        uint32_t aRuntimeMinor = kVerifiedTestRuntimeMinor,
+        uint32_t aRuntimePatch = kVerifiedTestRuntimePatch,
+        uint32_t aRuntimeBuild = kVerifiedTestRuntimeBuild) noexcept
     {
         return PartyQuestPapyrusRuntimeGenerationAuthorization(
+            {aRuntimeMajor, aRuntimeMinor, aRuntimePatch, aRuntimeBuild},
             aSourceFingerprint,
             aCoveredWorkDomains,
             aMonotonic,
@@ -73,9 +82,14 @@ public:
         uint32_t aCoveredWorkDomains = kPartyQuestPapyrusRuntimeRequiredWorkDomains,
         bool aReadOnly = true,
         bool aCrossDomainCoherent = true,
-        bool aFailClosedOnSamplingFailure = true) noexcept
+        bool aFailClosedOnSamplingFailure = true,
+        uint32_t aRuntimeMajor = kVerifiedTestRuntimeMajor,
+        uint32_t aRuntimeMinor = kVerifiedTestRuntimeMinor,
+        uint32_t aRuntimePatch = kVerifiedTestRuntimePatch,
+        uint32_t aRuntimeBuild = kVerifiedTestRuntimeBuild) noexcept
     {
         return PartyQuestPapyrusRuntimeSnapshotAuthorization(
+            {aRuntimeMajor, aRuntimeMinor, aRuntimePatch, aRuntimeBuild},
             aSnapshotFingerprint,
             aCoveredWorkDomains,
             aReadOnly,
@@ -100,13 +114,21 @@ public:
             kPartyQuestPapyrusRuntimeRequiredWorkDomains,
             aTrustedQuestEventGeneration,
             aTrustedQuestEventGeneration,
-            aTrustedQuestEventGeneration);
+            aTrustedQuestEventGeneration,
+            aProfileMajor,
+            aProfileMinor,
+            aProfilePatch,
+            aProfileBuild);
         const auto snapshot = AuthorizeSnapshot(
             kVerifiedTestSnapshotFingerprint,
             kPartyQuestPapyrusRuntimeRequiredWorkDomains,
             aCoherentSnapshot,
             aCoherentSnapshot,
-            aCoherentSnapshot);
+            aCoherentSnapshot,
+            aProfileMajor,
+            aProfileMinor,
+            aProfilePatch,
+            aProfileBuild);
         return ResolveRuntimeProfileWithEvidenceForTesting(
             acRuntimeIdentity,
             generation,
@@ -136,7 +158,11 @@ public:
             kPartyQuestPapyrusRuntimeRequiredWorkDomains,
             aCoherentSnapshot,
             aCoherentSnapshot,
-            aCoherentSnapshot);
+            aCoherentSnapshot,
+            aProfileMajor,
+            aProfileMinor,
+            aProfilePatch,
+            aProfileBuild);
         return ResolveRuntimeProfileWithEvidenceForTesting(
             acRuntimeIdentity,
             acGeneration,
