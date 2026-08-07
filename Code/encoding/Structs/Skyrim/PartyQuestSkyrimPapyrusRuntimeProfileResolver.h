@@ -8,6 +8,7 @@
 
 class PartyQuestSkyrimRuntimeIdentityResolver;
 class PartyQuestSkyrimPapyrusGenerationSourceResolver;
+class PartyQuestSkyrimPapyrusSnapshotResolver;
 class PartyQuestPapyrusRuntimeObserverTestAccess;
 
 /**
@@ -194,33 +195,100 @@ private:
 };
 
 /**
+ * Process-local proof that one authoritative Papyrus observation can obtain a
+ * coherent, read-only snapshot of the complete required VM work envelope.
+ *
+ * Container offsets, nearby lock fields, game-thread execution or a boolean
+ * claim of coherence are not authority by themselves. A future concrete Skyrim
+ * snapshot resolver may issue this capability only after the exact runtime's
+ * layout, lock ownership/order and failure behavior have been verified.
+ * Sampling must fail closed rather than silently falling back to unlocked,
+ * partial or best-effort reads.
+ */
+class PartyQuestPapyrusRuntimeSnapshotAuthorization final
+{
+public:
+    PartyQuestPapyrusRuntimeSnapshotAuthorization() noexcept = default;
+
+    [[nodiscard]] bool IsVerified() const noexcept
+    {
+        return m_snapshotFingerprint != 0 &&
+            HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(m_coveredWorkDomains) &&
+            m_readOnly &&
+            m_crossDomainCoherent &&
+            m_failClosedOnSamplingFailure;
+    }
+
+    [[nodiscard]] uint64_t GetSnapshotFingerprint() const noexcept
+    {
+        return m_snapshotFingerprint;
+    }
+
+    [[nodiscard]] uint32_t GetCoveredWorkDomains() const noexcept
+    {
+        return m_coveredWorkDomains;
+    }
+
+private:
+    friend class PartyQuestSkyrimPapyrusSnapshotResolver;
+    friend class PartyQuestSkyrimPapyrusRuntimeProfileResolver;
+    friend class PartyQuestPapyrusRuntimeObserverTestAccess;
+
+    explicit PartyQuestPapyrusRuntimeSnapshotAuthorization(
+        uint64_t aSnapshotFingerprint,
+        uint32_t aCoveredWorkDomains,
+        bool aReadOnly,
+        bool aCrossDomainCoherent,
+        bool aFailClosedOnSamplingFailure) noexcept
+        : m_snapshotFingerprint(aSnapshotFingerprint)
+        , m_coveredWorkDomains(aCoveredWorkDomains)
+        , m_readOnly(aReadOnly)
+        , m_crossDomainCoherent(aCrossDomainCoherent)
+        , m_failClosedOnSamplingFailure(aFailClosedOnSamplingFailure)
+    {
+    }
+
+    uint64_t m_snapshotFingerprint{};
+    uint32_t m_coveredWorkDomains{};
+    bool m_readOnly{};
+    bool m_crossDomainCoherent{};
+    bool m_failClosedOnSamplingFailure{};
+};
+
+/**
  * Fail-closed bridge from trusted executable identity to the much stronger
  * Papyrus VM observation-profile capability.
  *
  * Address-Library/VersionDb support alone is intentionally insufficient: every
  * production profile must additionally have an exact executable-version match,
- * a proven complete six-domain Papyrus mapping, coherent snapshot semantics and
- * a separately authorized monotonic work-generation source.
+ * a proven complete six-domain Papyrus mapping, a separately authorized
+ * coherent read-only snapshot contract and a separately authorized monotonic
+ * work-generation source.
  *
  * No production Skyrim runtime profile is approved yet. Resolve() therefore
- * returns an invalid capability for every runtime until an ABI/layout profile
- * and generation source are supported by separate evidence. This preserves the
- * invariant that an unknown or merely VersionDb-supported executable causes
- * zero authoritative VM sampling.
+ * returns an invalid capability for every runtime until the ABI/layout,
+ * snapshot and generation contracts are supported by separate evidence. This
+ * preserves the invariant that an unknown or merely VersionDb-supported
+ * executable causes zero authoritative VM sampling.
  */
 class PartyQuestSkyrimPapyrusRuntimeProfileResolver final
 {
 public:
     [[nodiscard]] static PartyQuestPapyrusRuntimeProfileAuthorization Resolve(
         const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
-        const PartyQuestPapyrusRuntimeGenerationAuthorization& acGeneration) noexcept
+        const PartyQuestPapyrusRuntimeGenerationAuthorization& acGeneration,
+        const PartyQuestPapyrusRuntimeSnapshotAuthorization& acSnapshot) noexcept
     {
-        if (!acRuntimeIdentity.IsVerified() || !acGeneration.IsVerified())
+        if (!acRuntimeIdentity.IsVerified() ||
+            !acGeneration.IsVerified() ||
+            !acSnapshot.IsVerified())
+        {
             return {};
+        }
 
         // Intentionally empty production registry. Do not add an entry from a
-        // version string, Address Library support, guessed VM offsets or an
-        // unproven generation hook alone.
+        // version string, Address Library support, guessed VM offsets, unlocked
+        // container reads or an unproven generation hook alone.
         return {};
     }
 
@@ -232,7 +300,6 @@ private:
         PartyQuestSkyrimRuntimeVersion RuntimeVersion{};
         uint64_t RuntimeProfileFingerprint{};
         uint32_t ObservedWorkDomains{};
-        bool CoherentSnapshot{};
     };
 
     /**
@@ -243,11 +310,14 @@ private:
     [[nodiscard]] static PartyQuestPapyrusRuntimeProfileAuthorization ResolveExactProfile(
         const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
         const PartyQuestPapyrusRuntimeGenerationAuthorization& acGeneration,
+        const PartyQuestPapyrusRuntimeSnapshotAuthorization& acSnapshot,
         const ProfileDescriptor& acProfile) noexcept
     {
         if (!acRuntimeIdentity.IsVerified() ||
             !acGeneration.IsVerified() ||
-            !acRuntimeIdentity.GetRuntimeVersion().Matches(acProfile.RuntimeVersion))
+            !acSnapshot.IsVerified() ||
+            !acRuntimeIdentity.GetRuntimeVersion().Matches(acProfile.RuntimeVersion) ||
+            acSnapshot.GetCoveredWorkDomains() != acProfile.ObservedWorkDomains)
         {
             return {};
         }
@@ -256,7 +326,7 @@ private:
             acProfile.RuntimeProfileFingerprint,
             true,
             acProfile.ObservedWorkDomains,
-            acProfile.CoherentSnapshot,
+            true,
             acGeneration.GetSourceFingerprint());
     }
 };
