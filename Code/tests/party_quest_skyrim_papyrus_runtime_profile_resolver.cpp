@@ -34,6 +34,7 @@ static_assert(!std::is_constructible_v<
     bool>);
 static_assert(!std::is_constructible_v<
     PartyQuestPapyrusRuntimeGenerationAuthorization,
+    PartyQuestSkyrimRuntimeVersion,
     uint64_t,
     uint32_t,
     bool,
@@ -41,6 +42,7 @@ static_assert(!std::is_constructible_v<
     bool>);
 static_assert(!std::is_constructible_v<
     PartyQuestPapyrusRuntimeSnapshotAuthorization,
+    PartyQuestSkyrimRuntimeVersion,
     uint64_t,
     uint32_t,
     bool,
@@ -133,6 +135,16 @@ TEST_CASE("Papyrus generation source authority requires complete monotonic sampl
             false);
     REQUIRE_FALSE(sampleDerivedGeneration.IsVerified());
 
+    const auto missingRuntime =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            0x1122334455667788ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true,
+            true,
+            0, 0, 0, 0);
+    REQUIRE_FALSE(missingRuntime.IsVerified());
+
     const auto verified =
         PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
             0x1122334455667788ull,
@@ -142,6 +154,7 @@ TEST_CASE("Papyrus generation source authority requires complete monotonic sampl
             true);
     REQUIRE(verified.IsVerified());
     REQUIRE(verified.GetSourceFingerprint() == 0x1122334455667788ull);
+    REQUIRE(verified.GetRuntimeVersion().Matches({9, 9, 9001, 42}));
     REQUIRE(HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(
         verified.GetCoveredWorkDomains()));
 }
@@ -196,6 +209,16 @@ TEST_CASE("Papyrus snapshot authority requires complete coherent read-only fail-
             false);
     REQUIRE_FALSE(bestEffortOnFailure.IsVerified());
 
+    const auto missingRuntime =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            0x8877665544332211ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true,
+            true,
+            0, 0, 0, 0);
+    REQUIRE_FALSE(missingRuntime.IsVerified());
+
     const auto verified =
         PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
             0x8877665544332211ull,
@@ -205,6 +228,7 @@ TEST_CASE("Papyrus snapshot authority requires complete coherent read-only fail-
             true);
     REQUIRE(verified.IsVerified());
     REQUIRE(verified.GetSnapshotFingerprint() == 0x8877665544332211ull);
+    REQUIRE(verified.GetRuntimeVersion().Matches({9, 9, 9001, 42}));
     REQUIRE(HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(
         verified.GetCoveredWorkDomains()));
 }
@@ -341,6 +365,63 @@ TEST_CASE("Exact runtime profile binds generation and snapshot contract identiti
     REQUIRE(exactEvidenceContracts.IsVerified());
     REQUIRE(exactEvidenceContracts.GetGenerationSourceFingerprint() ==
         alternateGenerationFingerprint);
+}
+
+TEST_CASE("Exact runtime profile rejects evidence authorized for another runtime", "[quest.party-state.quiescence][runtime-profile][runtime-binding]")
+{
+    const auto runtimeIdentity =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeRuntimeIdentity(
+            9, 9, 9001, 42);
+    const auto exactGeneration =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource();
+    const auto exactSnapshot =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot();
+    const auto otherRuntimeGeneration =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            PartyQuestPapyrusRuntimeObserverTestAccess::
+                kVerifiedTestGenerationSourceFingerprint,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true,
+            true,
+            9, 9, 9002, 42);
+    const auto otherRuntimeSnapshot =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            PartyQuestPapyrusRuntimeObserverTestAccess::
+                kVerifiedTestSnapshotFingerprint,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true,
+            true,
+            9, 9, 9002, 42);
+
+    REQUIRE(runtimeIdentity.IsVerified());
+    REQUIRE(exactGeneration.IsVerified());
+    REQUIRE(exactSnapshot.IsVerified());
+    REQUIRE(otherRuntimeGeneration.IsVerified());
+    REQUIRE(otherRuntimeSnapshot.IsVerified());
+
+    const auto wrongGenerationRuntime =
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            ResolveRuntimeProfileWithEvidenceForTesting(
+                runtimeIdentity,
+                otherRuntimeGeneration,
+                exactSnapshot,
+                9, 9, 9001, 42,
+                0x1122334455667788ull,
+                kPartyQuestPapyrusRuntimeRequiredWorkDomains);
+    REQUIRE_FALSE(wrongGenerationRuntime.IsVerified());
+
+    const auto wrongSnapshotRuntime =
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            ResolveRuntimeProfileWithEvidenceForTesting(
+                runtimeIdentity,
+                exactGeneration,
+                otherRuntimeSnapshot,
+                9, 9, 9001, 42,
+                0x1122334455667788ull,
+                kPartyQuestPapyrusRuntimeRequiredWorkDomains);
+    REQUIRE_FALSE(wrongSnapshotRuntime.IsVerified());
 }
 
 TEST_CASE("Exact runtime profile rejects an invalid generation capability", "[quest.party-state.quiescence][runtime-profile][generation-source]")
