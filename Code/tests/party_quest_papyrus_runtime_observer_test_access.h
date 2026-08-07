@@ -4,8 +4,7 @@
 
 /**
  * Test-only issuer for observer/runtime-profile trust. Production code cannot
- * obtain a live observer authorization from the public observer interface or
- * from caller-supplied profile/generation/snapshot metadata alone.
+ * obtain these capabilities from caller-supplied metadata.
  */
 class PartyQuestPapyrusRuntimeObserverTestAccess final
 {
@@ -137,11 +136,17 @@ public:
         uint32_t aProfilePatch,
         uint32_t aProfileBuild,
         uint64_t aRuntimeProfileFingerprint,
-        uint32_t aObservedWorkDomains) noexcept
+        uint32_t aObservedWorkDomains,
+        uint64_t aExpectedGenerationSourceFingerprint =
+            kVerifiedTestGenerationSourceFingerprint,
+        uint64_t aExpectedSnapshotFingerprint =
+            kVerifiedTestSnapshotFingerprint) noexcept
     {
         const PartyQuestSkyrimPapyrusRuntimeProfileResolver::ProfileDescriptor profile{
             {aProfileMajor, aProfileMinor, aProfilePatch, aProfileBuild},
             aRuntimeProfileFingerprint,
+            aExpectedGenerationSourceFingerprint,
+            aExpectedSnapshotFingerprint,
             aObservedWorkDomains};
         return PartyQuestSkyrimPapyrusRuntimeProfileResolver::ResolveExactProfile(
             acRuntimeIdentity,
