@@ -44,6 +44,69 @@ inline constexpr uint32_t kPartyQuestPapyrusRuntimeRequiredWorkDomains =
     return aMask == kPartyQuestPapyrusRuntimeRequiredWorkDomains;
 }
 
+class PartyQuestSkyrimPapyrusRuntimeProfileResolver;
+class PartyQuestPapyrusRuntimeObserverAuthorization;
+class PartyQuestPapyrusRuntimeObserverTestAccess;
+
+/**
+ * Process-local proof that the concrete Skyrim VM observation profile is safe
+ * to use as an authoritative Papyrus source.
+ *
+ * A production resolver may issue this capability only after an exact runtime
+ * identity match (using the already validated executable/version identity),
+ * and only for a profile whose complete work-domain mapping, coherent snapshot
+ * locking and monotonic quest-event generation source are all established.
+ * Unknown or partially mapped runtimes must not receive this capability.
+ *
+ * RuntimeProfileFingerprint is deterministic profile identity, not a secret or
+ * authentication primitive. The capability itself is constructor-confined so
+ * arbitrary callers cannot turn a guessed fingerprint into runtime authority.
+ */
+class PartyQuestPapyrusRuntimeProfileAuthorization final
+{
+public:
+    PartyQuestPapyrusRuntimeProfileAuthorization() noexcept = default;
+
+    [[nodiscard]] bool IsVerified() const noexcept
+    {
+        return m_runtimeProfileFingerprint != 0 &&
+            m_exactRuntimeMatch &&
+            HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(m_observedWorkDomains) &&
+            m_coherentSnapshot &&
+            m_trustedQuestEventGeneration;
+    }
+
+    [[nodiscard]] uint64_t GetRuntimeProfileFingerprint() const noexcept
+    {
+        return m_runtimeProfileFingerprint;
+    }
+
+private:
+    friend class PartyQuestSkyrimPapyrusRuntimeProfileResolver;
+    friend class PartyQuestPapyrusRuntimeObserverAuthorization;
+    friend class PartyQuestPapyrusRuntimeObserverTestAccess;
+
+    explicit PartyQuestPapyrusRuntimeProfileAuthorization(
+        uint64_t aRuntimeProfileFingerprint,
+        bool aExactRuntimeMatch,
+        uint32_t aObservedWorkDomains,
+        bool aCoherentSnapshot,
+        bool aTrustedQuestEventGeneration) noexcept
+        : m_runtimeProfileFingerprint(aRuntimeProfileFingerprint)
+        , m_observedWorkDomains(aObservedWorkDomains)
+        , m_exactRuntimeMatch(aExactRuntimeMatch)
+        , m_coherentSnapshot(aCoherentSnapshot)
+        , m_trustedQuestEventGeneration(aTrustedQuestEventGeneration)
+    {
+    }
+
+    uint64_t m_runtimeProfileFingerprint{};
+    uint32_t m_observedWorkDomains{};
+    bool m_exactRuntimeMatch{};
+    bool m_coherentSnapshot{};
+    bool m_trustedQuestEventGeneration{};
+};
+
 /**
  * Result of one trusted Papyrus/VM runtime observation.
  *
@@ -135,13 +198,13 @@ private:
 };
 
 class PartyQuestSkyrimPapyrusRuntimeObserver;
-class PartyQuestPapyrusRuntimeObserverTestAccess;
 
 /**
  * Process-local capability binding an approved observer implementation to its
- * exact object lifetime. A fabricated implementation of the public observer
- * interface cannot construct this capability and therefore cannot authorize a
- * live runtime transition.
+ * exact object lifetime and an independently verified Skyrim runtime profile.
+ * A fabricated implementation of the public observer interface cannot
+ * construct this capability, and even the production Skyrim observer cannot
+ * authorize live control without a valid runtime-profile capability.
  *
  * The concrete Skyrim observer will be the production issuer once its VM
  * observation envelope is version-validated. Tests use a named friend-only
@@ -154,7 +217,9 @@ public:
 
     [[nodiscard]] bool IsVerified() const noexcept
     {
-        return m_observer != nullptr && m_observerInstanceNonce != 0;
+        return m_observer != nullptr &&
+            m_observerInstanceNonce != 0 &&
+            m_runtimeProfileFingerprint != 0;
     }
 
     [[nodiscard]] bool Matches(
@@ -165,19 +230,30 @@ public:
             m_observerInstanceNonce == acObserver.GetInstanceNonce();
     }
 
+    [[nodiscard]] uint64_t GetRuntimeProfileFingerprint() const noexcept
+    {
+        return m_runtimeProfileFingerprint;
+    }
+
 private:
     friend class PartyQuestSkyrimPapyrusRuntimeObserver;
     friend class PartyQuestPapyrusRuntimeObserverTestAccess;
 
     explicit PartyQuestPapyrusRuntimeObserverAuthorization(
-        const PartyQuestPapyrusRuntimeObserver& acObserver) noexcept
-        : m_observer(&acObserver)
-        , m_observerInstanceNonce(acObserver.GetInstanceNonce())
+        const PartyQuestPapyrusRuntimeObserver& acObserver,
+        const PartyQuestPapyrusRuntimeProfileAuthorization& acRuntimeProfile) noexcept
     {
+        if (!acRuntimeProfile.IsVerified())
+            return;
+
+        m_observer = &acObserver;
+        m_observerInstanceNonce = acObserver.GetInstanceNonce();
+        m_runtimeProfileFingerprint = acRuntimeProfile.GetRuntimeProfileFingerprint();
     }
 
     const PartyQuestPapyrusRuntimeObserver* m_observer{};
     uint64_t m_observerInstanceNonce{};
+    uint64_t m_runtimeProfileFingerprint{};
 };
 
 enum class PartyQuestPapyrusRuntimeMonitorStatus : uint8_t
@@ -205,10 +281,12 @@ enum class PartyQuestPapyrusRuntimeMonitorStatus : uint8_t
  *
  * Begin() without observer authorization remains a diagnostic algorithm surface
  * for isolated tests only. ConsumeAuthoritative() succeeds exclusively for a
- * session begun with an exact observer-lifetime-bound authorization. Such an
- * authoritative session also requires every Idle sample to prove the complete
- * logical Papyrus work envelope; partial coverage can never authorize live
- * quiescence.
+ * session begun with an exact observer-lifetime-bound authorization whose
+ * runtime profile also proved exact identity, complete logical work coverage,
+ * coherent snapshot capability and trusted monotonic generation. Such an
+ * authoritative session additionally requires every Idle sample to carry the
+ * complete logical Papyrus work envelope; partial coverage can never authorize
+ * live quiescence.
  *
  * Monitor state is deliberately non-copyable/non-movable because it owns the
  * tracker session and authoritative observer-lifetime binding. Duplicating that
@@ -238,7 +316,7 @@ public:
         uint64_t aNowMs,
         uint64_t aTimeoutMs) noexcept;
 
-    /** Authoritative session for an exact approved observer lifetime. */
+    /** Authoritative session for an exact approved observer lifetime/profile. */
     [[nodiscard]] bool Begin(
         uint64_t aTransactionId,
         uint64_t aNowMs,
