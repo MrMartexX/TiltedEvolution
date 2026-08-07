@@ -37,6 +37,7 @@ static_assert(!std::is_constructible_v<
     uint64_t,
     uint32_t,
     bool,
+    bool,
     bool>);
 static_assert(!std::is_constructible_v<
     PartyQuestPapyrusRuntimeSnapshotAuthorization,
@@ -82,7 +83,7 @@ TEST_CASE("Skyrim runtime identity capability is constructor confined", "[quest.
     REQUIRE(verifiedIdentity.GetRuntimeVersion().Build == 42);
 }
 
-TEST_CASE("Papyrus generation source authority requires complete monotonic work-arrival coverage", "[quest.party-state.quiescence][runtime-profile][generation-source]")
+TEST_CASE("Papyrus generation source authority requires complete monotonic sample-independent work-arrival coverage", "[quest.party-state.quiescence][runtime-profile][generation-source]")
 {
     PartyQuestPapyrusRuntimeGenerationAuthorization missing;
     REQUIRE_FALSE(missing.IsVerified());
@@ -92,6 +93,7 @@ TEST_CASE("Papyrus generation source authority requires complete monotonic work-
             0,
             kPartyQuestPapyrusRuntimeRequiredWorkDomains,
             true,
+            true,
             true);
     REQUIRE_FALSE(missingFingerprint.IsVerified());
 
@@ -99,6 +101,7 @@ TEST_CASE("Papyrus generation source authority requires complete monotonic work-
         PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
             0x1122334455667788ull,
             static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::RunningStacks),
+            true,
             true,
             true);
     REQUIRE_FALSE(partialCoverage.IsVerified());
@@ -108,6 +111,7 @@ TEST_CASE("Papyrus generation source authority requires complete monotonic work-
             0x1122334455667788ull,
             kPartyQuestPapyrusRuntimeRequiredWorkDomains,
             false,
+            true,
             true);
     REQUIRE_FALSE(nonMonotonic.IsVerified());
 
@@ -116,13 +120,24 @@ TEST_CASE("Papyrus generation source authority requires complete monotonic work-
             0x1122334455667788ull,
             kPartyQuestPapyrusRuntimeRequiredWorkDomains,
             true,
-            false);
+            false,
+            true);
     REQUIRE_FALSE(missesWorkArrival.IsVerified());
+
+    const auto sampleDerivedGeneration =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            0x1122334455667788ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true,
+            false);
+    REQUIRE_FALSE(sampleDerivedGeneration.IsVerified());
 
     const auto verified =
         PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
             0x1122334455667788ull,
             kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
             true,
             true);
     REQUIRE(verified.IsVerified());
@@ -339,6 +354,7 @@ TEST_CASE("Exact runtime profile rejects an invalid generation capability", "[qu
         PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
             0x8877665544332211ull,
             static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::RunningStacks),
+            true,
             true,
             true);
     REQUIRE_FALSE(partialGeneration.IsVerified());
