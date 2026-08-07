@@ -7,6 +7,7 @@
 #include <string_view>
 
 class PartyQuestSkyrimRuntimeIdentityResolver;
+class PartyQuestSkyrimPapyrusGenerationSourceResolver;
 class PartyQuestPapyrusRuntimeObserverTestAccess;
 
 /**
@@ -136,31 +137,90 @@ private:
 };
 
 /**
+ * Process-local proof that the generation accompanying authoritative Papyrus
+ * observations comes from a source that covers the complete required VM work
+ * envelope and is monotonic across the observer lifetime.
+ *
+ * A numeric generation value, event dispatcher, hook address or source
+ * fingerprint is not authority by itself. Production code may receive this
+ * capability only from the concrete Skyrim generation-source resolver after
+ * the hook/source coverage contract has been proven for the exact runtime.
+ * Until such a resolver exists, production cannot satisfy this prerequisite.
+ */
+class PartyQuestPapyrusRuntimeGenerationAuthorization final
+{
+public:
+    PartyQuestPapyrusRuntimeGenerationAuthorization() noexcept = default;
+
+    [[nodiscard]] bool IsVerified() const noexcept
+    {
+        return m_sourceFingerprint != 0 &&
+            HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(m_coveredWorkDomains) &&
+            m_monotonic &&
+            m_observesWorkArrival;
+    }
+
+    [[nodiscard]] uint64_t GetSourceFingerprint() const noexcept
+    {
+        return m_sourceFingerprint;
+    }
+
+    [[nodiscard]] uint32_t GetCoveredWorkDomains() const noexcept
+    {
+        return m_coveredWorkDomains;
+    }
+
+private:
+    friend class PartyQuestSkyrimPapyrusGenerationSourceResolver;
+    friend class PartyQuestSkyrimPapyrusRuntimeProfileResolver;
+    friend class PartyQuestPapyrusRuntimeObserverTestAccess;
+
+    explicit PartyQuestPapyrusRuntimeGenerationAuthorization(
+        uint64_t aSourceFingerprint,
+        uint32_t aCoveredWorkDomains,
+        bool aMonotonic,
+        bool aObservesWorkArrival) noexcept
+        : m_sourceFingerprint(aSourceFingerprint)
+        , m_coveredWorkDomains(aCoveredWorkDomains)
+        , m_monotonic(aMonotonic)
+        , m_observesWorkArrival(aObservesWorkArrival)
+    {
+    }
+
+    uint64_t m_sourceFingerprint{};
+    uint32_t m_coveredWorkDomains{};
+    bool m_monotonic{};
+    bool m_observesWorkArrival{};
+};
+
+/**
  * Fail-closed bridge from trusted executable identity to the much stronger
  * Papyrus VM observation-profile capability.
  *
  * Address-Library/VersionDb support alone is intentionally insufficient: every
  * production profile must additionally have an exact executable-version match,
  * a proven complete six-domain Papyrus mapping, coherent snapshot semantics and
- * a trusted monotonic quest-event generation source.
+ * a separately authorized monotonic work-generation source.
  *
  * No production Skyrim runtime profile is approved yet. Resolve() therefore
  * returns an invalid capability for every runtime until an ABI/layout profile
- * is supported by separate evidence. This preserves the invariant that an
- * unknown or merely VersionDb-supported executable causes zero authoritative
- * VM sampling.
+ * and generation source are supported by separate evidence. This preserves the
+ * invariant that an unknown or merely VersionDb-supported executable causes
+ * zero authoritative VM sampling.
  */
 class PartyQuestSkyrimPapyrusRuntimeProfileResolver final
 {
 public:
     [[nodiscard]] static PartyQuestPapyrusRuntimeProfileAuthorization Resolve(
-        const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity) noexcept
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+        const PartyQuestPapyrusRuntimeGenerationAuthorization& acGeneration) noexcept
     {
-        if (!acRuntimeIdentity.IsVerified())
+        if (!acRuntimeIdentity.IsVerified() || !acGeneration.IsVerified())
             return {};
 
         // Intentionally empty production registry. Do not add an entry from a
-        // version string, Address Library support, or guessed VM offsets alone.
+        // version string, Address Library support, guessed VM offsets or an
+        // unproven generation hook alone.
         return {};
     }
 
@@ -173,7 +233,6 @@ private:
         uint64_t RuntimeProfileFingerprint{};
         uint32_t ObservedWorkDomains{};
         bool CoherentSnapshot{};
-        bool TrustedQuestEventGeneration{};
     };
 
     /**
@@ -183,9 +242,11 @@ private:
      */
     [[nodiscard]] static PartyQuestPapyrusRuntimeProfileAuthorization ResolveExactProfile(
         const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+        const PartyQuestPapyrusRuntimeGenerationAuthorization& acGeneration,
         const ProfileDescriptor& acProfile) noexcept
     {
         if (!acRuntimeIdentity.IsVerified() ||
+            !acGeneration.IsVerified() ||
             !acRuntimeIdentity.GetRuntimeVersion().Matches(acProfile.RuntimeVersion))
         {
             return {};
@@ -196,6 +257,6 @@ private:
             true,
             acProfile.ObservedWorkDomains,
             acProfile.CoherentSnapshot,
-            acProfile.TrustedQuestEventGeneration);
+            acGeneration.GetSourceFingerprint());
     }
 };
