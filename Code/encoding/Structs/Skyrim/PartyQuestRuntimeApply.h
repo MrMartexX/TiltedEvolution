@@ -77,6 +77,7 @@ struct PartyQuestRuntimeApplyEntry
     uint64_t CanonicalDigest{};
     uint64_t SidecarManifestFingerprint{};
     PartyQuestApplyAction Actions{PartyQuestApplyAction::None};
+    PartyQuestVerificationEnvelopeV1 ExpectedVerification;
     PartyQuestRuntimeApplyState State{PartyQuestRuntimeApplyState::AwaitingCheckpoint};
     bool SaveGuardActive{};
     bool CheckpointCreated{};
@@ -95,6 +96,7 @@ struct PartyQuestRuntimeCommittedRecord
     uint64_t CanonicalDigest{};
     uint64_t SidecarManifestFingerprint{};
     PartyQuestApplyAction Actions{PartyQuestApplyAction::None};
+    PartyQuestVerificationEnvelopeV1 ExpectedVerification;
 
     bool operator==(const PartyQuestRuntimeCommittedRecord&) const noexcept = default;
 };
@@ -196,7 +198,7 @@ public:
         return true;
     }
 
-    /** Requires two consecutive canonical digests before commit is allowed. */
+    /** Requires two consecutive complete envelope matches before commit. */
     [[nodiscard]] PartyQuestRuntimeVerificationStatus SubmitResnapshot(
         uint64_t aTransactionId,
         QuestSnapshot aObservedSnapshot) noexcept;
@@ -248,6 +250,7 @@ private:
         uint64_t CanonicalDigest{};
         uint64_t SidecarManifestFingerprint{};
         PartyQuestApplyAction Actions{PartyQuestApplyAction::None};
+        PartyQuestVerificationEnvelopeV1 ExpectedVerification;
 
         bool operator==(const Fingerprint&) const noexcept = default;
     };

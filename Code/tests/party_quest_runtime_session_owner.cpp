@@ -75,6 +75,8 @@ PartyQuestRuntimeApplyEntry BuildOwnerRecoveryEntry(
     active.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
+    active.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
+        active.Actions, active.CanonicalDigest, 0x99003301);
     active.State = PartyQuestRuntimeApplyState::WaitingForPapyrus;
     active.SaveGuardActive = true;
     active.CheckpointCreated = true;
@@ -164,6 +166,8 @@ TEST_CASE("Runtime session owner preserves committed transaction idempotency acr
     committed.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
+    committed.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
+        committed.Actions, committed.CanonicalDigest, 0x99003302);
     state.Committed.push_back(committed);
 
     REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(

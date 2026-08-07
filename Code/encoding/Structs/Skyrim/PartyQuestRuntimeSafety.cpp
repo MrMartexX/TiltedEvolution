@@ -2,6 +2,93 @@
 
 namespace
 {
+constexpr uint64_t kVerificationFnvOffset = 14695981039346656037ull;
+constexpr uint64_t kVerificationFnvPrime = 1099511628211ull;
+constexpr uint32_t kKnownApplyActions =
+    static_cast<uint32_t>(PartyQuestApplyAction::StageTransition) |
+    static_cast<uint32_t>(PartyQuestApplyAction::VerifyObjectives) |
+    static_cast<uint32_t>(PartyQuestApplyAction::WaitForWorldTargets) |
+    static_cast<uint32_t>(PartyQuestApplyAction::WaitForPapyrusQuiescence) |
+    static_cast<uint32_t>(PartyQuestApplyAction::ResnapshotAndVerify) |
+    static_cast<uint32_t>(PartyQuestApplyAction::AdapterManaged);
+
+void MixVerification(uint64_t& aHash, uint64_t aValue) noexcept
+{
+    for (size_t index = 0; index < sizeof(aValue); ++index)
+    {
+        aHash ^= static_cast<uint8_t>((aValue >> (index * 8)) & 0xFF);
+        aHash *= kVerificationFnvPrime;
+    }
+}
+
+PartyQuestVerificationComponent RequiredCoverage(PartyQuestApplyAction aActions) noexcept
+{
+    const uint32_t actions = static_cast<uint32_t>(aActions);
+    if (actions == 0 || (actions & ~kKnownApplyActions) != 0)
+        return PartyQuestVerificationComponent::None;
+
+    // Every currently authorized mutation changes only state represented by
+    // QuestSnapshot. Control actions add no canonical mutation surface. Any
+    // future alias/inventory/world action must extend this mapping before it can
+    // be admitted by the known-action mask.
+    if (!HasPartyQuestApplyAction(aActions, PartyQuestApplyAction::StageTransition) &&
+        !HasPartyQuestApplyAction(aActions, PartyQuestApplyAction::AdapterManaged))
+    {
+        return PartyQuestVerificationComponent::None;
+    }
+
+    return PartyQuestVerificationComponent::QuestSnapshot |
+        PartyQuestVerificationComponent::Compatibility;
+}
+} // namespace
+
+uint64_t PartyQuestVerificationEnvelopeV1::ComputeFingerprint() const noexcept
+{
+    uint64_t hash = kVerificationFnvOffset;
+    MixVerification(hash, SchemaVersion);
+    MixVerification(hash, static_cast<uint32_t>(Required));
+    MixVerification(hash, QuestSnapshotDigest);
+    MixVerification(hash, AliasDigest);
+    MixVerification(hash, InventoryEffectsDigest);
+    MixVerification(hash, WorldEffectsDigest);
+    MixVerification(hash, AdapterStateDigest);
+    MixVerification(hash, CompatibilityFingerprint);
+    return hash != 0 ? hash : 1;
+}
+
+std::optional<PartyQuestVerificationEnvelopeV1> PartyQuestVerificationPolicy::BuildExpected(
+    PartyQuestApplyAction aActions,
+    uint64_t aQuestSnapshotDigest,
+    uint64_t aCompatibilityFingerprint) noexcept
+{
+    const auto required = RequiredCoverage(aActions);
+    if (required == PartyQuestVerificationComponent::None ||
+        aQuestSnapshotDigest == 0 ||
+        aCompatibilityFingerprint == 0)
+    {
+        return std::nullopt;
+    }
+
+    PartyQuestVerificationEnvelopeV1 envelope;
+    envelope.Required = required;
+    envelope.QuestSnapshotDigest = aQuestSnapshotDigest;
+    envelope.CompatibilityFingerprint = aCompatibilityFingerprint;
+    return envelope;
+}
+
+bool PartyQuestVerificationPolicy::IsCompleteForActions(
+    const PartyQuestVerificationEnvelopeV1& acEnvelope,
+    PartyQuestApplyAction aActions) noexcept
+{
+    const auto expected = BuildExpected(
+        aActions,
+        acEnvelope.QuestSnapshotDigest,
+        acEnvelope.CompatibilityFingerprint);
+    return expected && *expected == acEnvelope;
+}
+
+namespace
+{
 bool IsTerminalState(QuestSnapshotStatus aStatus) noexcept
 {
     return aStatus == QuestSnapshotStatus::Stopped ||

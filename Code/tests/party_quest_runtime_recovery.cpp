@@ -135,6 +135,8 @@ PartyQuestRuntimeRecoveryState BuildBlockedRecoveryState(
     active.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
+    active.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
+        active.Actions, active.CanonicalDigest, 0x51001001);
     active.State = PartyQuestRuntimeApplyState::WaitingForPapyrus;
     active.SaveGuardActive = true;
     active.CheckpointCreated = true;

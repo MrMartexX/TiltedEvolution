@@ -42,6 +42,10 @@ bool IsExpectedRecoveryRecord(const PartyQuestRuntimeApplyEntry& acRecovery) noe
         acRecovery.QuestId &&
         acRecovery.CanonicalDigest != 0 &&
         acRecovery.Actions != PartyQuestApplyAction::None &&
+        PartyQuestVerificationPolicy::IsCompleteForActions(
+            acRecovery.ExpectedVerification,
+            acRecovery.Actions) &&
+        acRecovery.ExpectedVerification.QuestSnapshotDigest == acRecovery.CanonicalDigest &&
         acRecovery.CheckpointCreated &&
         acRecovery.RuntimeMutationMayHaveOccurred;
 }

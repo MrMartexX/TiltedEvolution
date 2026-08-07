@@ -50,6 +50,13 @@ PartyQuestRuntimeApplyCoordinator::ValidateAndFingerprint(
     fingerprint.CanonicalDigest = canonical.ComputeDigest();
     fingerprint.SidecarManifestFingerprint = acRequest.SidecarManifestFingerprint;
     fingerprint.Actions = acRequest.Plan.Actions;
+    const auto envelope = PartyQuestVerificationPolicy::BuildExpected(
+        fingerprint.Actions,
+        fingerprint.CanonicalDigest,
+        acRequest.Plan.MutationAuthorization.GetCompatibilityFingerprint());
+    if (!envelope)
+        return std::nullopt;
+    fingerprint.ExpectedVerification = *envelope;
     return fingerprint;
 }
 
@@ -63,6 +70,7 @@ PartyQuestRuntimeApplyCoordinator::FingerprintActive(
     fingerprint.CanonicalDigest = acEntry.CanonicalDigest;
     fingerprint.SidecarManifestFingerprint = acEntry.SidecarManifestFingerprint;
     fingerprint.Actions = acEntry.Actions;
+    fingerprint.ExpectedVerification = acEntry.ExpectedVerification;
     return fingerprint;
 }
 
@@ -74,7 +82,11 @@ bool PartyQuestRuntimeApplyCoordinator::ValidateRecoveryEntry(
         !acEntry.QuestId ||
         acEntry.CanonicalDigest == 0 ||
         acEntry.SidecarManifestFingerprint == 0 ||
-        acEntry.Actions == PartyQuestApplyAction::None)
+        acEntry.Actions == PartyQuestApplyAction::None ||
+        !PartyQuestVerificationPolicy::IsCompleteForActions(
+            acEntry.ExpectedVerification,
+            acEntry.Actions) ||
+        acEntry.ExpectedVerification.QuestSnapshotDigest != acEntry.CanonicalDigest)
     {
         return false;
     }
@@ -172,6 +184,7 @@ PartyQuestRuntimeApplyBeginStatus PartyQuestRuntimeApplyCoordinator::Begin(
     entry.CanonicalDigest = fingerprint->CanonicalDigest;
     entry.SidecarManifestFingerprint = fingerprint->SidecarManifestFingerprint;
     entry.Actions = fingerprint->Actions;
+    entry.ExpectedVerification = fingerprint->ExpectedVerification;
 
     if (RequiresWorldTargets(acRequest.Plan))
     {
@@ -269,18 +282,23 @@ PartyQuestRuntimeVerificationStatus PartyQuestRuntimeApplyCoordinator::SubmitRes
     }
 
     const uint64_t digest = aObservedSnapshot.ComputeDigest();
-    if (digest != m_active->CanonicalDigest)
+    const auto observedEnvelope = PartyQuestVerificationPolicy::BuildExpected(
+        m_active->Actions,
+        digest,
+        m_active->ExpectedVerification.CompatibilityFingerprint);
+    if (!observedEnvelope || *observedEnvelope != m_active->ExpectedVerification)
     {
         m_active->LastObservedDigest = digest;
         m_active->StableCanonicalSamples = 0;
         return PartyQuestRuntimeVerificationStatus::Diverged;
     }
 
-    if (m_active->LastObservedDigest == digest)
+    const uint64_t envelopeFingerprint = observedEnvelope->ComputeFingerprint();
+    if (m_active->LastObservedDigest == envelopeFingerprint)
         ++m_active->StableCanonicalSamples;
     else
     {
-        m_active->LastObservedDigest = digest;
+        m_active->LastObservedDigest = envelopeFingerprint;
         m_active->StableCanonicalSamples = 1;
     }
 
@@ -336,7 +354,8 @@ PartyQuestRuntimeRecoveryState PartyQuestRuntimeApplyCoordinator::ExportRecovery
             fingerprint.QuestId,
             fingerprint.CanonicalDigest,
             fingerprint.SidecarManifestFingerprint,
-            fingerprint.Actions});
+            fingerprint.Actions,
+            fingerprint.ExpectedVerification});
     }
 
     std::sort(state.Committed.begin(), state.Committed.end(), [](const auto& acLeft, const auto& acRight)
@@ -385,6 +404,10 @@ PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplyCoordinator::RestoreR
             record.CanonicalDigest == 0 ||
             record.SidecarManifestFingerprint == 0 ||
             record.Actions == PartyQuestApplyAction::None ||
+            !PartyQuestVerificationPolicy::IsCompleteForActions(
+                record.ExpectedVerification,
+                record.Actions) ||
+            record.ExpectedVerification.QuestSnapshotDigest != record.CanonicalDigest ||
             !transactionIds.emplace(record.TransactionId).second)
         {
             m_committed.clear();
@@ -397,6 +420,7 @@ PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplyCoordinator::RestoreR
         fingerprint.CanonicalDigest = record.CanonicalDigest;
         fingerprint.SidecarManifestFingerprint = record.SidecarManifestFingerprint;
         fingerprint.Actions = record.Actions;
+        fingerprint.ExpectedVerification = record.ExpectedVerification;
         m_committed.emplace(record.TransactionId, fingerprint);
     }
 

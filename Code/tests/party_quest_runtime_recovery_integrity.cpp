@@ -63,6 +63,8 @@ PartyQuestRuntimeRecoveryState BuildIntegrityRecoveryState(uint64_t aWorldRevisi
     active.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
+    active.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
+        active.Actions, active.CanonicalDigest, 0x52001001);
     active.State = PartyQuestRuntimeApplyState::WaitingForPapyrus;
     active.SaveGuardActive = true;
     active.CheckpointCreated = true;

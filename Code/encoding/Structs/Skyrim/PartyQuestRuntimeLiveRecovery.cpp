@@ -43,6 +43,10 @@ bool IsExpectedLiveRecoveryRecord(
         !acRecovery.QuestId ||
         acRecovery.CanonicalDigest == 0 ||
         acRecovery.Actions == PartyQuestApplyAction::None ||
+        !PartyQuestVerificationPolicy::IsCompleteForActions(
+            acRecovery.ExpectedVerification,
+            acRecovery.Actions) ||
+        acRecovery.ExpectedVerification.QuestSnapshotDigest != acRecovery.CanonicalDigest ||
         !acRecovery.SaveGuardActive ||
         !acRecovery.CheckpointCreated ||
         !acRecovery.RuntimeMutationMayHaveOccurred)

@@ -179,6 +179,12 @@ TEST_CASE("Runtime apply persistence rejects invalid campaign corruption truncat
     invalidCampaign.CampaignId = {};
     REQUIRE(PartyQuestRuntimeApplyPersistence::Encode(invalidCampaign).empty());
 
+    auto incompleteEnvelope = state;
+    REQUIRE_FALSE(incompleteEnvelope.Committed.empty());
+    incompleteEnvelope.Committed[0].ExpectedVerification.Required =
+        PartyQuestVerificationComponent::QuestSnapshot;
+    REQUIRE(PartyQuestRuntimeApplyPersistence::Encode(incompleteEnvelope).empty());
+
     auto corrupted = encoded;
     corrupted[20] ^= 0x5A;
     REQUIRE(PartyQuestRuntimeApplyPersistence::Decode(corrupted).Status ==
@@ -193,6 +199,12 @@ TEST_CASE("Runtime apply persistence rejects invalid campaign corruption truncat
     unsupported[8] = 0xFF;
     unsupported[9] = 0x7F;
     REQUIRE(PartyQuestRuntimeApplyPersistence::Decode(unsupported).Status ==
+        PartyQuestRuntimeApplyPersistenceStatus::UnsupportedVersion);
+
+    auto legacyV3 = encoded;
+    legacyV3[8] = 3;
+    legacyV3[9] = 0;
+    REQUIRE(PartyQuestRuntimeApplyPersistence::Decode(legacyV3).Status ==
         PartyQuestRuntimeApplyPersistenceStatus::UnsupportedVersion);
 
     auto oversizedPayload = encoded;
@@ -386,6 +398,8 @@ TEST_CASE("Inconsistent recovery markers fail closed", "[quest.party-state.runti
     active.Actions = PartyQuestApplyAction::AdapterManaged |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
+    active.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
+        active.Actions, active.CanonicalDigest, 0x80001001);
     active.State = PartyQuestRuntimeApplyState::WaitingForPapyrus;
     active.SaveGuardActive = true;
     active.CheckpointCreated = false;

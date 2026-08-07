@@ -10,7 +10,7 @@
 namespace
 {
 constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'R', 'A', 'P', 'P', 'L'};
-constexpr uint16_t kFormatVersion = 3;
+constexpr uint16_t kFormatVersion = 4;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
 constexpr uint64_t kMaxCommittedEntries = 1000000;
@@ -79,6 +79,44 @@ bool IsValidActions(uint32_t aActions) noexcept
     return aActions != 0 && (aActions & ~kKnownActionMask) == 0;
 }
 
+void WriteVerificationEnvelope(
+    std::vector<uint8_t>& aBytes,
+    const PartyQuestVerificationEnvelopeV1& acEnvelope)
+{
+    WriteInteger(aBytes, acEnvelope.SchemaVersion);
+    WriteInteger(aBytes, static_cast<uint32_t>(acEnvelope.Required));
+    WriteInteger(aBytes, acEnvelope.QuestSnapshotDigest);
+    WriteInteger(aBytes, acEnvelope.AliasDigest);
+    WriteInteger(aBytes, acEnvelope.InventoryEffectsDigest);
+    WriteInteger(aBytes, acEnvelope.WorldEffectsDigest);
+    WriteInteger(aBytes, acEnvelope.AdapterStateDigest);
+    WriteInteger(aBytes, acEnvelope.CompatibilityFingerprint);
+}
+
+bool ReadVerificationEnvelope(
+    const std::vector<uint8_t>& acBytes,
+    size_t& aOffset,
+    size_t aEnd,
+    PartyQuestApplyAction aActions,
+    PartyQuestVerificationEnvelopeV1& aEnvelope) noexcept
+{
+    uint32_t required{};
+    if (!ReadInteger(acBytes, aOffset, aEnd, aEnvelope.SchemaVersion) ||
+        !ReadInteger(acBytes, aOffset, aEnd, required) ||
+        !ReadInteger(acBytes, aOffset, aEnd, aEnvelope.QuestSnapshotDigest) ||
+        !ReadInteger(acBytes, aOffset, aEnd, aEnvelope.AliasDigest) ||
+        !ReadInteger(acBytes, aOffset, aEnd, aEnvelope.InventoryEffectsDigest) ||
+        !ReadInteger(acBytes, aOffset, aEnd, aEnvelope.WorldEffectsDigest) ||
+        !ReadInteger(acBytes, aOffset, aEnd, aEnvelope.AdapterStateDigest) ||
+        !ReadInteger(acBytes, aOffset, aEnd, aEnvelope.CompatibilityFingerprint))
+    {
+        return false;
+    }
+
+    aEnvelope.Required = static_cast<PartyQuestVerificationComponent>(required);
+    return PartyQuestVerificationPolicy::IsCompleteForActions(aEnvelope, aActions);
+}
+
 void WriteFingerprint(
     std::vector<uint8_t>& aBytes,
     uint64_t aTransactionId,
@@ -86,7 +124,8 @@ void WriteFingerprint(
     const GameId& acQuestId,
     uint64_t aCanonicalDigest,
     uint64_t aSidecarManifestFingerprint,
-    PartyQuestApplyAction aActions)
+    PartyQuestApplyAction aActions,
+    const PartyQuestVerificationEnvelopeV1& acEnvelope)
 {
     WriteInteger(aBytes, aTransactionId);
     WriteInteger(aBytes, aTargetWorldRevision);
@@ -95,6 +134,7 @@ void WriteFingerprint(
     WriteInteger(aBytes, aCanonicalDigest);
     WriteInteger(aBytes, aSidecarManifestFingerprint);
     WriteInteger(aBytes, static_cast<uint32_t>(aActions));
+    WriteVerificationEnvelope(aBytes, acEnvelope);
 }
 
 bool ReadFingerprint(
@@ -106,7 +146,8 @@ bool ReadFingerprint(
     GameId& aQuestId,
     uint64_t& aCanonicalDigest,
     uint64_t& aSidecarManifestFingerprint,
-    PartyQuestApplyAction& aActions) noexcept
+    PartyQuestApplyAction& aActions,
+    PartyQuestVerificationEnvelopeV1& aEnvelope) noexcept
 {
     uint32_t modId{};
     uint32_t baseId{};
@@ -134,7 +175,8 @@ bool ReadFingerprint(
     }
 
     aActions = static_cast<PartyQuestApplyAction>(actions);
-    return true;
+    return ReadVerificationEnvelope(acBytes, aOffset, aEnd, aActions, aEnvelope) &&
+        aEnvelope.QuestSnapshotDigest == aCanonicalDigest;
 }
 
 PartyQuestRuntimeApplyPersistenceStatus ReadFile(
@@ -222,6 +264,10 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
             record.CanonicalDigest == 0 ||
             record.SidecarManifestFingerprint == 0 ||
             !IsValidActions(static_cast<uint32_t>(record.Actions)) ||
+            !PartyQuestVerificationPolicy::IsCompleteForActions(
+                record.ExpectedVerification,
+                record.Actions) ||
+            record.ExpectedVerification.QuestSnapshotDigest != record.CanonicalDigest ||
             !transactionIds.emplace(record.TransactionId).second)
         {
             return {};
@@ -234,7 +280,8 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
             record.QuestId,
             record.CanonicalDigest,
             record.SidecarManifestFingerprint,
-            record.Actions);
+            record.Actions,
+            record.ExpectedVerification);
     }
 
     WriteBool(payload, acState.Active.has_value());
@@ -247,6 +294,10 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
             active.CanonicalDigest == 0 ||
             active.SidecarManifestFingerprint == 0 ||
             !IsValidActions(static_cast<uint32_t>(active.Actions)) ||
+            !PartyQuestVerificationPolicy::IsCompleteForActions(
+                active.ExpectedVerification,
+                active.Actions) ||
+            active.ExpectedVerification.QuestSnapshotDigest != active.CanonicalDigest ||
             !transactionIds.emplace(active.TransactionId).second)
         {
             return {};
@@ -259,7 +310,8 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
             active.QuestId,
             active.CanonicalDigest,
             active.SidecarManifestFingerprint,
-            active.Actions);
+            active.Actions,
+            active.ExpectedVerification);
         WriteInteger<uint8_t>(payload, static_cast<uint8_t>(active.State));
         WriteBool(payload, active.SaveGuardActive);
         WriteBool(payload, active.CheckpointCreated);
@@ -396,7 +448,8 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
                 record.QuestId,
                 record.CanonicalDigest,
                 record.SidecarManifestFingerprint,
-                record.Actions))
+                record.Actions,
+                record.ExpectedVerification))
         {
             result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
             return result;
@@ -428,7 +481,8 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
                 active.QuestId,
                 active.CanonicalDigest,
                 active.SidecarManifestFingerprint,
-                active.Actions) ||
+                active.Actions,
+                active.ExpectedVerification) ||
             !transactionIds.emplace(active.TransactionId).second)
         {
             result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;

@@ -381,3 +381,59 @@ TEST_CASE("Runtime apply validates transaction identity and canonical revision",
         REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::InvalidRequest);
     }
 }
+
+TEST_CASE("Verification envelope binds exact current mutation coverage", "[quest.party-state.runtime-apply][verification-envelope]")
+{
+    const auto request = BuildRuntimeRequest(7101, GameId(9, 0x7100));
+    PartyQuestRuntimeApplyCoordinator coordinator;
+    REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Started);
+
+    const auto* active = coordinator.GetActive();
+    REQUIRE(active != nullptr);
+    REQUIRE(active->ExpectedVerification.SchemaVersion ==
+        PartyQuestVerificationEnvelopeV1::kSchemaVersion);
+    REQUIRE(active->ExpectedVerification.Required ==
+        (PartyQuestVerificationComponent::QuestSnapshot |
+         PartyQuestVerificationComponent::Compatibility));
+    REQUIRE(active->ExpectedVerification.QuestSnapshotDigest == active->CanonicalDigest);
+    REQUIRE(active->ExpectedVerification.CompatibilityFingerprint ==
+        request.Plan.MutationAuthorization.GetCompatibilityFingerprint());
+    REQUIRE(active->ExpectedVerification.ComputeFingerprint() != 0);
+
+    auto recovery = coordinator.ExportRecoveryState(
+        PartyQuestCampaignId{0x7101, 0x7102},
+        PartyQuestPlayerProfileId{0x7103, 0x7104});
+    REQUIRE(recovery.Active.has_value());
+
+    SECTION("missing required coverage fails closed")
+    {
+        recovery.Active->ExpectedVerification.Required =
+            PartyQuestVerificationComponent::QuestSnapshot;
+        PartyQuestRuntimeApplyCoordinator restored;
+        REQUIRE(restored.RestoreRecoveryState(
+                    recovery,
+                    recovery.CampaignId,
+                    recovery.PlayerProfileId) ==
+            PartyQuestRuntimeRecoveryDisposition::InvalidState);
+    }
+
+    SECTION("unexpected unverified digest fails closed")
+    {
+        recovery.Active->ExpectedVerification.AliasDigest = 0xBAD;
+        PartyQuestRuntimeApplyCoordinator restored;
+        REQUIRE(restored.RestoreRecoveryState(
+                    recovery,
+                    recovery.CampaignId,
+                    recovery.PlayerProfileId) ==
+            PartyQuestRuntimeRecoveryDisposition::InvalidState);
+    }
+}
+
+TEST_CASE("Verification policy rejects unknown mutation surfaces", "[quest.party-state.runtime-apply][verification-envelope]")
+{
+    const auto unknown = static_cast<PartyQuestApplyAction>(1u << 31);
+    REQUIRE_FALSE(PartyQuestVerificationPolicy::BuildExpected(
+        unknown,
+        0x1111,
+        0x2222).has_value());
+}

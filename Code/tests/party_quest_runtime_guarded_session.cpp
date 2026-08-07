@@ -313,6 +313,8 @@ TEST_CASE("Loaded crash recovery reconstructs save guard and unresolved recovery
     recovery.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
+    recovery.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
+        recovery.Actions, recovery.CanonicalDigest, 0x24007001);
     recovery.State = PartyQuestRuntimeApplyState::WaitingForPapyrus;
     recovery.SaveGuardActive = true;
     recovery.CheckpointCreated = true;

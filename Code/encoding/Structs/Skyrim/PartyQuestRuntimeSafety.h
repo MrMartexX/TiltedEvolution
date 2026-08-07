@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 
 class PartyQuestRuntimeCompatibilityPolicy;
 class PartyQuestRuntimeSafetyTestAccess;
@@ -67,6 +68,56 @@ constexpr bool HasPartyQuestApplyAction(PartyQuestApplyAction aActions, PartyQue
 {
     return (static_cast<uint32_t>(aActions) & static_cast<uint32_t>(aAction)) != 0;
 }
+
+enum class PartyQuestVerificationComponent : uint32_t
+{
+    None = 0,
+    QuestSnapshot = 1u << 0,
+    Aliases = 1u << 1,
+    InventoryEffects = 1u << 2,
+    WorldEffects = 1u << 3,
+    AdapterState = 1u << 4,
+    Compatibility = 1u << 5
+};
+
+constexpr PartyQuestVerificationComponent operator|(
+    PartyQuestVerificationComponent aLeft,
+    PartyQuestVerificationComponent aRight) noexcept
+{
+    return static_cast<PartyQuestVerificationComponent>(
+        static_cast<uint32_t>(aLeft) | static_cast<uint32_t>(aRight));
+}
+
+struct PartyQuestVerificationEnvelopeV1
+{
+    static constexpr uint16_t kSchemaVersion = 1;
+
+    uint16_t SchemaVersion{kSchemaVersion};
+    PartyQuestVerificationComponent Required{PartyQuestVerificationComponent::None};
+    uint64_t QuestSnapshotDigest{};
+    uint64_t AliasDigest{};
+    uint64_t InventoryEffectsDigest{};
+    uint64_t WorldEffectsDigest{};
+    uint64_t AdapterStateDigest{};
+    uint64_t CompatibilityFingerprint{};
+
+    [[nodiscard]] uint64_t ComputeFingerprint() const noexcept;
+    bool operator==(const PartyQuestVerificationEnvelopeV1&) const noexcept = default;
+};
+
+/** Local fail-closed action-to-postcondition coverage policy. */
+class PartyQuestVerificationPolicy final
+{
+public:
+    [[nodiscard]] static std::optional<PartyQuestVerificationEnvelopeV1> BuildExpected(
+        PartyQuestApplyAction aActions,
+        uint64_t aQuestSnapshotDigest,
+        uint64_t aCompatibilityFingerprint) noexcept;
+
+    [[nodiscard]] static bool IsCompleteForActions(
+        const PartyQuestVerificationEnvelopeV1& acEnvelope,
+        PartyQuestApplyAction aActions) noexcept;
+};
 
 struct PartyQuestRuntimeSafetyFacts
 {

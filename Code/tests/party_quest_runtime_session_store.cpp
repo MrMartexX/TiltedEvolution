@@ -61,6 +61,8 @@ PartyQuestRuntimeApplyEntry BuildStoreEntry(
     entry.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
+    entry.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
+        entry.Actions, entry.CanonicalDigest, 0x61001001);
     entry.State = aState;
     entry.SaveGuardActive = aSaveGuard;
     entry.CheckpointCreated = aCheckpoint;
@@ -224,6 +226,8 @@ TEST_CASE("Runtime store never silently promotes a stale backup-only journal", "
     committed.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
+    committed.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
+        committed.Actions, committed.CanonicalDigest, 0x61002001);
     second.Committed.push_back(committed);
     REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(
                 paths.RuntimeApplySidecar,
