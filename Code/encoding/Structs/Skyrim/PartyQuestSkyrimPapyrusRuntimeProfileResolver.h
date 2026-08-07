@@ -6,7 +6,6 @@
 #include <limits>
 #include <string_view>
 
-class PartyQuestSkyrimRuntimeIdentityResolver;
 class PartyQuestSkyrimPapyrusGenerationSourceResolver;
 class PartyQuestSkyrimPapyrusSnapshotResolver;
 class PartyQuestPapyrusRuntimeObserverTestAccess;
@@ -96,9 +95,7 @@ struct PartyQuestSkyrimRuntimeVersion final
  * accepted by the project's VersionDb support gate.
  *
  * Callers cannot mint this capability from a version string or numeric tuple.
- * A client-specific PartyQuestSkyrimRuntimeIdentityResolver is the only
- * production issuer; it binds directly to the already loaded VersionDb
- * singleton and never accepts remote/caller supplied paths or version metadata.
+ * PartyQuestSkyrimRuntimeIdentityResolver is the only production issuer.
  */
 class PartyQuestSkyrimRuntimeIdentityAuthorization final
 {
@@ -135,6 +132,49 @@ private:
     PartyQuestSkyrimRuntimeVersion m_runtimeVersion{};
     bool m_exactSkyrimSeExecutable{};
     bool m_versionDbSupported{};
+};
+
+/**
+ * Production bridge from the launcher's actual mapped Skyrim executable to the
+ * process-local runtime identity capability.
+ *
+ * Resolve() accepts no path/version arguments. The Windows launcher
+ * implementation reads its long-lived LaunchContext, whose version was queried
+ * from the same executable path whose bytes ExeLoader successfully mapped, and
+ * independently compares that exact tuple with the VersionDb instance that
+ * successfully loaded before client initialization. Any absent state, malformed
+ * version, failed VersionDb load or tuple mismatch fails closed.
+ *
+ * This proves an exact executable-version contract at the existing startup
+ * trust boundary; it is not a cryptographic executable authenticity proof.
+ */
+class PartyQuestSkyrimRuntimeIdentityResolver final
+{
+public:
+    [[nodiscard]] static PartyQuestSkyrimRuntimeIdentityAuthorization Resolve() noexcept;
+
+private:
+    friend class PartyQuestPapyrusRuntimeObserverTestAccess;
+
+    [[nodiscard]] static PartyQuestSkyrimRuntimeIdentityAuthorization ResolveTrustedState(
+        const PartyQuestSkyrimRuntimeVersion& acMappedExecutableVersion,
+        bool aMappedExecutableLoaded,
+        const PartyQuestSkyrimRuntimeVersion& acVersionDbVersion,
+        bool aVersionDbLoaded) noexcept
+    {
+        if (!aMappedExecutableLoaded ||
+            !aVersionDbLoaded ||
+            acMappedExecutableVersion.Major == 0 ||
+            !acMappedExecutableVersion.Matches(acVersionDbVersion))
+        {
+            return {};
+        }
+
+        return PartyQuestSkyrimRuntimeIdentityAuthorization(
+            acMappedExecutableVersion,
+            true,
+            true);
+    }
 };
 
 /**
