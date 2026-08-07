@@ -267,6 +267,67 @@ TEST_CASE("Skyrim Papyrus runtime profile resolver requires an exact executable 
             kVerifiedTestGenerationSourceFingerprint);
 }
 
+TEST_CASE("Exact runtime profile binds generation and snapshot contract identities", "[quest.party-state.quiescence][runtime-profile][contract-identity]")
+{
+    const auto runtimeIdentity =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeRuntimeIdentity(
+            9, 9, 9001, 42);
+    constexpr uint64_t alternateGenerationFingerprint = 0x1111222233334444ull;
+    constexpr uint64_t alternateSnapshotFingerprint = 0x5555666677778888ull;
+    const auto alternateGeneration =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            alternateGenerationFingerprint);
+    const auto alternateSnapshot =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            alternateSnapshotFingerprint);
+    const auto defaultGeneration =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource();
+    const auto defaultSnapshot =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot();
+    REQUIRE(runtimeIdentity.IsVerified());
+    REQUIRE(alternateGeneration.IsVerified());
+    REQUIRE(alternateSnapshot.IsVerified());
+    REQUIRE(defaultGeneration.IsVerified());
+    REQUIRE(defaultSnapshot.IsVerified());
+
+    const auto wrongGenerationContract =
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            ResolveRuntimeProfileWithEvidenceForTesting(
+                runtimeIdentity,
+                alternateGeneration,
+                defaultSnapshot,
+                9, 9, 9001, 42,
+                0x1122334455667788ull,
+                kPartyQuestPapyrusRuntimeRequiredWorkDomains);
+    REQUIRE_FALSE(wrongGenerationContract.IsVerified());
+
+    const auto wrongSnapshotContract =
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            ResolveRuntimeProfileWithEvidenceForTesting(
+                runtimeIdentity,
+                defaultGeneration,
+                alternateSnapshot,
+                9, 9, 9001, 42,
+                0x1122334455667788ull,
+                kPartyQuestPapyrusRuntimeRequiredWorkDomains);
+    REQUIRE_FALSE(wrongSnapshotContract.IsVerified());
+
+    const auto exactEvidenceContracts =
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            ResolveRuntimeProfileWithEvidenceForTesting(
+                runtimeIdentity,
+                alternateGeneration,
+                alternateSnapshot,
+                9, 9, 9001, 42,
+                0x1122334455667788ull,
+                kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+                alternateGenerationFingerprint,
+                alternateSnapshotFingerprint);
+    REQUIRE(exactEvidenceContracts.IsVerified());
+    REQUIRE(exactEvidenceContracts.GetGenerationSourceFingerprint() ==
+        alternateGenerationFingerprint);
+}
+
 TEST_CASE("Exact runtime profile rejects an invalid generation capability", "[quest.party-state.quiescence][runtime-profile][generation-source]")
 {
     const auto runtimeIdentity =
