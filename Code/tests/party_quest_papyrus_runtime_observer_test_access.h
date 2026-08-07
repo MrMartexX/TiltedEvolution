@@ -31,6 +31,26 @@ public:
             aVersionDbSupported);
     }
 
+    [[nodiscard]] static PartyQuestSkyrimRuntimeIdentityAuthorization
+    ResolveRuntimeIdentityForTesting(
+        uint32_t aMappedMajor,
+        uint32_t aMappedMinor,
+        uint32_t aMappedPatch,
+        uint32_t aMappedBuild,
+        bool aMappedExecutableLoaded,
+        uint32_t aVersionDbMajor,
+        uint32_t aVersionDbMinor,
+        uint32_t aVersionDbPatch,
+        uint32_t aVersionDbBuild,
+        bool aVersionDbLoaded) noexcept
+    {
+        return PartyQuestSkyrimRuntimeIdentityResolver::ResolveTrustedState(
+            {aMappedMajor, aMappedMinor, aMappedPatch, aMappedBuild},
+            aMappedExecutableLoaded,
+            {aVersionDbMajor, aVersionDbMinor, aVersionDbPatch, aVersionDbBuild},
+            aVersionDbLoaded);
+    }
+
     [[nodiscard]] static PartyQuestPapyrusRuntimeGenerationAuthorization
     AuthorizeGenerationSource(
         uint64_t aSourceFingerprint = kVerifiedTestGenerationSourceFingerprint,
