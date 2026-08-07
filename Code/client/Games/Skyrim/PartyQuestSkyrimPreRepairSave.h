@@ -25,7 +25,9 @@ enum class PartyQuestSkyrimPreRepairSaveStatus : uint8_t
     SaveManagerUnavailable,
     EngineSaveFailed,
     MainSaveMissing,
-    SourceInspectionFailed
+    SourceInspectionFailed,
+    CaptureAttemptLimitExceeded,
+    CaptureAttemptInspectionFailed
 };
 
 struct PartyQuestSkyrimPreRepairSaveResult

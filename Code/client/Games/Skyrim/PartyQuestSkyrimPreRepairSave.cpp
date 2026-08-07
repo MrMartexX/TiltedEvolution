@@ -3,6 +3,7 @@
 #include <PartyQuestSkyrimPreRepairSave.h>
 #include <PartyQuestSkyrimSavePathScope.h>
 #include <SaveLoad.h>
+#include <Structs/Skyrim/PartyQuestPreRepairCaptureAttemptPolicy.h>
 
 #include <array>
 #include <atomic>
@@ -213,6 +214,21 @@ PartyQuestSkyrimPreRepairSave::CaptureCoreSource(
         if (!IsExistingConfinedSaveDirectory(acPaths))
         {
             result.Status = PartyQuestSkyrimPreRepairSaveStatus::SaveDirectoryUnavailable;
+            return result;
+        }
+
+        const auto attemptDecision =
+            PartyQuestPreRepairCaptureAttemptPolicy::Evaluate(
+                acPaths,
+                active->TransactionId,
+                active->TargetWorldRevision);
+        if (!attemptDecision.IsReady())
+        {
+            result.Status =
+                attemptDecision.Status ==
+                    PartyQuestPreRepairCaptureAttemptStatus::AttemptLimitExceeded
+                ? PartyQuestSkyrimPreRepairSaveStatus::CaptureAttemptLimitExceeded
+                : PartyQuestSkyrimPreRepairSaveStatus::CaptureAttemptInspectionFailed;
             return result;
         }
 
