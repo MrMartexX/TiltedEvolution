@@ -285,3 +285,67 @@ TEST_CASE("Unlisted sidecar capability is rejected even with a verified local to
         {capture});
     REQUIRE(result.Status == PartyQuestCheckpointSidecarMirrorStatus::UnexpectedCapability);
 }
+
+TEST_CASE("Sidecar mirror collection enforces immutable local resource bounds", "[quest.party-state.sidecar-mirror]")
+{
+    MirrorSandbox sandbox;
+    const auto requirement = BuildMirrorRequirement();
+    PartyQuestCheckpointSidecarManifest manifest;
+    REQUIRE(manifest.AddRequirement(requirement));
+
+    PartyQuestCheckpointSidecarCapture capture;
+    capture.Authorization = Authorize(requirement);
+    capture.TransactionId = kTransactionId;
+    capture.TargetWorldRevision = kWorldRevision;
+
+    SECTION("capability count")
+    {
+        std::vector<PartyQuestCheckpointSidecarCapture> captures(
+            PartyQuestCheckpointSidecarPolicy::MaxCapabilityCount + 1);
+        const auto result = PartyQuestCheckpointSidecarMirrorCollector::Collect(
+            sandbox.Paths,
+            manifest,
+            kTransactionId,
+            kWorldRevision,
+            captures);
+        REQUIRE(result.Status ==
+            PartyQuestCheckpointSidecarMirrorStatus::CapabilityLimitExceeded);
+    }
+
+    SECTION("files per capability")
+    {
+        capture.MirrorRelativeFiles.resize(
+            PartyQuestCheckpointSidecarPolicy::MaxFilesPerCapability + 1,
+            "placeholder.bin");
+        const auto result = PartyQuestCheckpointSidecarMirrorCollector::Collect(
+            sandbox.Paths,
+            manifest,
+            kTransactionId,
+            kWorldRevision,
+            {capture});
+        REQUIRE(result.Status ==
+            PartyQuestCheckpointSidecarMirrorStatus::FileLimitExceeded);
+        REQUIRE(result.FailedCapabilityId == requirement.CapabilityId);
+    }
+
+    SECTION("relative path bytes")
+    {
+        const auto prefix =
+            PartyQuestCheckpointSidecarMirrorCollector::FormatCapabilityDirectory(
+                requirement.CapabilityId) + "/";
+        capture.MirrorRelativeFiles = {
+            prefix + std::string(
+                PartyQuestCheckpointSidecarPolicy::MaxRelativePathBytes -
+                    prefix.size() + 1,
+                'x')};
+        const auto result = PartyQuestCheckpointSidecarMirrorCollector::Collect(
+            sandbox.Paths,
+            manifest,
+            kTransactionId,
+            kWorldRevision,
+            {capture});
+        REQUIRE(result.Status ==
+            PartyQuestCheckpointSidecarMirrorStatus::PathLengthExceeded);
+        REQUIRE(result.FailedCapabilityId == requirement.CapabilityId);
+    }
+}

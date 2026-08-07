@@ -155,3 +155,24 @@ TEST_CASE("Checkpoint sidecar manifest rejects duplicate capability requirements
     REQUIRE(*manifest.FindRequirement(requirement.CapabilityId) == requirement);
     REQUIRE(manifest.FindRequirement(0xDEADBEEFull) == nullptr);
 }
+
+TEST_CASE("Checkpoint sidecar manifest enforces an immutable local capability bound", "[quest.party-state.sidecars]")
+{
+    PartyQuestCheckpointSidecarManifest manifest;
+    const auto base = BuildRequirement();
+
+    for (size_t i = 0; i < PartyQuestCheckpointSidecarPolicy::MaxCapabilityCount; ++i)
+    {
+        auto requirement = base;
+        requirement.CapabilityId = base.CapabilityId + i;
+        REQUIRE(manifest.AddRequirement(requirement));
+    }
+
+    auto excess = base;
+    excess.CapabilityId = base.CapabilityId +
+        PartyQuestCheckpointSidecarPolicy::MaxCapabilityCount;
+    REQUIRE_FALSE(manifest.AddRequirement(excess));
+    REQUIRE(manifest.GetRequirementCount() ==
+        PartyQuestCheckpointSidecarPolicy::MaxCapabilityCount);
+    REQUIRE(manifest.ComputeFingerprint() != 0);
+}

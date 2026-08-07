@@ -139,6 +139,9 @@ bool PartyQuestCheckpointSidecarManifest::AddRequirement(
     if (!PartyQuestCheckpointSidecarPolicy::IsValidRequirement(acRequirement))
         return false;
 
+    if (m_requirements.size() >= PartyQuestCheckpointSidecarPolicy::MaxCapabilityCount)
+        return false;
+
     return m_requirements.emplace(
         acRequirement.CapabilityId,
         acRequirement).second;

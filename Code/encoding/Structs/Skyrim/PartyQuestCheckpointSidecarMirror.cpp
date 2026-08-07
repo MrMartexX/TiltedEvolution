@@ -282,6 +282,13 @@ PartyQuestCheckpointSidecarMirrorCollector::Collect(
         const std::filesystem::path externalRoot =
             acPaths.SidecarsDirectory / "external";
 
+        if (acManifest.GetRequirementCount() >
+                PartyQuestCheckpointSidecarPolicy::MaxCapabilityCount ||
+            acCaptures.size() > PartyQuestCheckpointSidecarPolicy::MaxCapabilityCount)
+        {
+            return Fail(PartyQuestCheckpointSidecarMirrorStatus::CapabilityLimitExceeded);
+        }
+
         std::unordered_map<uint64_t, const PartyQuestCheckpointSidecarCapture*> captures;
         captures.reserve(acCaptures.size());
         for (const auto& capture : acCaptures)
@@ -334,6 +341,13 @@ PartyQuestCheckpointSidecarMirrorCollector::Collect(
             }
 
             const auto& capture = *it->second;
+            if (capture.MirrorRelativeFiles.size() >
+                PartyQuestCheckpointSidecarPolicy::MaxFilesPerCapability)
+            {
+                return Fail(
+                    PartyQuestCheckpointSidecarMirrorStatus::FileLimitExceeded,
+                    requirement.CapabilityId);
+            }
             if (capture.TransactionId != aTransactionId)
             {
                 return Fail(
@@ -400,6 +414,15 @@ PartyQuestCheckpointSidecarMirrorCollector::Collect(
             const auto& capture = *captureIt->second;
             for (const auto& relativePath : capture.MirrorRelativeFiles)
             {
+                if (relativePath.generic_u8string().size() >
+                    PartyQuestCheckpointSidecarPolicy::MaxRelativePathBytes)
+                {
+                    return Fail(
+                        PartyQuestCheckpointSidecarMirrorStatus::PathLengthExceeded,
+                        requirement.CapabilityId,
+                        relativePath);
+                }
+
                 if (!PartyQuestReplicaFilePlanner::IsSafeRelativePath(relativePath))
                 {
                     return Fail(

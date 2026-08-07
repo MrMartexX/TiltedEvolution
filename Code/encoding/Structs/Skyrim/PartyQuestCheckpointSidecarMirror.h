@@ -53,7 +53,10 @@ enum class PartyQuestCheckpointSidecarMirrorStatus : uint8_t
     MirrorRootUnavailable,
     MirrorEscape,
     DuplicateFile,
-    SourceInspectionFailed
+    SourceInspectionFailed,
+    CapabilityLimitExceeded,
+    FileLimitExceeded,
+    PathLengthExceeded
 };
 
 /**

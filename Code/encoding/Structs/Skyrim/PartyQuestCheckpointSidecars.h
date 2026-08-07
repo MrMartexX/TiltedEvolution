@@ -180,6 +180,13 @@ struct PartyQuestCheckpointSidecarDecision
 class PartyQuestCheckpointSidecarPolicy final
 {
 public:
+    // Immutable client-side resource bounds. These values are deliberately not
+    // carried by the campaign manifest, so remote policy cannot enlarge local
+    // filesystem or allocation authority.
+    static constexpr size_t MaxCapabilityCount = 64;
+    static constexpr size_t MaxFilesPerCapability = 64;
+    static constexpr size_t MaxRelativePathBytes = 1024;
+
     [[nodiscard]] static bool IsValidRequirement(
         const PartyQuestCheckpointSidecarRequirement& acRequirement) noexcept;
 
@@ -199,7 +206,10 @@ public:
         const PartyQuestCheckpointSidecarFacts* apFacts) noexcept;
 };
 
-/** Campaign-level exact requirement set. Duplicate capability ids are rejected. */
+/**
+ * Campaign-level exact requirement set. Duplicate capability ids and manifests
+ * exceeding the immutable local capability bound are rejected.
+ */
 class PartyQuestCheckpointSidecarManifest final
 {
 public:
