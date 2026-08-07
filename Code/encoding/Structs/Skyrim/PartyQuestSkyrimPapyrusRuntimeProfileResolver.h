@@ -3,6 +3,8 @@
 #include <Structs/Skyrim/PartyQuestPapyrusRuntimeMonitor.h>
 
 #include <cstdint>
+#include <limits>
+#include <string_view>
 
 class PartyQuestSkyrimRuntimeIdentityResolver;
 class PartyQuestPapyrusRuntimeObserverTestAccess;
@@ -26,6 +28,64 @@ struct PartyQuestSkyrimRuntimeVersion final
             Patch == acOther.Patch &&
             Build == acOther.Build;
     }
+
+    /**
+     * Strictly parses the canonical four-component VersionDb representation.
+     * This produces data only and never grants runtime authority. The output is
+     * unchanged on failure so malformed/overflowing version text cannot become
+     * a partially accepted identity.
+     */
+    [[nodiscard]] static bool TryParse(
+        std::string_view aVersion,
+        PartyQuestSkyrimRuntimeVersion& aOut) noexcept
+    {
+        uint32_t components[4]{};
+        size_t position = 0;
+
+        for (size_t componentIndex = 0; componentIndex < 4; ++componentIndex)
+        {
+            if (position >= aVersion.size() ||
+                aVersion[position] < '0' || aVersion[position] > '9')
+            {
+                return false;
+            }
+
+            uint64_t value = 0;
+            while (position < aVersion.size() &&
+                aVersion[position] >= '0' && aVersion[position] <= '9')
+            {
+                const uint32_t digit =
+                    static_cast<uint32_t>(aVersion[position] - '0');
+                if (value >
+                    (std::numeric_limits<uint32_t>::max() - digit) / 10ull)
+                {
+                    return false;
+                }
+
+                value = value * 10ull + digit;
+                ++position;
+            }
+
+            components[componentIndex] = static_cast<uint32_t>(value);
+
+            if (componentIndex < 3)
+            {
+                if (position >= aVersion.size() || aVersion[position] != '.')
+                    return false;
+                ++position;
+            }
+            else if (position != aVersion.size())
+            {
+                return false;
+            }
+        }
+
+        if (components[0] == 0)
+            return false;
+
+        aOut = {components[0], components[1], components[2], components[3]};
+        return true;
+    }
 };
 
 /**
@@ -34,10 +94,9 @@ struct PartyQuestSkyrimRuntimeVersion final
  * accepted by the project's VersionDb support gate.
  *
  * Callers cannot mint this capability from a version string or numeric tuple.
- * A future client-specific PartyQuestSkyrimRuntimeIdentityResolver is the only
- * production issuer; it must bind to the already loaded executable and
- * successful VersionDb validation rather than accepting remote/caller supplied
- * paths or version metadata.
+ * A client-specific PartyQuestSkyrimRuntimeIdentityResolver is the only
+ * production issuer; it binds directly to the already loaded VersionDb
+ * singleton and never accepts remote/caller supplied paths or version metadata.
  */
 class PartyQuestSkyrimRuntimeIdentityAuthorization final
 {
