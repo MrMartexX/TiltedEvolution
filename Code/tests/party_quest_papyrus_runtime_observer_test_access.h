@@ -56,13 +56,15 @@ public:
         uint64_t aSourceFingerprint = kVerifiedTestGenerationSourceFingerprint,
         uint32_t aCoveredWorkDomains = kPartyQuestPapyrusRuntimeRequiredWorkDomains,
         bool aMonotonic = true,
-        bool aObservesWorkArrival = true) noexcept
+        bool aObservesWorkArrival = true,
+        bool aSampleIndependentArrivalEpoch = true) noexcept
     {
         return PartyQuestPapyrusRuntimeGenerationAuthorization(
             aSourceFingerprint,
             aCoveredWorkDomains,
             aMonotonic,
-            aObservesWorkArrival);
+            aObservesWorkArrival,
+            aSampleIndependentArrivalEpoch);
     }
 
     [[nodiscard]] static PartyQuestPapyrusRuntimeSnapshotAuthorization
@@ -96,6 +98,7 @@ public:
         const auto generation = AuthorizeGenerationSource(
             kVerifiedTestGenerationSourceFingerprint,
             kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            aTrustedQuestEventGeneration,
             aTrustedQuestEventGeneration,
             aTrustedQuestEventGeneration);
         const auto snapshot = AuthorizeSnapshot(
@@ -199,6 +202,7 @@ public:
         const auto generation = AuthorizeGenerationSource(
             kVerifiedTestGenerationSourceFingerprint,
             kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            aTrustedQuestEventGeneration,
             aTrustedQuestEventGeneration,
             aTrustedQuestEventGeneration);
         const auto snapshot = AuthorizeSnapshot(
