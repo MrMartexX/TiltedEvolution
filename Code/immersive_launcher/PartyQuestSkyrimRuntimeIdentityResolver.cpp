@@ -6,7 +6,7 @@
 PartyQuestSkyrimRuntimeIdentityAuthorization
 PartyQuestSkyrimRuntimeIdentityResolver::Resolve() noexcept
 {
-    const auto* pLaunchContext = launcher::GetLaunchContext();
+    auto* pLaunchContext = launcher::GetLaunchContext();
     if (!pLaunchContext || !pLaunchContext->GetLoaded())
         return {};
 
