@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Structs/Skyrim/PartyQuestPapyrusRuntimeMonitor.h>
+#include <Structs/Skyrim/PartyQuestSkyrimPapyrusRuntimeProfileResolver.h>
 
 /**
  * Test-only issuer for observer/runtime-profile trust. Production code cannot
@@ -12,6 +12,44 @@ class PartyQuestPapyrusRuntimeObserverTestAccess final
 public:
     static constexpr uint64_t kVerifiedTestRuntimeProfileFingerprint =
         0x5051525450524F46ull;
+
+    [[nodiscard]] static PartyQuestSkyrimRuntimeIdentityAuthorization
+    AuthorizeRuntimeIdentity(
+        uint32_t aMajor,
+        uint32_t aMinor,
+        uint32_t aPatch,
+        uint32_t aBuild,
+        bool aExactSkyrimSeExecutable = true,
+        bool aVersionDbSupported = true) noexcept
+    {
+        return PartyQuestSkyrimRuntimeIdentityAuthorization(
+            {aMajor, aMinor, aPatch, aBuild},
+            aExactSkyrimSeExecutable,
+            aVersionDbSupported);
+    }
+
+    [[nodiscard]] static PartyQuestPapyrusRuntimeProfileAuthorization
+    ResolveRuntimeProfileForTesting(
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+        uint32_t aProfileMajor,
+        uint32_t aProfileMinor,
+        uint32_t aProfilePatch,
+        uint32_t aProfileBuild,
+        uint64_t aRuntimeProfileFingerprint,
+        uint32_t aObservedWorkDomains,
+        bool aCoherentSnapshot,
+        bool aTrustedQuestEventGeneration) noexcept
+    {
+        const PartyQuestSkyrimPapyrusRuntimeProfileResolver::ProfileDescriptor profile{
+            {aProfileMajor, aProfileMinor, aProfilePatch, aProfileBuild},
+            aRuntimeProfileFingerprint,
+            aObservedWorkDomains,
+            aCoherentSnapshot,
+            aTrustedQuestEventGeneration};
+        return PartyQuestSkyrimPapyrusRuntimeProfileResolver::ResolveExactProfile(
+            acRuntimeIdentity,
+            profile);
+    }
 
     [[nodiscard]] static PartyQuestPapyrusRuntimeObserverAuthorization Authorize(
         const PartyQuestPapyrusRuntimeObserver& acObserver) noexcept
@@ -40,8 +78,16 @@ public:
             aObservedWorkDomains,
             aCoherentSnapshot,
             aTrustedQuestEventGeneration);
+        return AuthorizeWithRuntimeProfileAuthorization(acObserver, runtimeProfile);
+    }
+
+    [[nodiscard]] static PartyQuestPapyrusRuntimeObserverAuthorization
+    AuthorizeWithRuntimeProfileAuthorization(
+        const PartyQuestPapyrusRuntimeObserver& acObserver,
+        const PartyQuestPapyrusRuntimeProfileAuthorization& acRuntimeProfile) noexcept
+    {
         return PartyQuestPapyrusRuntimeObserverAuthorization(
             acObserver,
-            runtimeProfile);
+            acRuntimeProfile);
     }
 };
