@@ -22,6 +22,7 @@ private:
     std::string _verStr;
     std::string _moduleName;
     unsigned long long _base;
+    bool _loaded{false};
 
     template <typename T> static T read(std::ifstream& file)
     {
@@ -39,6 +40,7 @@ private:
 public:
     const std::string& GetModuleName() const { return _moduleName; }
     const std::string& GetLoadedVersionString() const { return _verStr; }
+    bool IsLoaded() const { return _loaded; }
 
     const std::map<unsigned long long, unsigned long long>& GetOffsetMap() const { return _data; }
 
@@ -149,8 +151,10 @@ public:
         _rdata.clear();
         for (int i = 0; i < 4; i++)
             _ver[i] = 0;
+        _verStr.clear();
         _moduleName = std::string();
         _base = 0;
+        _loaded = false;
     }
 
     bool Load(const std::filesystem::path& acGamePath, const TiltedPhoques::String& acExeVersion)
@@ -159,6 +163,7 @@ public:
 
         if (!ParseVersionFromString(acExeVersion.c_str(), major, minor, revision, build))
         {
+            Clear();
             return false;
         }
 
@@ -305,6 +310,7 @@ public:
             pvid = q1;
         }
 
+        _loaded = true;
         return true;
     }
 
