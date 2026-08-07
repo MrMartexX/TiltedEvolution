@@ -290,3 +290,30 @@ TEST_CASE("Executor does not trust a manually mutated ready plan destination", "
         PartyQuestReplicaExecutionStatus::InvalidDestination);
     REQUIRE_FALSE(std::filesystem::exists(sandbox.Root / "escape.ess"));
 }
+
+TEST_CASE("Executor revalidates resource limits and disk reserve before staging", "[quest.party-state.replica-executor][resource-budget]")
+{
+    TempReplicaSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    const auto files = BuildInspectedSoloFiles(sandbox);
+    const auto plan = PartyQuestReplicaFilePlanner::BuildImportPlan(paths, files);
+    REQUIRE(plan.IsReady());
+
+    SECTION("ready plan cannot bypass tighter local limits")
+    {
+        auto oversizedPlan = plan;
+        while (oversizedPlan.Operations.size() <= PartyQuestReplicaResourcePolicy::MaxFiles)
+            oversizedPlan.Operations.push_back(oversizedPlan.Operations.back());
+        REQUIRE(PartyQuestReplicaFileExecutor::ExecuteImport(paths, oversizedPlan).Status ==
+            PartyQuestReplicaExecutionStatus::ResourceLimitExceeded);
+    }
+
+    SECTION("disk reserve includes checkpoint restore staging and safety margin")
+    {
+        const auto required = PartyQuestReplicaResourcePolicy::RequiredFreeBytes(plan);
+        REQUIRE(required.has_value());
+        REQUIRE(*required > PartyQuestReplicaResourcePolicy::MinimumFreeSpaceReserveBytes);
+        REQUIRE_FALSE(PartyQuestReplicaResourcePolicy::HasSufficientDiskSpace(plan, *required - 1));
+        REQUIRE(PartyQuestReplicaResourcePolicy::HasSufficientDiskSpace(plan, *required));
+    }
+}

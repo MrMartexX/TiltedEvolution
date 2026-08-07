@@ -408,6 +408,10 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
 {
     try
     {
+        const auto requiredFreeBytes = PartyQuestReplicaResourcePolicy::RequiredFreeBytes(acPlan);
+        if (!requiredFreeBytes)
+            return MakeFailure(PartyQuestReplicaExecutionStatus::ResourceLimitExceeded, 0);
+
         std::vector<NormalizedOperation> operations;
         auto validation = ValidatePlanAndSources(
             acPaths,
@@ -433,6 +437,13 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
         const auto canonicalPlayerRoot = std::filesystem::weakly_canonical(*playerRoot, ec);
         if (ec || canonicalPlayerRoot.empty())
             return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, 0, *playerRoot);
+
+        ec.clear();
+        const auto diskSpace = std::filesystem::space(canonicalPlayerRoot, ec);
+        if (ec)
+            return MakeFailure(PartyQuestReplicaExecutionStatus::IoError, 0, canonicalPlayerRoot);
+        if (diskSpace.available < *requiredFreeBytes)
+            return MakeFailure(PartyQuestReplicaExecutionStatus::InsufficientDiskSpace, 0, canonicalPlayerRoot);
 
         PartyQuestReplicaExecutionReport parentFailure;
         if (!PrepareDestinationParents(canonicalPlayerRoot, operations, parentFailure))

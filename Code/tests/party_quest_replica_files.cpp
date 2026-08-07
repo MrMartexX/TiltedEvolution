@@ -2,6 +2,8 @@
 
 #include <catch2/catch.hpp>
 
+#include <string>
+
 namespace
 {
 const PartyQuestCampaignId kCampaign{0x1111, 0x2222};
@@ -201,4 +203,55 @@ TEST_CASE("Checkpoint manifest fails closed without stable identities revision o
     invalid.Status = PartyQuestReplicaCopyPlanStatus::InvalidSource;
     REQUIRE_FALSE(PartyQuestReplicaFilePlanner::BuildCheckpointManifest(
         kCampaign, kPlayer, PartyQuestCheckpointKind::PreJoin, 1, invalid).has_value());
+}
+
+TEST_CASE("Replica planner enforces local file and byte budgets", "[quest.party-state.replica-files][resource-budget]")
+{
+    const auto paths = BuildPaths();
+
+    SECTION("file count")
+    {
+        auto files = BuildSoloFileSet();
+        for (size_t i = files.size(); i <= PartyQuestReplicaResourcePolicy::MaxFiles; ++i)
+        {
+            files.push_back({
+                PartyQuestReplicaFileKind::ExternalSidecar,
+                "SoloSaves/Extra" + std::to_string(i) + ".bin",
+                "Extra" + std::to_string(i) + ".bin",
+                1,
+                static_cast<uint64_t>(i + 1)});
+        }
+        REQUIRE(PartyQuestReplicaFilePlanner::BuildImportPlan(paths, files).Status ==
+            PartyQuestReplicaCopyPlanStatus::ResourceFileCountExceeded);
+    }
+
+    SECTION("individual file size")
+    {
+        auto files = BuildSoloFileSet();
+        files[0].Size = PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes + 1;
+        REQUIRE(PartyQuestReplicaFilePlanner::BuildImportPlan(paths, files).Status ==
+            PartyQuestReplicaCopyPlanStatus::ResourceFileSizeExceeded);
+    }
+
+    SECTION("total size")
+    {
+        auto files = BuildSoloFileSet();
+        files[0].Size = PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes;
+        files[1].Size = PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes;
+        files[2].Size = PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes;
+        files.push_back({
+            PartyQuestReplicaFileKind::ExternalSidecar,
+            "SoloSaves/ExtraA.bin",
+            "ExtraA.bin",
+            PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes,
+            0x44});
+        files.push_back({
+            PartyQuestReplicaFileKind::ExternalSidecar,
+            "SoloSaves/ExtraB.bin",
+            "ExtraB.bin",
+            PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes,
+            0x55});
+        REQUIRE(PartyQuestReplicaFilePlanner::BuildImportPlan(paths, files).Status ==
+            PartyQuestReplicaCopyPlanStatus::ResourceTotalSizeExceeded);
+    }
 }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <set>
 
 namespace
@@ -104,7 +105,14 @@ PartyQuestReplicaCopyPlan BuildPlan(
         return plan;
     }
 
+    if (acFiles.size() > PartyQuestReplicaResourcePolicy::MaxFiles)
+    {
+        plan.Status = PartyQuestReplicaCopyPlanStatus::ResourceFileCountExceeded;
+        return plan;
+    }
+
     size_t mainSaveCount{};
+    uint64_t totalSize{};
     std::set<std::filesystem::path> sources;
     std::set<std::filesystem::path> destinations;
 
@@ -149,6 +157,26 @@ PartyQuestReplicaCopyPlan BuildPlan(
         if (file.Digest == 0)
         {
             plan.Status = PartyQuestReplicaCopyPlanStatus::MissingDigest;
+            plan.Operations.clear();
+            return plan;
+        }
+
+        if (file.Size > PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes)
+        {
+            plan.Status = PartyQuestReplicaCopyPlanStatus::ResourceFileSizeExceeded;
+            plan.Operations.clear();
+            return plan;
+        }
+        if (file.Size > std::numeric_limits<uint64_t>::max() - totalSize)
+        {
+            plan.Status = PartyQuestReplicaCopyPlanStatus::ResourceTotalSizeExceeded;
+            plan.Operations.clear();
+            return plan;
+        }
+        totalSize += file.Size;
+        if (totalSize > PartyQuestReplicaResourcePolicy::MaxTotalFileBytes)
+        {
+            plan.Status = PartyQuestReplicaCopyPlanStatus::ResourceTotalSizeExceeded;
             plan.Operations.clear();
             return plan;
         }
@@ -298,6 +326,41 @@ PartyQuestReplicaCopyPlan PartyQuestReplicaFilePlanner::BuildRevisionCheckpointP
         aKind,
         true,
         aCampaignWorldRevision);
+}
+
+std::optional<uint64_t> PartyQuestReplicaResourcePolicy::RequiredFreeBytes(
+    const PartyQuestReplicaCopyPlan& acPlan) noexcept
+{
+    if (!acPlan.IsReady() || acPlan.Operations.empty() || acPlan.Operations.size() > MaxFiles)
+        return std::nullopt;
+
+    uint64_t totalSize{};
+    for (const auto& operation : acPlan.Operations)
+    {
+        if (operation.ExpectedSize > MaxIndividualFileBytes ||
+            operation.ExpectedSize > std::numeric_limits<uint64_t>::max() - totalSize)
+        {
+            return std::nullopt;
+        }
+        totalSize += operation.ExpectedSize;
+        if (totalSize > MaxTotalFileBytes)
+            return std::nullopt;
+    }
+
+    if (totalSize > std::numeric_limits<uint64_t>::max() / RequiredFreeSpaceMultiplier)
+        return std::nullopt;
+    const uint64_t multiplied = totalSize * RequiredFreeSpaceMultiplier;
+    if (multiplied > std::numeric_limits<uint64_t>::max() - MinimumFreeSpaceReserveBytes)
+        return std::nullopt;
+    return multiplied + MinimumFreeSpaceReserveBytes;
+}
+
+bool PartyQuestReplicaResourcePolicy::HasSufficientDiskSpace(
+    const PartyQuestReplicaCopyPlan& acPlan,
+    uint64_t aAvailableBytes) noexcept
+{
+    const auto required = RequiredFreeBytes(acPlan);
+    return required && aAvailableBytes >= *required;
 }
 
 std::optional<PartyQuestReplicaCheckpointManifest>

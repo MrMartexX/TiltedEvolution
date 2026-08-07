@@ -2,6 +2,7 @@
 
 #include <Structs/Skyrim/PartyQuestCoopSaveLayout.h>
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -36,6 +37,28 @@ struct PartyQuestReplicaCopyOperation
     bool operator==(const PartyQuestReplicaCopyOperation&) const = default;
 };
 
+struct PartyQuestReplicaCopyPlan;
+
+/**
+ * Local resource policy for one immutable replica publication. These limits
+ * are never supplied by a remote capability or checkpoint manifest.
+ */
+struct PartyQuestReplicaResourcePolicy
+{
+    static constexpr size_t MaxFiles = 128;
+    static constexpr uint64_t MaxIndividualFileBytes = 512ull * 1024ull * 1024ull;
+    static constexpr uint64_t MaxTotalFileBytes = 2ull * 1024ull * 1024ull * 1024ull;
+    static constexpr uint64_t RequiredFreeSpaceMultiplier = 3;
+    static constexpr uint64_t MinimumFreeSpaceReserveBytes = 256ull * 1024ull * 1024ull;
+
+    [[nodiscard]] static std::optional<uint64_t> RequiredFreeBytes(
+        const PartyQuestReplicaCopyPlan& acPlan) noexcept;
+
+    [[nodiscard]] static bool HasSufficientDiskSpace(
+        const PartyQuestReplicaCopyPlan& acPlan,
+        uint64_t aAvailableBytes) noexcept;
+};
+
 enum class PartyQuestReplicaCopyPlanStatus : uint8_t
 {
     Ready,
@@ -50,7 +73,10 @@ enum class PartyQuestReplicaCopyPlanStatus : uint8_t
     SourceDestinationCollision,
     DestinationEscapesPlayerRoot,
     MissingDigest,
-    InvalidWorldRevision
+    InvalidWorldRevision,
+    ResourceFileCountExceeded,
+    ResourceFileSizeExceeded,
+    ResourceTotalSizeExceeded
 };
 
 struct PartyQuestReplicaCopyPlan

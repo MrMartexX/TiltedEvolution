@@ -25,7 +25,9 @@ enum class PartyQuestReplicaExecutionStatus : uint8_t
     DestinationSymlinkEscape,
     IoError,
     VerificationFailed,
-    RollbackFailed
+    RollbackFailed,
+    ResourceLimitExceeded,
+    InsufficientDiskSpace
 };
 
 struct PartyQuestReplicaFileObservation
