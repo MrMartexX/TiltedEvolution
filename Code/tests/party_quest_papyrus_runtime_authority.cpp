@@ -24,14 +24,21 @@ public:
     [[nodiscard]] PartyQuestPapyrusRuntimeObservation Observe(
         uint64_t) noexcept override
     {
+        ++m_observeCount;
         if (m_next >= m_samples.size())
             return {};
         return m_samples[m_next++];
     }
 
+    [[nodiscard]] size_t GetObserveCount() const noexcept
+    {
+        return m_observeCount;
+    }
+
 private:
     std::vector<PartyQuestPapyrusRuntimeObservation> m_samples;
     size_t m_next{};
+    size_t m_observeCount{};
 };
 
 static_assert(!std::is_copy_constructible_v<AuthorityTestObserver>);
@@ -73,12 +80,91 @@ TEST_CASE("Papyrus runtime observer authorization is exact-instance scoped", "[q
     REQUIRE(firstAuthorization.IsVerified());
     REQUIRE(firstAuthorization.Matches(first));
     REQUIRE_FALSE(firstAuthorization.Matches(second));
+    REQUIRE(firstAuthorization.GetRuntimeProfileFingerprint() ==
+        PartyQuestPapyrusRuntimeObserverTestAccess::kVerifiedTestRuntimeProfileFingerprint);
     REQUIRE(first.GetInstanceNonce() != second.GetInstanceNonce());
 
     PartyQuestPapyrusRuntimeMonitor secondMonitor(second);
     REQUIRE_FALSE(secondMonitor.Begin(7001, 0, 1000, firstAuthorization));
     REQUIRE(secondMonitor.GetStatus() == PartyQuestPapyrusRuntimeMonitorStatus::Inactive);
     REQUIRE(secondMonitor.GetTransactionId() == 0);
+}
+
+TEST_CASE("Authoritative observer capability requires an exact complete runtime profile", "[quest.party-state.quiescence][runtime-monitor][observer-authority][runtime-profile]")
+{
+    AuthorityTestObserver observer({Idle(15), Idle(15)});
+    constexpr uint64_t profileFingerprint = 0x1122334455667788ull;
+
+    const auto missingIdentity =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeWithRuntimeProfile(
+            observer,
+            0,
+            true,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true);
+    REQUIRE_FALSE(missingIdentity.IsVerified());
+
+    const auto wrongRuntime =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeWithRuntimeProfile(
+            observer,
+            profileFingerprint,
+            false,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true);
+    REQUIRE_FALSE(wrongRuntime.IsVerified());
+
+    const auto partialEnvelope =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeWithRuntimeProfile(
+            observer,
+            profileFingerprint,
+            true,
+            static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::VmTaskQueue),
+            true,
+            true);
+    REQUIRE_FALSE(partialEnvelope.IsVerified());
+
+    const auto incoherentSnapshot =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeWithRuntimeProfile(
+            observer,
+            profileFingerprint,
+            true,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            false,
+            true);
+    REQUIRE_FALSE(incoherentSnapshot.IsVerified());
+
+    const auto untrustedGeneration =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeWithRuntimeProfile(
+            observer,
+            profileFingerprint,
+            true,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            false);
+    REQUIRE_FALSE(untrustedGeneration.IsVerified());
+
+    PartyQuestPapyrusRuntimeMonitor monitor(observer);
+    REQUIRE_FALSE(monitor.Begin(7010, 0, 1000, wrongRuntime));
+    REQUIRE_FALSE(monitor.Begin(7010, 0, 1000, partialEnvelope));
+    REQUIRE_FALSE(monitor.Begin(7010, 0, 1000, incoherentSnapshot));
+    REQUIRE_FALSE(monitor.Begin(7010, 0, 1000, untrustedGeneration));
+    REQUIRE(observer.GetObserveCount() == 0);
+
+    const auto verified =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeWithRuntimeProfile(
+            observer,
+            profileFingerprint,
+            true,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true);
+    REQUIRE(verified.IsVerified());
+    REQUIRE(verified.GetRuntimeProfileFingerprint() == profileFingerprint);
+    REQUIRE(monitor.Begin(7010, 0, 1000, verified));
+    REQUIRE(monitor.IsAuthoritativeSession());
+    REQUIRE(observer.GetObserveCount() == 0);
 }
 
 TEST_CASE("Diagnostic observer sessions cannot produce authoritative quiescence", "[quest.party-state.quiescence][runtime-monitor][observer-authority]")
