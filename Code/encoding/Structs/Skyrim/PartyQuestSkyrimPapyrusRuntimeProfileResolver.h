@@ -182,10 +182,14 @@ private:
  * observations comes from a source that covers the complete required VM work
  * envelope and is monotonic across the observer lifetime.
  *
- * A numeric generation value, event dispatcher, hook address or source
- * fingerprint is not authority by itself. Production code may receive this
- * capability only from the concrete Skyrim generation-source resolver after
- * the hook/source coverage contract has been proven for the exact runtime.
+ * A numeric generation value, sampled queue/count statistics, event dispatcher,
+ * hook address or source fingerprint is not authority by itself. Production code
+ * may receive this capability only from the concrete Skyrim generation-source
+ * resolver after the hook/source coverage contract has been proven for the exact
+ * runtime. The epoch must advance from real work-arrival edges independently of
+ * observer polling or StatsEvent/statistics sampling; incrementing once per poll
+ * or per delivered statistics snapshot is explicitly insufficient.
+ *
  * Until such a resolver exists, production cannot satisfy this prerequisite.
  */
 class PartyQuestPapyrusRuntimeGenerationAuthorization final
@@ -198,7 +202,8 @@ public:
         return m_sourceFingerprint != 0 &&
             HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(m_coveredWorkDomains) &&
             m_monotonic &&
-            m_observesWorkArrival;
+            m_observesWorkArrival &&
+            m_sampleIndependentArrivalEpoch;
     }
 
     [[nodiscard]] uint64_t GetSourceFingerprint() const noexcept
@@ -220,11 +225,13 @@ private:
         uint64_t aSourceFingerprint,
         uint32_t aCoveredWorkDomains,
         bool aMonotonic,
-        bool aObservesWorkArrival) noexcept
+        bool aObservesWorkArrival,
+        bool aSampleIndependentArrivalEpoch) noexcept
         : m_sourceFingerprint(aSourceFingerprint)
         , m_coveredWorkDomains(aCoveredWorkDomains)
         , m_monotonic(aMonotonic)
         , m_observesWorkArrival(aObservesWorkArrival)
+        , m_sampleIndependentArrivalEpoch(aSampleIndependentArrivalEpoch)
     {
     }
 
@@ -232,6 +239,7 @@ private:
     uint32_t m_coveredWorkDomains{};
     bool m_monotonic{};
     bool m_observesWorkArrival{};
+    bool m_sampleIndependentArrivalEpoch{};
 };
 
 /**
