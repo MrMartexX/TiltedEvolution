@@ -32,14 +32,25 @@ static_assert(!std::is_constructible_v<
     PartyQuestSkyrimRuntimeVersion,
     bool,
     bool>);
+static_assert(!std::is_constructible_v<
+    PartyQuestPapyrusRuntimeGenerationAuthorization,
+    uint64_t,
+    uint32_t,
+    bool,
+    bool>);
 } // namespace
 
 TEST_CASE("Skyrim runtime identity capability is constructor confined", "[quest.party-state.quiescence][runtime-profile][runtime-identity]")
 {
+    const auto generation =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource();
+    REQUIRE(generation.IsVerified());
+
     PartyQuestSkyrimRuntimeIdentityAuthorization missing;
     REQUIRE_FALSE(missing.IsVerified());
     REQUIRE_FALSE(
-        PartyQuestSkyrimPapyrusRuntimeProfileResolver::Resolve(missing).IsVerified());
+        PartyQuestSkyrimPapyrusRuntimeProfileResolver::Resolve(
+            missing, generation).IsVerified());
 
     const auto wrongExecutable =
         PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeRuntimeIdentity(
@@ -59,6 +70,55 @@ TEST_CASE("Skyrim runtime identity capability is constructor confined", "[quest.
     REQUIRE(verifiedIdentity.GetRuntimeVersion().Minor == 9);
     REQUIRE(verifiedIdentity.GetRuntimeVersion().Patch == 9001);
     REQUIRE(verifiedIdentity.GetRuntimeVersion().Build == 42);
+}
+
+TEST_CASE("Papyrus generation source authority requires complete monotonic work-arrival coverage", "[quest.party-state.quiescence][runtime-profile][generation-source]")
+{
+    PartyQuestPapyrusRuntimeGenerationAuthorization missing;
+    REQUIRE_FALSE(missing.IsVerified());
+
+    const auto missingFingerprint =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            0,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true);
+    REQUIRE_FALSE(missingFingerprint.IsVerified());
+
+    const auto partialCoverage =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            0x1122334455667788ull,
+            static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::RunningStacks),
+            true,
+            true);
+    REQUIRE_FALSE(partialCoverage.IsVerified());
+
+    const auto nonMonotonic =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            0x1122334455667788ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            false,
+            true);
+    REQUIRE_FALSE(nonMonotonic.IsVerified());
+
+    const auto missesWorkArrival =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            0x1122334455667788ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            false);
+    REQUIRE_FALSE(missesWorkArrival.IsVerified());
+
+    const auto verified =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            0x1122334455667788ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true);
+    REQUIRE(verified.IsVerified());
+    REQUIRE(verified.GetSourceFingerprint() == 0x1122334455667788ull);
+    REQUIRE(HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(
+        verified.GetCoveredWorkDomains()));
 }
 
 TEST_CASE("Skyrim Papyrus runtime profile resolver requires an exact executable profile", "[quest.party-state.quiescence][runtime-profile][exact-match]")
@@ -129,6 +189,36 @@ TEST_CASE("Skyrim Papyrus runtime profile resolver requires an exact executable 
     REQUIRE(exactCompleteProfile.IsVerified());
     REQUIRE(exactCompleteProfile.GetRuntimeProfileFingerprint() ==
         0x1122334455667788ull);
+    REQUIRE(exactCompleteProfile.GetGenerationSourceFingerprint() ==
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            kVerifiedTestGenerationSourceFingerprint);
+}
+
+TEST_CASE("Exact runtime profile rejects an invalid generation capability", "[quest.party-state.quiescence][runtime-profile][generation-source]")
+{
+    const auto runtimeIdentity =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeRuntimeIdentity(
+            9, 9, 9001, 42);
+    REQUIRE(runtimeIdentity.IsVerified());
+
+    const auto partialGeneration =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            0x8877665544332211ull,
+            static_cast<uint32_t>(PartyQuestPapyrusRuntimeWorkDomain::RunningStacks),
+            true,
+            true);
+    REQUIRE_FALSE(partialGeneration.IsVerified());
+
+    const auto rejectedProfile =
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            ResolveRuntimeProfileWithGenerationForTesting(
+                runtimeIdentity,
+                partialGeneration,
+                9, 9, 9001, 42,
+                0x1122334455667788ull,
+                kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+                true);
+    REQUIRE_FALSE(rejectedProfile.IsVerified());
 }
 
 TEST_CASE("Production Skyrim runtime profile registry fails closed before VM sampling", "[quest.party-state.quiescence][runtime-profile][fail-closed]")
@@ -136,12 +226,17 @@ TEST_CASE("Production Skyrim runtime profile registry fails closed before VM sam
     const auto runtimeIdentity =
         PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeRuntimeIdentity(
             9, 9, 9001, 42);
+    const auto generation =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource();
     REQUIRE(runtimeIdentity.IsVerified());
+    REQUIRE(generation.IsVerified());
 
-    // No production ABI/layout profile is approved at this milestone, even for
-    // a VersionDb-authorized identity capability.
+    // No production ABI/layout profile or production generation source is
+    // approved at this milestone. Even test-authorized prerequisites cannot
+    // create a production profile while the registry remains empty.
     const auto productionProfile =
-        PartyQuestSkyrimPapyrusRuntimeProfileResolver::Resolve(runtimeIdentity);
+        PartyQuestSkyrimPapyrusRuntimeProfileResolver::Resolve(
+            runtimeIdentity, generation);
     REQUIRE_FALSE(productionProfile.IsVerified());
 
     RuntimeProfileCountingObserver observer;
