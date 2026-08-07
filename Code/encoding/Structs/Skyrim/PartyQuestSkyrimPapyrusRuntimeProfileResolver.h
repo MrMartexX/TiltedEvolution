@@ -182,6 +182,10 @@ private:
  * observations comes from a source that covers the complete required VM work
  * envelope and is monotonic across the observer lifetime.
  *
+ * The authority is bound to the exact Skyrim runtime for which its source/hook
+ * coverage was proven. A fingerprint is deterministic contract identity, not a
+ * substitute for that runtime binding.
+ *
  * A numeric generation value, sampled queue/count statistics, event dispatcher,
  * hook address or source fingerprint is not authority by itself. Production code
  * may receive this capability only from the concrete Skyrim generation-source
@@ -199,11 +203,17 @@ public:
 
     [[nodiscard]] bool IsVerified() const noexcept
     {
-        return m_sourceFingerprint != 0 &&
+        return m_runtimeVersion.Major != 0 &&
+            m_sourceFingerprint != 0 &&
             HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(m_coveredWorkDomains) &&
             m_monotonic &&
             m_observesWorkArrival &&
             m_sampleIndependentArrivalEpoch;
+    }
+
+    [[nodiscard]] const PartyQuestSkyrimRuntimeVersion& GetRuntimeVersion() const noexcept
+    {
+        return m_runtimeVersion;
     }
 
     [[nodiscard]] uint64_t GetSourceFingerprint() const noexcept
@@ -222,12 +232,14 @@ private:
     friend class PartyQuestPapyrusRuntimeObserverTestAccess;
 
     explicit PartyQuestPapyrusRuntimeGenerationAuthorization(
+        PartyQuestSkyrimRuntimeVersion aRuntimeVersion,
         uint64_t aSourceFingerprint,
         uint32_t aCoveredWorkDomains,
         bool aMonotonic,
         bool aObservesWorkArrival,
         bool aSampleIndependentArrivalEpoch) noexcept
-        : m_sourceFingerprint(aSourceFingerprint)
+        : m_runtimeVersion(aRuntimeVersion)
+        , m_sourceFingerprint(aSourceFingerprint)
         , m_coveredWorkDomains(aCoveredWorkDomains)
         , m_monotonic(aMonotonic)
         , m_observesWorkArrival(aObservesWorkArrival)
@@ -235,6 +247,7 @@ private:
     {
     }
 
+    PartyQuestSkyrimRuntimeVersion m_runtimeVersion{};
     uint64_t m_sourceFingerprint{};
     uint32_t m_coveredWorkDomains{};
     bool m_monotonic{};
@@ -245,6 +258,10 @@ private:
 /**
  * Process-local proof that one authoritative Papyrus observation can obtain a
  * coherent, read-only snapshot of the complete required VM work envelope.
+ *
+ * The authority is bound to the exact Skyrim runtime whose VM layout and
+ * synchronization contract were proven. Snapshot fingerprints identify those
+ * audited contracts but do not grant cross-runtime authority by themselves.
  *
  * Container offsets, nearby lock fields, game-thread execution or a boolean
  * claim of coherence are not authority by themselves. A future concrete Skyrim
@@ -260,11 +277,17 @@ public:
 
     [[nodiscard]] bool IsVerified() const noexcept
     {
-        return m_snapshotFingerprint != 0 &&
+        return m_runtimeVersion.Major != 0 &&
+            m_snapshotFingerprint != 0 &&
             HasCompletePartyQuestPapyrusRuntimeWorkEnvelope(m_coveredWorkDomains) &&
             m_readOnly &&
             m_crossDomainCoherent &&
             m_failClosedOnSamplingFailure;
+    }
+
+    [[nodiscard]] const PartyQuestSkyrimRuntimeVersion& GetRuntimeVersion() const noexcept
+    {
+        return m_runtimeVersion;
     }
 
     [[nodiscard]] uint64_t GetSnapshotFingerprint() const noexcept
@@ -283,12 +306,14 @@ private:
     friend class PartyQuestPapyrusRuntimeObserverTestAccess;
 
     explicit PartyQuestPapyrusRuntimeSnapshotAuthorization(
+        PartyQuestSkyrimRuntimeVersion aRuntimeVersion,
         uint64_t aSnapshotFingerprint,
         uint32_t aCoveredWorkDomains,
         bool aReadOnly,
         bool aCrossDomainCoherent,
         bool aFailClosedOnSamplingFailure) noexcept
-        : m_snapshotFingerprint(aSnapshotFingerprint)
+        : m_runtimeVersion(aRuntimeVersion)
+        , m_snapshotFingerprint(aSnapshotFingerprint)
         , m_coveredWorkDomains(aCoveredWorkDomains)
         , m_readOnly(aReadOnly)
         , m_crossDomainCoherent(aCrossDomainCoherent)
@@ -296,6 +321,7 @@ private:
     {
     }
 
+    PartyQuestSkyrimRuntimeVersion m_runtimeVersion{};
     uint64_t m_snapshotFingerprint{};
     uint32_t m_coveredWorkDomains{};
     bool m_readOnly{};
@@ -311,7 +337,8 @@ private:
  * production profile must additionally have an exact executable-version match,
  * a proven complete six-domain Papyrus mapping, a separately authorized
  * coherent read-only snapshot contract and a separately authorized monotonic
- * work-generation source.
+ * work-generation source. Both evidence capabilities must themselves be bound
+ * to the same exact runtime identity.
  *
  * No production Skyrim runtime profile is approved yet. Resolve() therefore
  * returns an invalid capability for every runtime until the ABI/layout,
@@ -329,7 +356,11 @@ public:
     {
         if (!acRuntimeIdentity.IsVerified() ||
             !acGeneration.IsVerified() ||
-            !acSnapshot.IsVerified())
+            !acSnapshot.IsVerified() ||
+            !acGeneration.GetRuntimeVersion().Matches(
+                acRuntimeIdentity.GetRuntimeVersion()) ||
+            !acSnapshot.GetRuntimeVersion().Matches(
+                acRuntimeIdentity.GetRuntimeVersion()))
         {
             return {};
         }
@@ -358,8 +389,8 @@ private:
      * Shared exact-match primitive for future audited registry entries. Kept
      * private so production callers cannot inject profile metadata. Tests reach
      * it only through the named test-access friend. A valid generic capability
-     * is insufficient: its deterministic contract identity must match the exact
-     * generation/snapshot contract audited for this runtime profile.
+     * is insufficient: its runtime and deterministic contract identity must both
+     * match the exact generation/snapshot contract audited for this profile.
      */
     [[nodiscard]] static PartyQuestPapyrusRuntimeProfileAuthorization ResolveExactProfile(
         const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
@@ -371,6 +402,8 @@ private:
             !acGeneration.IsVerified() ||
             !acSnapshot.IsVerified() ||
             !acRuntimeIdentity.GetRuntimeVersion().Matches(acProfile.RuntimeVersion) ||
+            !acGeneration.GetRuntimeVersion().Matches(acProfile.RuntimeVersion) ||
+            !acSnapshot.GetRuntimeVersion().Matches(acProfile.RuntimeVersion) ||
             acGeneration.GetSourceFingerprint() != acProfile.GenerationSourceFingerprint ||
             acSnapshot.GetSnapshotFingerprint() != acProfile.SnapshotFingerprint ||
             acGeneration.GetCoveredWorkDomains() != acProfile.ObservedWorkDomains ||
