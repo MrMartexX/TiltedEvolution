@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <optional>
 #include <system_error>
@@ -19,6 +20,64 @@ bool IsMissingError(const std::error_code& acError) noexcept
 {
     return acError == std::errc::no_such_file_or_directory ||
         acError == std::errc::not_a_directory;
+}
+
+enum class RevisionCheckpointAdmission : uint8_t
+{
+    Allowed,
+    LimitExceeded,
+    InvalidNamespace
+};
+
+RevisionCheckpointAdmission AdmitNewRevisionCheckpoint(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision) noexcept
+{
+    try
+    {
+        const auto target = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+            acPaths,
+            aKind,
+            aCampaignWorldRevision);
+        std::error_code ec;
+        const auto targetStatus = std::filesystem::symlink_status(target, ec);
+        if (!ec && targetStatus.type() != std::filesystem::file_type::not_found)
+            return RevisionCheckpointAdmission::Allowed;
+        if (ec && !IsMissingError(ec))
+            return RevisionCheckpointAdmission::InvalidNamespace;
+
+        const auto kindRoot = PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, aKind);
+        ec.clear();
+        const auto rootStatus = std::filesystem::symlink_status(kindRoot, ec);
+        if (rootStatus.type() == std::filesystem::file_type::not_found || IsMissingError(ec))
+            return RevisionCheckpointAdmission::Allowed;
+        if (ec || std::filesystem::is_symlink(rootStatus) ||
+            !std::filesystem::is_directory(rootStatus))
+        {
+            return RevisionCheckpointAdmission::InvalidNamespace;
+        }
+
+        uint64_t entries{};
+        std::filesystem::directory_iterator iterator(kindRoot, ec);
+        const std::filesystem::directory_iterator end;
+        if (ec)
+            return RevisionCheckpointAdmission::InvalidNamespace;
+        for (; iterator != end; iterator.increment(ec))
+        {
+            if (ec)
+                return RevisionCheckpointAdmission::InvalidNamespace;
+            if (++entries >= PartyQuestDurableResourcePolicy::MaxRevisionCheckpointsPerKind)
+                return RevisionCheckpointAdmission::LimitExceeded;
+        }
+        return ec
+            ? RevisionCheckpointAdmission::InvalidNamespace
+            : RevisionCheckpointAdmission::Allowed;
+    }
+    catch (...)
+    {
+        return RevisionCheckpointAdmission::InvalidNamespace;
+    }
 }
 
 enum class PartialRevisionPublicationRecovery : uint8_t
@@ -438,6 +497,18 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
             result.Status = PartyQuestReplicaSnapshotStatus::ManifestInvalid;
             result.ManifestStatus = existing.Status;
             return result;
+        }
+
+        if (aCheckpoint && aRevisionScoped)
+        {
+            const auto admission = AdmitNewRevisionCheckpoint(
+                m_paths,
+                aKind,
+                aCampaignWorldRevision);
+            if (admission == RevisionCheckpointAdmission::LimitExceeded)
+                return Failure(PartyQuestReplicaSnapshotStatus::RevisionCheckpointLimitExceeded);
+            if (admission != RevisionCheckpointAdmission::Allowed)
+                return Failure(PartyQuestReplicaSnapshotStatus::ManifestInvalid);
         }
 
         PartyQuestReplicaSnapshotResult result;

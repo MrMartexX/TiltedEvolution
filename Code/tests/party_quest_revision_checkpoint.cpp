@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestReplicaRestore.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -278,4 +279,63 @@ TEST_CASE("Corrupting one revision does not invalidate a distinct immutable chec
     REQUIRE(manager.ValidateRevisionCheckpoint(
                 PartyQuestCheckpointKind::PreRepair,
                 721).Status == PartyQuestReplicaSnapshotStatus::Ready);
+}
+
+TEST_CASE("Revision checkpoint admission fails closed when the kind namespace is full", "[quest.party-state.revision-checkpoint]")
+{
+    RevisionSandbox sandbox;
+    const auto paths = BuildRevisionPaths(sandbox);
+    PartyQuestReplicaSnapshotManager manager(paths, kRevisionCampaign, kRevisionPlayer);
+    ImportRevisionReplica(sandbox, paths, manager);
+
+    const auto existingPlan = PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(
+        paths,
+        PartyQuestCheckpointKind::PreRepair,
+        1,
+        InspectCurrentRevisionReplica(paths));
+    REQUIRE(existingPlan.IsReady());
+    REQUIRE(manager.EnsureRevisionCheckpoint(
+                PartyQuestCheckpointKind::PreRepair,
+                1,
+                existingPlan).Status == PartyQuestReplicaSnapshotStatus::Ready);
+
+    const auto kindRoot = PartyQuestCoopSaveLayout::GetCheckpointDirectory(
+        paths,
+        PartyQuestCheckpointKind::PreRepair);
+    std::error_code ec;
+    for (uint64_t revision = 2;
+         revision <= PartyQuestDurableResourcePolicy::MaxRevisionCheckpointsPerKind;
+         ++revision)
+    {
+        std::filesystem::create_directories(
+            kindRoot / PartyQuestCoopSaveLayout::FormatWorldRevision(revision),
+            ec);
+        REQUIRE_FALSE(ec);
+    }
+
+    REQUIRE(manager.EnsureRevisionCheckpoint(
+                PartyQuestCheckpointKind::PreRepair,
+                1,
+                existingPlan).Status == PartyQuestReplicaSnapshotStatus::AlreadyReady);
+
+    const auto blockedRevision =
+        PartyQuestDurableResourcePolicy::MaxRevisionCheckpointsPerKind + 1;
+    const auto plan = PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(
+        paths,
+        PartyQuestCheckpointKind::PreRepair,
+        blockedRevision,
+        InspectCurrentRevisionReplica(paths));
+    REQUIRE(plan.IsReady());
+
+    const auto result = manager.EnsureRevisionCheckpoint(
+        PartyQuestCheckpointKind::PreRepair,
+        blockedRevision,
+        plan);
+    REQUIRE(result.Status ==
+        PartyQuestReplicaSnapshotStatus::RevisionCheckpointLimitExceeded);
+    REQUIRE_FALSE(std::filesystem::exists(
+        PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+            paths,
+            PartyQuestCheckpointKind::PreRepair,
+            blockedRevision)));
 }

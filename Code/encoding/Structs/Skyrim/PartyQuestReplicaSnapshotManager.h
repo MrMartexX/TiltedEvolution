@@ -15,7 +15,8 @@ enum class PartyQuestReplicaSnapshotStatus : uint8_t
     FileVerificationFailed,
     ManifestPersistenceFailed,
     ManifestRecoveryRequired,
-    ManifestInvalid
+    ManifestInvalid,
+    RevisionCheckpointLimitExceeded
 };
 
 struct PartyQuestReplicaSnapshotResult
