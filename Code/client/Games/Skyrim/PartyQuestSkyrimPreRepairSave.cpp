@@ -313,6 +313,12 @@ PartyQuestSkyrimPreRepairSave::CaptureCoreSource(
                 return result;
             }
 
+            if (aGuardedSession.IsCheckpointCaptureEpochExpired())
+            {
+                result.Status = PartyQuestSkyrimPreRepairSaveStatus::CaptureDeadlineExceeded;
+                return result;
+            }
+
             if (!pSaveLoadManager->SaveByName(result.SaveName.c_str()))
             {
                 result.Status = PartyQuestSkyrimPreRepairSaveStatus::EngineSaveFailed;
@@ -400,9 +406,12 @@ PartyQuestSkyrimPreRepairSave::CaptureCoreSource(
     try
     {
         if (!acEpoch.IsVerified() ||
+            acEpoch.IsExpired() ||
             !aGuardedSession.IsCheckpointCaptureEpochActive(acEpoch))
         {
-            result.Status = PartyQuestSkyrimPreRepairSaveStatus::CaptureEpochMismatch;
+            result.Status = acEpoch.IsExpired()
+                ? PartyQuestSkyrimPreRepairSaveStatus::CaptureDeadlineExceeded
+                : PartyQuestSkyrimPreRepairSaveStatus::CaptureEpochMismatch;
             return result;
         }
 
@@ -415,11 +424,14 @@ PartyQuestSkyrimPreRepairSave::CaptureCoreSource(
         // after returning instead of assuming the pre-save control-plane state
         // is still current. A changed/aborted epoch leaves only confined orphan
         // files and never yields a production-usable core capability.
-        if (result.TransactionId != acEpoch.GetTransactionId() ||
+        if (acEpoch.IsExpired() ||
+            result.TransactionId != acEpoch.GetTransactionId() ||
             result.TargetWorldRevision != acEpoch.GetTargetWorldRevision() ||
             !aGuardedSession.IsCheckpointCaptureEpochActive(acEpoch))
         {
-            result.Status = PartyQuestSkyrimPreRepairSaveStatus::CaptureEpochMismatch;
+            result.Status = acEpoch.IsExpired()
+                ? PartyQuestSkyrimPreRepairSaveStatus::CaptureDeadlineExceeded
+                : PartyQuestSkyrimPreRepairSaveStatus::CaptureEpochMismatch;
             result.Authorization = {};
             return result;
         }

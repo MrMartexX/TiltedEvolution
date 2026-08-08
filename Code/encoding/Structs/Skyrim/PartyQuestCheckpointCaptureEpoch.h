@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 
 class PartyQuestRuntimeGuardedSession;
@@ -11,7 +12,10 @@ class PartyQuestRuntimePreRepairCheckpointTestAccess;
  * The epoch is intentionally process-local and non-durable. A restart before
  * the runtime mutation barrier already invalidates pre-mutation work and must
  * produce a fresh plan/capture, so resurrecting an old temporal context would
- * be unsafe. The token is not a cryptographic security primitive.
+ * be unsafe. Every production token also carries an immutable monotonic local
+ * deadline; expiry removes publication authority but cannot interrupt a
+ * synchronous Skyrim engine call already in progress. The token is not a
+ * cryptographic security primitive.
  */
 class PartyQuestCheckpointCaptureEpoch final
 {
@@ -29,6 +33,11 @@ public:
     {
         return m_sidecarManifestFingerprint;
     }
+    [[nodiscard]] uint64_t GetDeadlineTicks() const noexcept { return m_deadlineTicks; }
+    [[nodiscard]] bool IsExpired() const noexcept
+    {
+        return m_verified && MonotonicNowTicks() >= m_deadlineTicks;
+    }
 
     [[nodiscard]] bool MatchesContext(
         uint64_t aTransactionId,
@@ -36,6 +45,7 @@ public:
         uint64_t aSidecarManifestFingerprint) const noexcept
     {
         return m_verified &&
+            !IsExpired() &&
             m_epochId != 0 &&
             aTransactionId == m_transactionId &&
             aTargetWorldRevision == m_targetWorldRevision &&
@@ -47,16 +57,19 @@ private:
         uint64_t aEpochId,
         uint64_t aTransactionId,
         uint64_t aTargetWorldRevision,
-        uint64_t aSidecarManifestFingerprint) noexcept
+        uint64_t aSidecarManifestFingerprint,
+        uint64_t aDeadlineTicks) noexcept
         : m_epochId(aEpochId)
         , m_transactionId(aTransactionId)
         , m_targetWorldRevision(aTargetWorldRevision)
         , m_sidecarManifestFingerprint(aSidecarManifestFingerprint)
+        , m_deadlineTicks(aDeadlineTicks)
         , m_verified(
               aEpochId != 0 &&
               aTransactionId != 0 &&
               aTargetWorldRevision != 0 &&
-              aSidecarManifestFingerprint != 0)
+              aSidecarManifestFingerprint != 0 &&
+              aDeadlineTicks != 0)
     {
     }
 
@@ -64,7 +77,15 @@ private:
     uint64_t m_transactionId{};
     uint64_t m_targetWorldRevision{};
     uint64_t m_sidecarManifestFingerprint{};
+    uint64_t m_deadlineTicks{};
     bool m_verified{};
+
+    [[nodiscard]] static uint64_t MonotonicNowTicks() noexcept
+    {
+        const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        return now > 0 ? static_cast<uint64_t>(now) : 0;
+    }
 
     friend class PartyQuestRuntimeGuardedSession;
     // Defined only in Code/tests; no production constructor/API exists.

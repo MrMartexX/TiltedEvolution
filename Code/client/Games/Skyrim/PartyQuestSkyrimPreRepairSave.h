@@ -28,7 +28,8 @@ enum class PartyQuestSkyrimPreRepairSaveStatus : uint8_t
     SourceInspectionFailed,
     CaptureAttemptLimitExceeded,
     CaptureAttemptInspectionFailed,
-    CaptureAttemptCleanupFailed
+    CaptureAttemptCleanupFailed,
+    CaptureDeadlineExceeded
 };
 
 struct PartyQuestSkyrimPreRepairSaveResult

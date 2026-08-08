@@ -2,10 +2,13 @@
 
 #include <atomic>
 #include <chrono>
+#include <limits>
 #include <utility>
 
 namespace
 {
+constexpr uint64_t kCheckpointCaptureBudgetNanoseconds = 30ull * 1000ull * 1000ull * 1000ull;
+
 PartyQuestRuntimeGuardStatus TranslateBegin(
     PartyQuestRuntimeDurableBeginStatus aStatus) noexcept
 {
@@ -56,6 +59,21 @@ uint64_t NextCheckpointCaptureEpochId() noexcept
     value *= 0x94D049BB133111EBull;
     value ^= value >> 31;
     return value != 0 ? value : counter;
+}
+
+uint64_t NextCheckpointCaptureDeadline() noexcept
+{
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (now <= 0)
+        return 0;
+    const auto ticks = static_cast<uint64_t>(now);
+    if (ticks > std::numeric_limits<uint64_t>::max() -
+        kCheckpointCaptureBudgetNanoseconds)
+    {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return ticks + kCheckpointCaptureBudgetNanoseconds;
 }
 } // namespace
 
@@ -239,16 +257,22 @@ PartyQuestRuntimeGuardedSession::BeginCheckpointCaptureEpoch() noexcept
 
     if (m_checkpointCaptureEpoch.IsVerified())
     {
-        result.Status = PartyQuestCheckpointCaptureEpochStatus::AlreadyActive;
-        return result;
+        if (!m_checkpointCaptureEpoch.IsExpired())
+        {
+            result.Status = PartyQuestCheckpointCaptureEpochStatus::AlreadyActive;
+            return result;
+        }
+        m_checkpointCaptureEpoch = {};
     }
 
     const uint64_t epochId = NextCheckpointCaptureEpochId();
+    const uint64_t deadlineTicks = NextCheckpointCaptureDeadline();
     m_checkpointCaptureEpoch = PartyQuestCheckpointCaptureEpoch(
         epochId,
         active->TransactionId,
         active->TargetWorldRevision,
-        active->SidecarManifestFingerprint);
+        active->SidecarManifestFingerprint,
+        deadlineTicks);
     if (!m_checkpointCaptureEpoch.IsVerified())
     {
         m_checkpointCaptureEpoch = {};

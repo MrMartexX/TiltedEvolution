@@ -192,6 +192,7 @@ PartyQuestCheckpointSidecarMirrorAuthorization(
     , m_fileCount(acFiles.size())
     , m_verified(
           acEpoch.IsVerified() &&
+          !acEpoch.IsExpired() &&
           m_captureEpochId != 0 &&
           m_transactionId != 0 &&
           m_targetWorldRevision != 0 &&
@@ -227,6 +228,7 @@ bool PartyQuestCheckpointSidecarMirrorAuthorization::Matches(
     if (!m_verified ||
         m_captureEpochId == 0 ||
         !acEpoch.IsVerified() ||
+        acEpoch.IsExpired() ||
         acEpoch.GetEpochId() != m_captureEpochId ||
         acEpoch.GetTransactionId() != m_transactionId ||
         acEpoch.GetTargetWorldRevision() != m_targetWorldRevision ||

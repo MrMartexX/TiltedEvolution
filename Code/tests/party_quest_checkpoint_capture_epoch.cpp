@@ -2,6 +2,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
 #include <party_quest_runtime_safety_test_access.h>
+#include <party_quest_pre_repair_checkpoint_test_access.h>
 
 #include <catch2/catch.hpp>
 
@@ -131,4 +132,20 @@ TEST_CASE("Capture epoch cannot start without the exact guarded AwaitingCheckpoi
     const auto noGuard = guarded.BeginCheckpointCaptureEpoch();
     REQUIRE(noGuard.Status == PartyQuestCheckpointCaptureEpochStatus::GuardMismatch);
     REQUIRE_FALSE(noGuard.Epoch.IsVerified());
+}
+
+TEST_CASE("Expired checkpoint capture epoch loses publication authority", "[quest.party-state.capture-epoch]")
+{
+    const auto manifestFingerprint =
+        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
+    const auto epoch =
+        PartyQuestRuntimePreRepairCheckpointTestAccess::MakeExpiredEpoch(
+            1,
+            2,
+            3,
+            manifestFingerprint);
+
+    REQUIRE(epoch.IsVerified());
+    REQUIRE(epoch.IsExpired());
+    REQUIRE_FALSE(epoch.MatchesContext(2, 3, manifestFingerprint));
 }

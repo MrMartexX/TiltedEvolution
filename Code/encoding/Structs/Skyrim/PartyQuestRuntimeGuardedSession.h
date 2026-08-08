@@ -110,6 +110,12 @@ public:
     [[nodiscard]] bool IsCheckpointCaptureEpochActive(
         const PartyQuestCheckpointCaptureEpoch& acEpoch) const noexcept;
 
+    [[nodiscard]] bool IsCheckpointCaptureEpochExpired() const noexcept
+    {
+        return m_checkpointCaptureEpoch.IsVerified() &&
+            m_checkpointCaptureEpoch.IsExpired();
+    }
+
     /**
      * Release an epoch only after the durable checkpoint transition reached
      * ReadyToApply. Runtime mutation remains blocked while any epoch is active.
