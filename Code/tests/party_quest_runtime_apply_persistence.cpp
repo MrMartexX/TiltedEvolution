@@ -7,6 +7,7 @@
 #include <glm/vec3.hpp>
 
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 #include <Structs/Skyrim/PartyQuestRuntimeApplyPersistence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 
@@ -410,4 +411,13 @@ TEST_CASE("Inconsistent recovery markers fail closed", "[quest.party-state.runti
     REQUIRE(coordinator.RestoreRecoveryState(state, kCampaignId, kPlayerProfileId) ==
         PartyQuestRuntimeRecoveryDisposition::InvalidState);
     REQUIRE_FALSE(coordinator.IsRecoveryBlocked());
+}
+
+TEST_CASE("Runtime apply persistence rejects oversized archives before decode", "[quest.party-state.runtime-apply.persistence]")
+{
+    std::vector<uint8_t> oversized(
+        PartyQuestDurableResourcePolicy::MaxRuntimeApplyArchiveBytes + 1,
+        0);
+    REQUIRE(PartyQuestRuntimeApplyPersistence::Decode(oversized).Status ==
+        PartyQuestRuntimeApplyPersistenceStatus::ResourceLimitExceeded);
 }

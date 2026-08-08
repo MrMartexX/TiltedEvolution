@@ -23,7 +23,8 @@ enum class PartyQuestRuntimeApplyPersistenceStatus : uint8_t
      * normal current journal because doing so could forget a newer mutation
      * barrier or committed transaction and repeat Skyrim side effects.
      */
-    BackupRecoveryRequired
+    BackupRecoveryRequired,
+    ResourceLimitExceeded
 };
 
 struct PartyQuestRuntimeApplyPersistenceResult

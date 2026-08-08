@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestReplicaRestoreJournal.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -168,6 +169,15 @@ TEST_CASE("Restore journal persistence round-trips identity phase and recovery d
     REQUIRE(loaded.State == state);
     REQUIRE(PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(*loaded.State) ==
         PartyQuestReplicaRestoreRecoveryDisposition::RollbackRequired);
+}
+
+TEST_CASE("Restore journal rejects oversized archives before decode", "[quest.party-state.replica-restore-journal]")
+{
+    std::vector<uint8_t> oversized(
+        PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes + 1,
+        0);
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::Decode(oversized).Status ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded);
 }
 
 TEST_CASE("Restore journal never silently falls back to a stale backup across the mutation barrier", "[quest.party-state.restore-journal]")

@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestReplicaManifest.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <algorithm>
 #include <array>
@@ -14,8 +15,10 @@ constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'R', 'P', 'L', 'C', 'M'};
 constexpr uint16_t kFormatVersion = 1;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
-constexpr uint32_t kMaxFiles = 4096;
-constexpr uint32_t kMaxPathBytes = 4096;
+constexpr uint32_t kMaxFiles =
+    static_cast<uint32_t>(PartyQuestReplicaResourcePolicy::MaxFiles);
+constexpr uint32_t kMaxPathBytes =
+    PartyQuestDurableResourcePolicy::MaxSerializedPathBytes;
 
 template <class T>
 void WriteInteger(std::vector<uint8_t>& aBytes, T aValue)
@@ -338,8 +341,11 @@ PartyQuestReplicaManifestPersistenceStatus ReadFile(
     if (end < 0)
         return PartyQuestReplicaManifestPersistenceStatus::IoError;
     const uint64_t size = static_cast<uint64_t>(end);
-    if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
-        return PartyQuestReplicaManifestPersistenceStatus::InvalidData;
+    if (size > PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes ||
+        size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    {
+        return PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded;
+    }
 
     aBytes.resize(static_cast<size_t>(size));
     file.seekg(0, std::ios::beg);
@@ -499,6 +505,13 @@ PartyQuestReplicaManifestPersistenceResult PartyQuestReplicaManifestStore::Decod
     const std::vector<uint8_t>& acBytes)
 {
     PartyQuestReplicaManifestPersistenceResult result;
+    if (acBytes.size() >
+        PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes)
+    {
+        result.Status =
+            PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded;
+        return result;
+    }
     size_t offset{};
 
     if (acBytes.size() < kMagic.size())

@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestReplicaRestoreJournal.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <algorithm>
 #include <array>
@@ -16,8 +17,10 @@ constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'R', 'S', 'T', 'R', 'J'};
 constexpr uint16_t kFormatVersion = 1;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
-constexpr uint32_t kMaxOperations = 4096;
-constexpr uint32_t kMaxPathBytes = 1024 * 1024;
+constexpr uint32_t kMaxOperations =
+    static_cast<uint32_t>(PartyQuestReplicaResourcePolicy::MaxFiles);
+constexpr uint32_t kMaxPathBytes =
+    PartyQuestDurableResourcePolicy::MaxSerializedPathBytes;
 
 bool IsMissingError(const std::error_code& acError) noexcept
 {
@@ -53,6 +56,19 @@ bool IsInside(
     {
         return PartyQuestReplicaFilePlanner::IsContainedBy(
             acRoot.lexically_normal(), acPath.lexically_normal());
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+bool HasBoundedPath(const std::filesystem::path& acPath) noexcept
+{
+    try
+    {
+        const auto value = acPath.generic_string();
+        return !value.empty() && value.size() <= kMaxPathBytes;
     }
     catch (...)
     {
@@ -103,7 +119,7 @@ bool ValidateState(const PartyQuestReplicaRestoreJournalState& acState) noexcept
         acState.CampaignWorldRevision == 0 ||
         !IsKnownCheckpointKind(acState.CheckpointKind) ||
         !IsKnownPhase(acState.Phase) ||
-        acState.TransactionDirectory.empty() ||
+        !HasBoundedPath(acState.TransactionDirectory) ||
         acState.Operations.empty() ||
         acState.Operations.size() > kMaxOperations)
     {
@@ -114,9 +130,9 @@ bool ValidateState(const PartyQuestReplicaRestoreJournalState& acState) noexcept
     std::set<std::filesystem::path> rollbackPaths;
     for (const auto& operation : acState.Operations)
     {
-        if (operation.CheckpointSourcePath.empty() ||
-            operation.ReplicaDestinationPath.empty() ||
-            operation.RollbackPath.empty() ||
+        if (!HasBoundedPath(operation.CheckpointSourcePath) ||
+            !HasBoundedPath(operation.ReplicaDestinationPath) ||
+            !HasBoundedPath(operation.RollbackPath) ||
             operation.ExpectedRestoredDigest == 0 ||
             (operation.DestinationExisted && operation.OriginalDigest == 0) ||
             operation.CheckpointSourcePath == operation.ReplicaDestinationPath ||
@@ -231,8 +247,11 @@ PartyQuestReplicaRestoreJournalPersistenceStatus ReadFile(
         return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
 
     const auto size = static_cast<uint64_t>(end);
-    if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
-        return PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
+    if (size > PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes ||
+        size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    {
+        return PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded;
+    }
 
     aBytes.resize(static_cast<size_t>(size));
     file.seekg(0, std::ios::beg);
@@ -563,6 +582,13 @@ PartyQuestReplicaRestoreJournalPersistence::Decode(
     const std::vector<uint8_t>& acBytes)
 {
     PartyQuestReplicaRestoreJournalPersistenceResult result;
+    if (acBytes.size() >
+        PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes)
+    {
+        result.Status =
+            PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded;
+        return result;
+    }
     const size_t headerSize = kMagic.size() + sizeof(uint16_t) + sizeof(uint64_t);
     if (acBytes.size() < headerSize + sizeof(uint64_t))
     {

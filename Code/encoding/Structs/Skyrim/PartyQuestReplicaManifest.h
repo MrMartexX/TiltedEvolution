@@ -47,7 +47,8 @@ enum class PartyQuestReplicaManifestPersistenceStatus : uint8_t
     Truncated,
     ChecksumMismatch,
     InvalidData,
-    BackupRecoveryRequired
+    BackupRecoveryRequired,
+    ResourceLimitExceeded
 };
 
 struct PartyQuestReplicaManifestPersistenceResult

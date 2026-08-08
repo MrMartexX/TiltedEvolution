@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestReplicaManifest.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -321,4 +322,13 @@ TEST_CASE("Older manifest backup is explicit recovery input rather than current 
     REQUIRE(recovered.UsedBackup);
     REQUIRE(recovered.Manifest.has_value());
     REQUIRE(*recovered.Manifest == manifest);
+}
+
+TEST_CASE("Replica manifest rejects oversized archives before decode", "[quest.party-state.replica-manifest]")
+{
+    std::vector<uint8_t> oversized(
+        PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes + 1,
+        0);
+    REQUIRE(PartyQuestReplicaManifestStore::Decode(oversized).Status ==
+        PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded);
 }

@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeApplyPersistence.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <algorithm>
 #include <array>
@@ -13,7 +14,8 @@ constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'R', 'A', 'P', 'P', 'L'};
 constexpr uint16_t kFormatVersion = 4;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
-constexpr uint64_t kMaxCommittedEntries = 1000000;
+constexpr uint64_t kMaxCommittedEntries =
+    PartyQuestDurableResourcePolicy::MaxCommittedRuntimeRecords;
 constexpr uint32_t kKnownActionMask =
     static_cast<uint32_t>(PartyQuestApplyAction::StageTransition) |
     static_cast<uint32_t>(PartyQuestApplyAction::VerifyObjectives) |
@@ -196,8 +198,11 @@ PartyQuestRuntimeApplyPersistenceStatus ReadFile(
         return PartyQuestRuntimeApplyPersistenceStatus::IoError;
 
     const auto size = static_cast<uint64_t>(end);
-    if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
-        return PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
+    if (size > PartyQuestDurableResourcePolicy::MaxRuntimeApplyArchiveBytes ||
+        size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    {
+        return PartyQuestRuntimeApplyPersistenceStatus::ResourceLimitExceeded;
+    }
 
     aBytes.resize(static_cast<size_t>(size));
     file.seekg(0, std::ios::beg);
@@ -238,7 +243,9 @@ PartyQuestRuntimeApplyPersistenceResult DecodeFile(const std::filesystem::path& 
 std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
     const PartyQuestRuntimeRecoveryState& acState)
 {
-    if (!acState.CampaignId.IsValid() || !acState.PlayerProfileId.IsValid())
+    if (!acState.CampaignId.IsValid() ||
+        !acState.PlayerProfileId.IsValid() ||
+        acState.Committed.size() > kMaxCommittedEntries)
         return {};
 
     std::vector<PartyQuestRuntimeCommittedRecord> committed = acState.Committed;
@@ -334,6 +341,13 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
     const std::vector<uint8_t>& acBytes)
 {
     PartyQuestRuntimeApplyPersistenceResult result;
+    if (acBytes.size() >
+        PartyQuestDurableResourcePolicy::MaxRuntimeApplyArchiveBytes)
+    {
+        result.Status =
+            PartyQuestRuntimeApplyPersistenceStatus::ResourceLimitExceeded;
+        return result;
+    }
     size_t offset{};
 
     if (acBytes.size() < kMagic.size())
