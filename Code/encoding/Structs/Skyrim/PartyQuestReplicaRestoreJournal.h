@@ -141,6 +141,43 @@ struct PartyQuestReplicaRestoreJournalPersistenceResult
     bool UsedTemporary{};
 };
 
+enum class PartyQuestReplicaRestoreJournalPersistenceBoundary : uint8_t
+{
+    TemporaryVerified,
+    PrimaryMovedToBackup,
+    TemporaryPublished
+};
+
+enum class PartyQuestReplicaRestoreJournalPersistenceDirective : uint8_t
+{
+    Continue,
+    FailClosed
+};
+
+/**
+ * Ephemeral local observer for deterministic persistence fault validation.
+ * It is never serialized, receives no paths or journal bytes, and grants no
+ * filesystem authority. FailClosed returns an I/O failure at the exact atomic
+ * publication boundary without hiding the resulting recovery evidence.
+ */
+struct PartyQuestReplicaRestoreJournalPersistenceHooks
+{
+    using Callback = PartyQuestReplicaRestoreJournalPersistenceDirective (*)(
+        PartyQuestReplicaRestoreJournalPersistenceBoundary,
+        void*) noexcept;
+
+    Callback OnBoundary{};
+    void* Context{};
+
+    [[nodiscard]] PartyQuestReplicaRestoreJournalPersistenceDirective Invoke(
+        PartyQuestReplicaRestoreJournalPersistenceBoundary aBoundary) const noexcept
+    {
+        return OnBoundary
+            ? OnBoundary(aBoundary, Context)
+            : PartyQuestReplicaRestoreJournalPersistenceDirective::Continue;
+    }
+};
+
 /**
  * Durable restore journal. A valid .tmp may be promoted because it represents
  * a completely written newer state. A stale .bak is never silently accepted:
@@ -158,7 +195,8 @@ public:
 
     [[nodiscard]] static PartyQuestReplicaRestoreJournalPersistenceStatus SaveAtomically(
         const std::filesystem::path& acPath,
-        const PartyQuestReplicaRestoreJournalState& acState);
+        const PartyQuestReplicaRestoreJournalState& acState,
+        PartyQuestReplicaRestoreJournalPersistenceHooks aHooks = {});
 
     [[nodiscard]] static PartyQuestReplicaRestoreJournalPersistenceResult Load(
         const std::filesystem::path& acPath);

@@ -713,7 +713,8 @@ PartyQuestReplicaRestoreJournalPersistence::Decode(
 PartyQuestReplicaRestoreJournalPersistenceStatus
 PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
     const std::filesystem::path& acPath,
-    const PartyQuestReplicaRestoreJournalState& acState)
+    const PartyQuestReplicaRestoreJournalState& acState,
+    PartyQuestReplicaRestoreJournalPersistenceHooks aHooks)
 {
     try
     {
@@ -750,6 +751,13 @@ PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
             return PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
         }
 
+        if (aHooks.Invoke(
+                PartyQuestReplicaRestoreJournalPersistenceBoundary::TemporaryVerified) ==
+            PartyQuestReplicaRestoreJournalPersistenceDirective::FailClosed)
+        {
+            return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+        }
+
         ec.clear();
         const bool primaryExists = std::filesystem::exists(acPath, ec);
         if (ec && !IsMissingError(ec))
@@ -765,6 +773,13 @@ PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
             std::filesystem::rename(acPath, backup, ec);
             if (ec)
                 return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+
+            if (aHooks.Invoke(
+                    PartyQuestReplicaRestoreJournalPersistenceBoundary::PrimaryMovedToBackup) ==
+                PartyQuestReplicaRestoreJournalPersistenceDirective::FailClosed)
+            {
+                return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+            }
         }
 
         std::filesystem::rename(temporary, acPath, ec);
@@ -778,6 +793,13 @@ PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
                 if (std::filesystem::exists(backup, restoreEc) && !restoreEc)
                     std::filesystem::rename(backup, acPath, restoreEc);
             }
+            return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+        }
+
+        if (aHooks.Invoke(
+                PartyQuestReplicaRestoreJournalPersistenceBoundary::TemporaryPublished) ==
+            PartyQuestReplicaRestoreJournalPersistenceDirective::FailClosed)
+        {
             return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
         }
 

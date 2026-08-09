@@ -1,12 +1,17 @@
 #include <Structs/Skyrim/PartyQuestReplicaRestoreJournal.h>
+#include <Structs/Skyrim/PartyQuestReplicaRestoreExecutor.h>
 #include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
+
+const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -55,6 +60,32 @@ PartyQuestCoopSavePaths BuildRestorePaths(const RestoreSandbox& acSandbox)
     return *paths;
 }
 
+PartyQuestCoopSavePaths BuildRestorePaths(const std::filesystem::path& acRoot)
+{
+    const auto paths = PartyQuestCoopSaveLayout::Build(
+        acRoot / "CoopCampaigns", kRestoreCampaign, kRestorePlayer);
+    REQUIRE(paths.has_value());
+    return *paths;
+}
+
+bool SetRestoreJournalEnvironment(const char* apName, const std::string& acValue)
+{
+#ifdef _WIN32
+    return _putenv_s(apName, acValue.c_str()) == 0;
+#else
+    return setenv(apName, acValue.c_str(), 1) == 0;
+#endif
+}
+
+void ClearRestoreJournalEnvironment(const char* apName)
+{
+#ifdef _WIN32
+    _putenv_s(apName, "");
+#else
+    unsetenv(apName);
+#endif
+}
+
 PartyQuestReplicaRestorePlan BuildRestorePlan(
     const PartyQuestCoopSavePaths& acPaths,
     const std::filesystem::path& acCheckpointSource,
@@ -78,7 +109,149 @@ PartyQuestReplicaRestorePlan BuildRestorePlan(
         observation->Digest});
     return plan;
 }
+
+struct RestoreJournalCrashBoundary
+{
+    PartyQuestReplicaRestoreJournalPersistenceBoundary Boundary;
+};
+
+PartyQuestReplicaRestoreJournalPersistenceDirective CrashRestoreJournalAtBoundary(
+    PartyQuestReplicaRestoreJournalPersistenceBoundary aBoundary,
+    void* apContext) noexcept
+{
+    const auto& crash = *static_cast<const RestoreJournalCrashBoundary*>(apContext);
+    if (crash.Boundary == aBoundary)
+        std::_Exit(87);
+    return PartyQuestReplicaRestoreJournalPersistenceDirective::Continue;
+}
+
+void RunRestoreJournalCrashProcess(
+    const RestoreSandbox& acSandbox,
+    const char* apBoundary)
+{
+    REQUIRE(SetRestoreJournalEnvironment(
+        "TP_RESTORE_JOURNAL_CRASH_ROOT", acSandbox.Root.string()));
+    REQUIRE(SetRestoreJournalEnvironment(
+        "TP_RESTORE_JOURNAL_CRASH_BOUNDARY", apBoundary));
+
+    const auto& executable = GetTPTestsExecutablePath();
+    REQUIRE_FALSE(executable.empty());
+    const std::string command =
+        "\"" + executable.string() +
+        "\" \"Restore journal atomic publication crash helper\" --reporter compact";
+    const int exitCode = std::system(command.c_str());
+
+    ClearRestoreJournalEnvironment("TP_RESTORE_JOURNAL_CRASH_BOUNDARY");
+    ClearRestoreJournalEnvironment("TP_RESTORE_JOURNAL_CRASH_ROOT");
+    REQUIRE(exitCode != 0);
+
+    constexpr uint64_t kWorldRevision = 805;
+    constexpr uint64_t kRestoreId = 47;
+    const auto paths = BuildRestorePaths(acSandbox.Root);
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, kWorldRevision) /
+        "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    const auto plan = BuildRestorePlan(
+        paths, checkpoint, destination, kWorldRevision);
+    const auto prepared = PartyQuestReplicaRestoreJournal::Prepare(
+        paths, plan, kRestoreId);
+    REQUIRE(prepared.IsReady());
+    const auto journalPath =
+        PartyQuestReplicaRestoreJournal::GetJournalPath(*prepared.State);
+
+    const auto loaded = PartyQuestReplicaRestoreJournalPersistence::Load(journalPath);
+    REQUIRE(loaded.Status ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(loaded.State.has_value());
+
+    const bool beforePrimaryMove =
+        std::string(apBoundary) == "TemporaryVerified";
+    REQUIRE(loaded.State->Phase ==
+        (beforePrimaryMove
+            ? PartyQuestReplicaRestoreJournalPhase::BackupsReady
+            : PartyQuestReplicaRestoreJournalPhase::MutationStarted));
+    REQUIRE(loaded.UsedTemporary ==
+        (std::string(apBoundary) == "PrimaryMovedToBackup"));
+
+    const auto recovered = PartyQuestReplicaRestoreExecutor::Recover(
+        paths, kRestoreCampaign, kRestorePlayer, journalPath);
+    if (beforePrimaryMove)
+    {
+        REQUIRE(recovered.Status ==
+            PartyQuestReplicaRestoreExecutionStatus::Success);
+        REQUIRE_FALSE(recovered.RollbackPerformed);
+        std::ifstream restored(destination, std::ios::binary);
+        REQUIRE(restored.is_open());
+        REQUIRE(std::string(
+            std::istreambuf_iterator<char>(restored),
+            std::istreambuf_iterator<char>()) == "CHECKPOINT_805");
+    }
+    else
+    {
+        REQUIRE(recovered.Status ==
+            PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback);
+        REQUIRE(recovered.RollbackPerformed);
+        std::ifstream restored(destination, std::ios::binary);
+        REQUIRE(restored.is_open());
+        REQUIRE(std::string(
+            std::istreambuf_iterator<char>(restored),
+            std::istreambuf_iterator<char>()) == "BEFORE_805");
+    }
+}
 } // namespace
+
+TEST_CASE("Restore journal atomic publication crash helper", "[.][quest.party-state.restore-journal][fault-helper]")
+{
+    const char* rootValue = std::getenv("TP_RESTORE_JOURNAL_CRASH_ROOT");
+    const char* boundaryValue = std::getenv("TP_RESTORE_JOURNAL_CRASH_BOUNDARY");
+    REQUIRE(rootValue != nullptr);
+    REQUIRE(boundaryValue != nullptr);
+
+    const std::string boundary = boundaryValue;
+    REQUIRE((boundary == "TemporaryVerified" ||
+        boundary == "PrimaryMovedToBackup" ||
+        boundary == "TemporaryPublished"));
+
+    constexpr uint64_t kWorldRevision = 805;
+    constexpr uint64_t kRestoreId = 47;
+    const auto paths = BuildRestorePaths(std::filesystem::path(rootValue));
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, kWorldRevision) /
+        "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    WriteRestoreBytes(checkpoint, "CHECKPOINT_805");
+    WriteRestoreBytes(destination, "BEFORE_805");
+
+    const auto plan = BuildRestorePlan(
+        paths, checkpoint, destination, kWorldRevision);
+    auto prepared = PartyQuestReplicaRestoreJournal::Prepare(
+        paths, plan, kRestoreId);
+    REQUIRE(prepared.IsReady());
+    auto state = *prepared.State;
+    WriteRestoreBytes(state.Operations[0].RollbackPath, "BEFORE_805");
+    REQUIRE(PartyQuestReplicaRestoreJournal::MarkBackupsReady(state) ==
+        PartyQuestReplicaRestoreJournalStatus::Ready);
+    const auto journalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(state);
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
+                journalPath, state) ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(PartyQuestReplicaRestoreJournal::MarkMutationStarted(state) ==
+        PartyQuestReplicaRestoreJournalStatus::Ready);
+
+    RestoreJournalCrashBoundary crash{
+        boundary == "TemporaryVerified"
+            ? PartyQuestReplicaRestoreJournalPersistenceBoundary::TemporaryVerified
+            : boundary == "PrimaryMovedToBackup"
+                ? PartyQuestReplicaRestoreJournalPersistenceBoundary::PrimaryMovedToBackup
+                : PartyQuestReplicaRestoreJournalPersistenceBoundary::TemporaryPublished};
+    const auto status = PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
+        journalPath,
+        state,
+        {CrashRestoreJournalAtBoundary, &crash});
+    FAIL("journal save returned instead of terminating at the injected crash boundary: " <<
+        static_cast<int>(status));
+}
 
 TEST_CASE("Restore journal crosses the mutation barrier only after verified rollback bytes", "[quest.party-state.restore-journal]")
 {
@@ -259,4 +432,25 @@ TEST_CASE("Restore journal can recover a fully written temporary state instead o
     REQUIRE(loaded.State == state);
     REQUIRE(PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(*loaded.State) ==
         PartyQuestReplicaRestoreRecoveryDisposition::RollbackRequired);
+}
+
+TEST_CASE("Restore journal publication windows survive abrupt process termination", "[quest.party-state.restore-journal][fault][process]")
+{
+    SECTION("verified temporary before primary move keeps the pre-barrier state")
+    {
+        RestoreSandbox sandbox;
+        RunRestoreJournalCrashProcess(sandbox, "TemporaryVerified");
+    }
+
+    SECTION("primary moved aside promotes the complete mutation barrier")
+    {
+        RestoreSandbox sandbox;
+        RunRestoreJournalCrashProcess(sandbox, "PrimaryMovedToBackup");
+    }
+
+    SECTION("published mutation barrier is loaded and rolled back")
+    {
+        RestoreSandbox sandbox;
+        RunRestoreJournalCrashProcess(sandbox, "TemporaryPublished");
+    }
 }
