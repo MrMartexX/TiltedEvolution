@@ -134,6 +134,41 @@ TEST_CASE("Restore executor commits verified checkpoint bytes without touching s
     REQUIRE(ReadExecutorBytes(loaded.State->Operations[0].RollbackPath) == "LOCAL_BEFORE_900");
 }
 
+TEST_CASE("Restore resource policy reserves backups staging and rollback recovery", "[quest.party-state.restore-executor][resource-budget]")
+{
+    RestoreExecutorSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 905;
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, kWorldRevision) / "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    WriteExecutorBytes(checkpoint, "RESTORED_BYTES");
+    WriteExecutorBytes(destination, "ORIGINAL");
+
+    const auto plan = BuildExecutorPlan(paths, checkpoint, destination, kWorldRevision);
+    const auto prepared = PartyQuestReplicaRestoreJournal::Prepare(paths, plan, 2001);
+    REQUIRE(prepared.IsReady());
+    const auto& state = *prepared.State;
+    REQUIRE(state.Operations.size() == 1);
+
+    const auto required = PartyQuestReplicaRestoreResourcePolicy::RequiredFreeBytes(state);
+    REQUIRE(required.has_value());
+    REQUIRE(*required ==
+        state.Operations[0].ExpectedRestoredSize +
+            state.Operations[0].OriginalSize * 2 +
+            PartyQuestReplicaResourcePolicy::MinimumFreeSpaceReserveBytes);
+    REQUIRE(PartyQuestReplicaRestoreResourcePolicy::HasSufficientDiskSpace(
+        state, *required));
+    REQUIRE_FALSE(PartyQuestReplicaRestoreResourcePolicy::HasSufficientDiskSpace(
+        state, *required - 1));
+
+    auto oversized = state;
+    oversized.Operations[0].ExpectedRestoredSize =
+        PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes + 1;
+    REQUIRE_FALSE(
+        PartyQuestReplicaRestoreResourcePolicy::RequiredFreeBytes(oversized).has_value());
+}
+
 TEST_CASE("Restore executor can publish a checkpoint file that was absent locally", "[quest.party-state.restore-executor]")
 {
     RestoreExecutorSandbox sandbox;

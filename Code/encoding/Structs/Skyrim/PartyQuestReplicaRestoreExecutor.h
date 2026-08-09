@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 
 enum class PartyQuestReplicaRestoreExecutionStatus : uint8_t
 {
@@ -25,7 +26,20 @@ enum class PartyQuestReplicaRestoreExecutionStatus : uint8_t
     StagingFailed,
     ReplacementFailed,
     RestoredVerificationFailed,
-    RollbackFailed
+    RollbackFailed,
+    ResourceLimitExceeded,
+    InsufficientDiskSpace
+};
+
+/** Local-only budget for a fresh crash-resumable restore before its journal exists. */
+struct PartyQuestReplicaRestoreResourcePolicy
+{
+    [[nodiscard]] static std::optional<uint64_t> RequiredFreeBytes(
+        const PartyQuestReplicaRestoreJournalState& acState) noexcept;
+
+    [[nodiscard]] static bool HasSufficientDiskSpace(
+        const PartyQuestReplicaRestoreJournalState& acState,
+        uint64_t aAvailableBytes) noexcept;
 };
 
 struct PartyQuestReplicaRestoreExecutionReport

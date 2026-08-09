@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <set>
 #include <sstream>
@@ -1060,6 +1061,67 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
 }
 } // namespace
 
+std::optional<uint64_t> PartyQuestReplicaRestoreResourcePolicy::RequiredFreeBytes(
+    const PartyQuestReplicaRestoreJournalState& acState) noexcept
+{
+    if (acState.Operations.empty() ||
+        acState.Operations.size() > PartyQuestReplicaResourcePolicy::MaxFiles)
+    {
+        return std::nullopt;
+    }
+
+    uint64_t restoredBytes{};
+    uint64_t rollbackBytes{};
+    uint64_t largestRollback{};
+    for (const auto& operation : acState.Operations)
+    {
+        if (operation.ExpectedRestoredSize >
+                PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes ||
+            operation.ExpectedRestoredSize >
+                std::numeric_limits<uint64_t>::max() - restoredBytes)
+        {
+            return std::nullopt;
+        }
+        restoredBytes += operation.ExpectedRestoredSize;
+        if (restoredBytes > PartyQuestReplicaResourcePolicy::MaxTotalFileBytes)
+            return std::nullopt;
+
+        if (!operation.DestinationExisted)
+            continue;
+        if (operation.OriginalSize >
+                PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes ||
+            operation.OriginalSize >
+                std::numeric_limits<uint64_t>::max() - rollbackBytes)
+        {
+            return std::nullopt;
+        }
+        rollbackBytes += operation.OriginalSize;
+        if (rollbackBytes > PartyQuestReplicaResourcePolicy::MaxTotalFileBytes)
+            return std::nullopt;
+        largestRollback = std::max(largestRollback, operation.OriginalSize);
+    }
+
+    uint64_t required = restoredBytes;
+    for (const uint64_t addition : {
+             rollbackBytes,
+             largestRollback,
+             PartyQuestReplicaResourcePolicy::MinimumFreeSpaceReserveBytes})
+    {
+        if (addition > std::numeric_limits<uint64_t>::max() - required)
+            return std::nullopt;
+        required += addition;
+    }
+    return required;
+}
+
+bool PartyQuestReplicaRestoreResourcePolicy::HasSufficientDiskSpace(
+    const PartyQuestReplicaRestoreJournalState& acState,
+    uint64_t aAvailableBytes) noexcept
+{
+    const auto required = RequiredFreeBytes(acState);
+    return required && aAvailableBytes >= *required;
+}
+
 PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execute(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaRestorePlan& acPlan,
@@ -1091,6 +1153,25 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execut
             return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::UnsafePath);
         if (transactionState != NodeState::Missing)
             return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::RestoreIdConflict);
+
+        const auto requiredFreeBytes =
+            PartyQuestReplicaRestoreResourcePolicy::RequiredFreeBytes(state);
+        if (!requiredFreeBytes)
+        {
+            return MakeReport(
+                state,
+                PartyQuestReplicaRestoreExecutionStatus::ResourceLimitExceeded);
+        }
+        std::error_code spaceError;
+        const auto diskSpace = std::filesystem::space(acPaths.PlayerDirectory, spaceError);
+        if (spaceError)
+            return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::UnsafePath);
+        if (diskSpace.available < *requiredFreeBytes)
+        {
+            return MakeReport(
+                state,
+                PartyQuestReplicaRestoreExecutionStatus::InsufficientDiskSpace);
+        }
 
         if (PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(journalPath, state) !=
             PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
