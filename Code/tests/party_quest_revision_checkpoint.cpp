@@ -4,10 +4,13 @@
 
 #include <catch2/catch.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <string>
+#include <thread>
 
 namespace
 {
@@ -338,4 +341,77 @@ TEST_CASE("Revision checkpoint admission fails closed when the kind namespace is
             paths,
             PartyQuestCheckpointKind::PreRepair,
             blockedRevision)));
+}
+
+TEST_CASE("Concurrent revision checkpoint publishers cannot overrun admission", "[quest.party-state.revision-checkpoint]")
+{
+    RevisionSandbox sandbox;
+    const auto paths = BuildRevisionPaths(sandbox);
+    PartyQuestReplicaSnapshotManager manager(paths, kRevisionCampaign, kRevisionPlayer);
+    ImportRevisionReplica(sandbox, paths, manager);
+
+    const auto kindRoot = PartyQuestCoopSaveLayout::GetCheckpointDirectory(
+        paths,
+        PartyQuestCheckpointKind::PreRepair);
+    std::error_code ec;
+    for (uint64_t revision = 1;
+         revision < PartyQuestDurableResourcePolicy::MaxRevisionCheckpointsPerKind;
+         ++revision)
+    {
+        std::filesystem::create_directories(
+            kindRoot / PartyQuestCoopSaveLayout::FormatWorldRevision(revision),
+            ec);
+        REQUIRE_FALSE(ec);
+    }
+
+    const auto files = InspectCurrentRevisionReplica(paths);
+    const uint64_t firstRevision =
+        PartyQuestDurableResourcePolicy::MaxRevisionCheckpointsPerKind;
+    const uint64_t secondRevision = firstRevision + 1;
+    const auto firstPlan = PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(
+        paths,
+        PartyQuestCheckpointKind::PreRepair,
+        firstRevision,
+        files);
+    const auto secondPlan = PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(
+        paths,
+        PartyQuestCheckpointKind::PreRepair,
+        secondRevision,
+        files);
+    REQUIRE(firstPlan.IsReady());
+    REQUIRE(secondPlan.IsReady());
+
+    PartyQuestReplicaSnapshotStatus firstStatus{};
+    PartyQuestReplicaSnapshotStatus secondStatus{};
+    std::atomic<uint32_t> ready{};
+    std::atomic<bool> start{};
+    auto publish = [&](uint64_t revision,
+                       const PartyQuestReplicaCopyPlan& plan,
+                       PartyQuestReplicaSnapshotStatus& status) {
+        ready.fetch_add(1, std::memory_order_release);
+        while (!start.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        status = manager.EnsureRevisionCheckpoint(
+            PartyQuestCheckpointKind::PreRepair,
+            revision,
+            plan).Status;
+    };
+
+    std::thread first(publish, firstRevision, std::cref(firstPlan), std::ref(firstStatus));
+    std::thread second(publish, secondRevision, std::cref(secondPlan), std::ref(secondStatus));
+    while (ready.load(std::memory_order_acquire) != 2)
+        std::this_thread::yield();
+    start.store(true, std::memory_order_release);
+    first.join();
+    second.join();
+
+    const auto readyCount =
+        static_cast<uint32_t>(firstStatus == PartyQuestReplicaSnapshotStatus::Ready) +
+        static_cast<uint32_t>(secondStatus == PartyQuestReplicaSnapshotStatus::Ready);
+    const auto blockedCount = static_cast<uint32_t>(
+                                  firstStatus == PartyQuestReplicaSnapshotStatus::RevisionCheckpointLimitExceeded) +
+        static_cast<uint32_t>(
+            secondStatus == PartyQuestReplicaSnapshotStatus::RevisionCheckpointLimitExceeded);
+    REQUIRE(readyCount == 1);
+    REQUIRE(blockedCount == 1);
 }

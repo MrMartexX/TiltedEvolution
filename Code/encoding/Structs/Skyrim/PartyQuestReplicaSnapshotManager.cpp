@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 #include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
+#include <mutex>
 #include <optional>
 #include <system_error>
 #include <utility>
@@ -20,6 +21,12 @@ bool IsMissingError(const std::error_code& acError) noexcept
 {
     return acError == std::errc::no_such_file_or_directory ||
         acError == std::errc::not_a_directory;
+}
+
+std::mutex& GetRevisionCheckpointPublicationMutex() noexcept
+{
+    static std::mutex mutex;
+    return mutex;
 }
 
 enum class RevisionCheckpointAdmission : uint8_t
@@ -407,6 +414,13 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
             (aRevisionScoped && aCampaignWorldRevision == 0))
         {
             return Failure(PartyQuestReplicaSnapshotStatus::InvalidPlan);
+        }
+
+        std::unique_lock<std::mutex> revisionPublicationLock;
+        if (aCheckpoint && aRevisionScoped)
+        {
+            revisionPublicationLock = std::unique_lock<std::mutex>(
+                GetRevisionCheckpointPublicationMutex());
         }
 
         std::optional<PartyQuestReplicaManifest> expectedManifest;
