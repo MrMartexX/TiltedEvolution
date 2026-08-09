@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestPersistenceDurability.h>
 #include <Structs/Skyrim/PartyQuestRuntimeApply.h>
 
 #include <functional>
@@ -23,7 +24,8 @@ enum class PartyQuestRuntimeDurableTransitionStatus : uint8_t
     Applied,
     InvalidState,
     CheckpointRestoreRequired,
-    PersistenceFailure
+    PersistenceFailure,
+    InsufficientDurability
 };
 
 struct PartyQuestRuntimeDurableVerificationResult
@@ -53,9 +55,14 @@ public:
     PartyQuestRuntimeApplySession(
         PartyQuestCampaignId aCampaignId,
         PartyQuestPlayerProfileId aPlayerProfileId,
-        DurableStateHandler aDurableStateHandler = {});
+        DurableStateHandler aDurableStateHandler = {},
+        PartyQuestPersistenceGuarantee aPersistenceGuarantee =
+            PartyQuestPersistenceGuarantee::Volatile);
 
-    void SetDurableStateHandler(DurableStateHandler aDurableStateHandler);
+    void SetDurableStateHandler(
+        DurableStateHandler aDurableStateHandler,
+        PartyQuestPersistenceGuarantee aPersistenceGuarantee =
+            PartyQuestPersistenceGuarantee::Volatile);
 
     [[nodiscard]] PartyQuestRuntimeDurableBeginStatus Begin(
         const PartyQuestRuntimeApplyRequest& acRequest);
@@ -126,6 +133,11 @@ public:
         return m_playerProfileId;
     }
 
+    [[nodiscard]] PartyQuestPersistenceGuarantee GetPersistenceGuarantee() const noexcept
+    {
+        return m_persistenceGuarantee;
+    }
+
 private:
     [[nodiscard]] bool Persist(const PartyQuestRuntimeApplyCoordinator& acCandidate) const;
     [[nodiscard]] static PartyQuestRuntimeDurableBeginStatus TranslateBeginStatus(
@@ -134,5 +146,7 @@ private:
     PartyQuestCampaignId m_campaignId;
     PartyQuestPlayerProfileId m_playerProfileId;
     DurableStateHandler m_durableStateHandler;
+    PartyQuestPersistenceGuarantee m_persistenceGuarantee{
+        PartyQuestPersistenceGuarantee::Volatile};
     PartyQuestRuntimeApplyCoordinator m_coordinator;
 };

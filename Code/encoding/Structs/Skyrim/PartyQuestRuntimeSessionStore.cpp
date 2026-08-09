@@ -61,7 +61,8 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
                            sidecarPath,
                            acState) ==
                     PartyQuestRuntimeApplyPersistenceStatus::Success;
-            });
+            },
+            PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee);
 
         const auto loaded = PartyQuestRuntimeApplyPersistence::Load(sidecarPath);
         if (loaded.Status == PartyQuestRuntimeApplyPersistenceStatus::FileNotFound)

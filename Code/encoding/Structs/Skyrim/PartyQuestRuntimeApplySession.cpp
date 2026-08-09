@@ -5,17 +5,26 @@
 PartyQuestRuntimeApplySession::PartyQuestRuntimeApplySession(
     PartyQuestCampaignId aCampaignId,
     PartyQuestPlayerProfileId aPlayerProfileId,
-    DurableStateHandler aDurableStateHandler)
+    DurableStateHandler aDurableStateHandler,
+    PartyQuestPersistenceGuarantee aPersistenceGuarantee)
     : m_campaignId(aCampaignId)
     , m_playerProfileId(aPlayerProfileId)
     , m_durableStateHandler(std::move(aDurableStateHandler))
+    , m_persistenceGuarantee(
+          m_durableStateHandler
+              ? aPersistenceGuarantee
+              : PartyQuestPersistenceGuarantee::Volatile)
 {
 }
 
 void PartyQuestRuntimeApplySession::SetDurableStateHandler(
-    DurableStateHandler aDurableStateHandler)
+    DurableStateHandler aDurableStateHandler,
+    PartyQuestPersistenceGuarantee aPersistenceGuarantee)
 {
     m_durableStateHandler = std::move(aDurableStateHandler);
+    m_persistenceGuarantee = m_durableStateHandler
+        ? aPersistenceGuarantee
+        : PartyQuestPersistenceGuarantee::Volatile;
 }
 
 bool PartyQuestRuntimeApplySession::Persist(
@@ -109,6 +118,13 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkChec
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::ArmRuntimeMutation(
     uint64_t aTransactionId)
 {
+    if (!PartyQuestPersistenceDurabilityPolicy::Meets(
+            m_persistenceGuarantee,
+            PartyQuestPersistenceDurabilityPolicy::MinimumPoCRuntimeMutationGuarantee))
+    {
+        return PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability;
+    }
+
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
     if (!candidate.MarkApplyDispatched(aTransactionId))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;

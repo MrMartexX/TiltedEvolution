@@ -104,7 +104,8 @@ PartyQuestRuntimeApplySession BuildSession(DurableCapture& aCapture)
         [&aCapture](const PartyQuestRuntimeRecoveryState& acState)
         {
             return aCapture.Persist(acState);
-        });
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
 }
 
 PartyQuestRuntimeDurableTransitionStatus MarkSessionPapyrusQuiescent(
@@ -333,4 +334,25 @@ TEST_CASE("Invalid campaign player or missing durable handler cannot arm runtime
     PartyQuestRuntimeApplySession noPersistence(kSessionCampaign, kSessionPlayer);
     REQUIRE(noPersistence.Begin(request) == PartyQuestRuntimeDurableBeginStatus::PersistenceFailure);
     REQUIRE(noPersistence.GetCoordinator().GetActive() == nullptr);
+}
+
+TEST_CASE("Volatile persistence cannot arm runtime mutation", "[quest.party-state.runtime-apply.session][durability]")
+{
+    DurableCapture capture;
+    PartyQuestRuntimeApplySession session(
+        kSessionCampaign,
+        kSessionPlayer,
+        [&capture](const PartyQuestRuntimeRecoveryState& acState) {
+            return capture.Persist(acState);
+        });
+    const auto request = BuildSessionRequest(3002, GameId(33, 0x1001));
+
+    REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
+    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::ReadyToApply);
+    REQUIRE_FALSE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
 }
