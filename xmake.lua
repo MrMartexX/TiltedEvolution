@@ -56,6 +56,9 @@ add_requireconfs("*.mimalloc", { version = "2.2.4", override = true })
 add_requireconfs("*.cmake", { version = "3.30.2", override = true })
 add_requireconfs("*.openssl", { version = "1.1.1-w", override = true })
 add_requireconfs("*.zlib", { version = "v1.3.1", override = true })
+-- Ubuntu 22.04 supplies protoc 3.12.x. Keep the transitive GameNetworkingSockets
+-- headers on the same protobuf release line as the generator used by Linux CI.
+add_requireconfs("*.protobuf-cpp", { version = "3.12.3", override = true })
 if is_plat("linux") then
     add_requireconfs("*.libcurl", { version = "8.7.1", override = true })
 end
