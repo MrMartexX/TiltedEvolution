@@ -59,6 +59,12 @@ add_requireconfs("*.zlib", { version = "v1.3.1", override = true })
 -- Ubuntu 22.04 supplies protoc 3.12.x. Keep the transitive GameNetworkingSockets
 -- headers on the same protobuf release line as the generator used by Linux CI.
 add_requireconfs("**.protobuf-cpp", { version = "3.12.3", override = true })
+if is_plat("windows") then
+    -- The upstream precompiled archive can be built against a newer protobuf ABI
+    -- than the dependency graph selected above. Build this transitive library with
+    -- the pinned graph so its generated objects and linked protobuf stay identical.
+    add_requireconfs("**.gamenetworkingsockets", { build = true })
+end
 if is_plat("linux") then
     add_requireconfs("*.libcurl", { version = "8.7.1", override = true })
 end
