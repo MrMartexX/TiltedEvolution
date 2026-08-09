@@ -35,6 +35,38 @@ struct PartyQuestRuntimeApplyPersistenceResult
     bool UsedTemporary{};
 };
 
+enum class PartyQuestRuntimeApplyPersistenceBoundary : uint8_t
+{
+    TemporaryVerified,
+    PrimaryMovedToBackup,
+    TemporaryPublished
+};
+
+enum class PartyQuestRuntimeApplyPersistenceDirective : uint8_t
+{
+    Continue,
+    FailClosed
+};
+
+/** Local-only fault observer; it carries no paths, bytes or filesystem authority. */
+struct PartyQuestRuntimeApplyPersistenceHooks
+{
+    using Callback = PartyQuestRuntimeApplyPersistenceDirective (*)(
+        PartyQuestRuntimeApplyPersistenceBoundary,
+        void*) noexcept;
+
+    Callback OnBoundary{};
+    void* Context{};
+
+    [[nodiscard]] PartyQuestRuntimeApplyPersistenceDirective Invoke(
+        PartyQuestRuntimeApplyPersistenceBoundary aBoundary) const noexcept
+    {
+        return OnBoundary
+            ? OnBoundary(aBoundary, Context)
+            : PartyQuestRuntimeApplyPersistenceDirective::Continue;
+    }
+};
+
 /**
  * Durable sidecar for client runtime-apply idempotency and crash recovery.
  *
@@ -53,7 +85,8 @@ public:
 
     [[nodiscard]] static PartyQuestRuntimeApplyPersistenceStatus SaveAtomically(
         const std::filesystem::path& acPath,
-        const PartyQuestRuntimeRecoveryState& acState);
+        const PartyQuestRuntimeRecoveryState& acState,
+        PartyQuestRuntimeApplyPersistenceHooks aHooks = {});
 
     [[nodiscard]] static PartyQuestRuntimeApplyPersistenceResult Load(
         const std::filesystem::path& acPath);

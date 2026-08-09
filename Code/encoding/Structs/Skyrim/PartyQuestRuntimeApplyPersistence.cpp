@@ -532,7 +532,8 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
 
 PartyQuestRuntimeApplyPersistenceStatus PartyQuestRuntimeApplyPersistence::SaveAtomically(
     const std::filesystem::path& acPath,
-    const PartyQuestRuntimeRecoveryState& acState)
+    const PartyQuestRuntimeRecoveryState& acState,
+    PartyQuestRuntimeApplyPersistenceHooks aHooks)
 {
     const std::vector<uint8_t> encoded = Encode(acState);
     if (encoded.empty())
@@ -560,6 +561,19 @@ PartyQuestRuntimeApplyPersistenceStatus PartyQuestRuntimeApplyPersistence::SaveA
         return PartyQuestRuntimeApplyPersistenceStatus::IoError;
     }
 
+    const auto verified = DecodeFile(temporaryPath);
+    if (verified.Status != PartyQuestRuntimeApplyPersistenceStatus::Success ||
+        !verified.State || *verified.State != acState)
+    {
+        std::filesystem::remove(temporaryPath, ec);
+        return PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
+    }
+    if (aHooks.Invoke(PartyQuestRuntimeApplyPersistenceBoundary::TemporaryVerified) ==
+        PartyQuestRuntimeApplyPersistenceDirective::FailClosed)
+    {
+        return PartyQuestRuntimeApplyPersistenceStatus::IoError;
+    }
+
     const bool hadPrimary = std::filesystem::exists(acPath, ec) && !ec;
     if (hadPrimary)
     {
@@ -571,6 +585,12 @@ PartyQuestRuntimeApplyPersistenceStatus PartyQuestRuntimeApplyPersistence::SaveA
             std::filesystem::remove(temporaryPath, ec);
             return PartyQuestRuntimeApplyPersistenceStatus::IoError;
         }
+        if (aHooks.Invoke(
+                PartyQuestRuntimeApplyPersistenceBoundary::PrimaryMovedToBackup) ==
+            PartyQuestRuntimeApplyPersistenceDirective::FailClosed)
+        {
+            return PartyQuestRuntimeApplyPersistenceStatus::IoError;
+        }
     }
 
     std::filesystem::rename(temporaryPath, acPath, ec);
@@ -580,6 +600,12 @@ PartyQuestRuntimeApplyPersistenceStatus PartyQuestRuntimeApplyPersistence::SaveA
         if (hadPrimary && std::filesystem::exists(backupPath, restoreError))
             std::filesystem::rename(backupPath, acPath, restoreError);
         std::filesystem::remove(temporaryPath, restoreError);
+        return PartyQuestRuntimeApplyPersistenceStatus::IoError;
+    }
+
+    if (aHooks.Invoke(PartyQuestRuntimeApplyPersistenceBoundary::TemporaryPublished) ==
+        PartyQuestRuntimeApplyPersistenceDirective::FailClosed)
+    {
         return PartyQuestRuntimeApplyPersistenceStatus::IoError;
     }
 

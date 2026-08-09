@@ -14,9 +14,13 @@
 #include <catch2/catch.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <string>
 #include <utility>
+
+const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -142,7 +146,152 @@ bool WriteBytes(const std::filesystem::path& acPath, const std::vector<uint8_t>&
     file.flush();
     return file.good();
 }
+
+struct RuntimeApplyPersistenceSandbox
+{
+    std::filesystem::path Root;
+
+    RuntimeApplyPersistenceSandbox()
+    {
+        const auto nonce = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        Root = std::filesystem::temp_directory_path() /
+            ("tp_party_quest_runtime_apply_crash_" + std::to_string(nonce));
+        std::error_code ec;
+        std::filesystem::remove_all(Root, ec);
+        std::filesystem::create_directories(Root, ec);
+        REQUIRE_FALSE(ec);
+    }
+
+    ~RuntimeApplyPersistenceSandbox()
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(Root, ec);
+    }
+};
+
+bool SetRuntimeApplyEnvironment(const char* apName, const std::string& acValue)
+{
+#ifdef _WIN32
+    return _putenv_s(apName, acValue.c_str()) == 0;
+#else
+    return setenv(apName, acValue.c_str(), 1) == 0;
+#endif
+}
+
+void ClearRuntimeApplyEnvironment(const char* apName)
+{
+#ifdef _WIN32
+    _putenv_s(apName, "");
+#else
+    unsetenv(apName);
+#endif
+}
+
+struct RuntimeApplyCrashBoundary
+{
+    PartyQuestRuntimeApplyPersistenceBoundary Boundary;
+};
+
+PartyQuestRuntimeApplyPersistenceDirective CrashRuntimeApplyAtBoundary(
+    PartyQuestRuntimeApplyPersistenceBoundary aBoundary,
+    void* apContext) noexcept
+{
+    const auto& crash = *static_cast<const RuntimeApplyCrashBoundary*>(apContext);
+    if (crash.Boundary == aBoundary)
+        std::_Exit(89);
+    return PartyQuestRuntimeApplyPersistenceDirective::Continue;
+}
+
+PartyQuestRuntimeRecoveryState BuildOldCrashState()
+{
+    PartyQuestRuntimeApplyCoordinator coordinator;
+    CommitRecoveryRequest(
+        coordinator,
+        BuildRecoveryRequest(91001, GameId(19, 0x1000), 160));
+    return coordinator.ExportRecoveryState(kCampaignId, kPlayerProfileId);
+}
+
+PartyQuestRuntimeRecoveryState BuildArmedCrashState()
+{
+    PartyQuestRuntimeApplyCoordinator coordinator;
+    const auto request = BuildRecoveryRequest(91002, GameId(19, 0x2000), 161);
+    REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Started);
+    REQUIRE(coordinator.MarkCheckpointCreated(request.TransactionId));
+    REQUIRE(coordinator.MarkApplyDispatched(request.TransactionId));
+    return coordinator.ExportRecoveryState(kCampaignId, kPlayerProfileId);
+}
+
+void RunRuntimeApplyCrashProcess(
+    const RuntimeApplyPersistenceSandbox& acSandbox,
+    const char* apBoundary)
+{
+    REQUIRE(SetRuntimeApplyEnvironment(
+        "TP_RUNTIME_APPLY_CRASH_ROOT", acSandbox.Root.string()));
+    REQUIRE(SetRuntimeApplyEnvironment(
+        "TP_RUNTIME_APPLY_CRASH_BOUNDARY", apBoundary));
+
+    const auto& executable = GetTPTestsExecutablePath();
+    REQUIRE_FALSE(executable.empty());
+    const std::string command =
+        "\"" + executable.string() +
+        "\" \"Runtime apply journal atomic publication crash helper\" --reporter compact";
+    const int exitCode = std::system(command.c_str());
+
+    ClearRuntimeApplyEnvironment("TP_RUNTIME_APPLY_CRASH_BOUNDARY");
+    ClearRuntimeApplyEnvironment("TP_RUNTIME_APPLY_CRASH_ROOT");
+    REQUIRE(exitCode != 0);
+
+    const auto path = acSandbox.Root / "runtime-apply.bin";
+    const auto loaded = PartyQuestRuntimeApplyPersistence::Load(path);
+    REQUIRE(loaded.Status == PartyQuestRuntimeApplyPersistenceStatus::Success);
+    REQUIRE(loaded.State.has_value());
+
+    const bool beforePrimaryMove =
+        std::string(apBoundary) == "TemporaryVerified";
+    REQUIRE(*loaded.State ==
+        (beforePrimaryMove ? BuildOldCrashState() : BuildArmedCrashState()));
+    REQUIRE(loaded.UsedTemporary ==
+        (std::string(apBoundary) == "PrimaryMovedToBackup"));
+
+    PartyQuestRuntimeApplyCoordinator recovered;
+    const auto disposition = recovered.RestoreRecoveryState(
+        *loaded.State, kCampaignId, kPlayerProfileId);
+    REQUIRE(disposition ==
+        (beforePrimaryMove
+            ? PartyQuestRuntimeRecoveryDisposition::Clean
+            : PartyQuestRuntimeRecoveryDisposition::CheckpointRestoreRequired));
+}
 } // namespace
+
+TEST_CASE("Runtime apply journal atomic publication crash helper", "[.][quest.party-state.runtime-apply.persistence][fault-helper]")
+{
+    const char* rootValue = std::getenv("TP_RUNTIME_APPLY_CRASH_ROOT");
+    const char* boundaryValue = std::getenv("TP_RUNTIME_APPLY_CRASH_BOUNDARY");
+    REQUIRE(rootValue != nullptr);
+    REQUIRE(boundaryValue != nullptr);
+
+    const std::string boundary = boundaryValue;
+    REQUIRE((boundary == "TemporaryVerified" ||
+        boundary == "PrimaryMovedToBackup" ||
+        boundary == "TemporaryPublished"));
+
+    const auto path = std::filesystem::path(rootValue) / "runtime-apply.bin";
+    REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(
+                path, BuildOldCrashState()) ==
+        PartyQuestRuntimeApplyPersistenceStatus::Success);
+
+    RuntimeApplyCrashBoundary crash{
+        boundary == "TemporaryVerified"
+            ? PartyQuestRuntimeApplyPersistenceBoundary::TemporaryVerified
+            : boundary == "PrimaryMovedToBackup"
+                ? PartyQuestRuntimeApplyPersistenceBoundary::PrimaryMovedToBackup
+                : PartyQuestRuntimeApplyPersistenceBoundary::TemporaryPublished};
+    const auto status = PartyQuestRuntimeApplyPersistence::SaveAtomically(
+        path,
+        BuildArmedCrashState(),
+        {CrashRuntimeApplyAtBoundary, &crash});
+    FAIL("Crash boundary returned with status " << static_cast<int>(status));
+}
 
 TEST_CASE("Runtime apply recovery state encodes deterministically and round-trips", "[quest.party-state.runtime-apply.persistence]")
 {
@@ -289,6 +438,27 @@ TEST_CASE("Valid temporary runtime journal wins after interrupted atomic replace
     REQUIRE(*recovered.State == newState);
 
     RemoveRuntimeApplyArchive(path);
+}
+
+TEST_CASE("Runtime mutation barrier publication survives abrupt process termination", "[quest.party-state.runtime-apply.persistence][fault][process]")
+{
+    SECTION("verified temporary before primary move preserves clean durable truth")
+    {
+        RuntimeApplyPersistenceSandbox sandbox;
+        RunRuntimeApplyCrashProcess(sandbox, "TemporaryVerified");
+    }
+
+    SECTION("primary moved aside promotes the complete mutation barrier")
+    {
+        RuntimeApplyPersistenceSandbox sandbox;
+        RunRuntimeApplyCrashProcess(sandbox, "PrimaryMovedToBackup");
+    }
+
+    SECTION("published mutation barrier blocks runtime work after restart")
+    {
+        RuntimeApplyPersistenceSandbox sandbox;
+        RunRuntimeApplyCrashProcess(sandbox, "TemporaryPublished");
+    }
 }
 
 TEST_CASE("Committed runtime transaction stays idempotent after restart", "[quest.party-state.runtime-apply.persistence]")
