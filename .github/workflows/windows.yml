@@ -39,7 +39,7 @@ jobs:
       version: ${{ steps.output-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # We need full history in order to create a version string (BuildInfo.h)
           # and to classify the PR diff without a second checkout.
@@ -86,7 +86,7 @@ jobs:
 
       - name: Cache xmake dependencies
         if: steps.scope.outputs.full == 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/AppData/Local/.xmake/packages
           key: ${{ runner.os }}-xmake-${{ hashFiles('**/xmake.lua') }}
@@ -121,13 +121,13 @@ jobs:
       # Building the Together UI
       - name: Setup pnpm
         if: steps.scope.outputs.full == 'true'
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 
       - name: Setup Node
         if: steps.scope.outputs.full == 'true'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: lts/iron
           cache-dependency-path: Code/skyrim_ui/pnpm-lock.yaml
@@ -145,7 +145,7 @@ jobs:
 
       - name: Upload build files for the next job
         if: ${{ inputs.upload-build-for-next-job && steps.scope.outputs.full == 'true' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: internal-job-files
           retention-days: 1

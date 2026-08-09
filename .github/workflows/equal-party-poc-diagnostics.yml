@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Checkout submodules
         run: |
@@ -45,7 +45,7 @@ jobs:
           git submodule update --init --force --recursive --depth=1
 
       - name: Cache xmake dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.xmake/packages
           key: ${{ runner.os }}-xmake-${{ hashFiles('**/xmake.lua') }}
@@ -92,7 +92,7 @@ jobs:
 
       - name: Upload Linux diagnostic log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: equal-party-poc-linux-diagnostics
           path: |
@@ -106,7 +106,7 @@ jobs:
     runs-on: windows-2022
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -144,7 +144,7 @@ jobs:
           git submodule update --init --force --recursive --depth=1
 
       - name: Cache xmake dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/AppData/Local/.xmake/packages
           key: ${{ runner.os }}-xmake-${{ hashFiles('**/xmake.lua') }}
@@ -183,7 +183,7 @@ jobs:
 
       - name: Upload Windows diagnostic log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: equal-party-poc-windows-diagnostics
           path: |

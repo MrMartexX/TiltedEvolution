@@ -24,7 +24,7 @@ jobs:
     needs: build-windows
     steps:
       - name: Download artifact from the previous job
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: internal-job-files
 
@@ -42,13 +42,13 @@ jobs:
           rm str-build/SkyrimTogetherReborn/*Tests.exe
 
       - name: Upload playable build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Skyrim Together Build (${{ needs.build-windows.outputs.str-version }})
           path: str-build/
 
       - name: Upload debug symbols
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: Debug Symbols (${{ needs.build-windows.outputs.str-version }})
           path: str-pdb/
