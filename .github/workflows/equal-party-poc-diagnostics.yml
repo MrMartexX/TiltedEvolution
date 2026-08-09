@@ -48,9 +48,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/.xmake/packages
-          key: ${{ runner.os }}-xmake-${{ hashFiles('**/xmake.lua') }}
-          restore-keys: |
-            ${{ runner.os }}-xmake-
+          # Do not race the full-build dependency cache namespace.
+          key: ${{ runner.os }}-xmake-poc-x64-debug-3.0.9-${{ hashFiles('**/xmake.lua') }}
 
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
@@ -147,9 +146,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/AppData/Local/.xmake/packages
-          key: ${{ runner.os }}-xmake-${{ hashFiles('**/xmake.lua') }}
-          restore-keys: |
-            ${{ runner.os }}-xmake-
+          # Do not let restored precompiled packages poison full source builds.
+          key: ${{ runner.os }}-xmake-poc-x64-debug-3.0.9-${{ hashFiles('**/xmake.lua') }}
 
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1

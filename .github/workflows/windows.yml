@@ -90,7 +90,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: ~/AppData/Local/.xmake/packages
-          key: ${{ runner.os }}-xmake-${{ hashFiles('**/xmake.lua') }}
+          # Keep full source-built GNS packages isolated from targeted caches.
+          key: ${{ runner.os }}-xmake-full-${{ matrix.arch }}-${{ inputs.build-mode || 'releasedbg' }}-3.0.9-${{ hashFiles('**/xmake.lua') }}
 
       # Install xmake
       - name: Setup xmake

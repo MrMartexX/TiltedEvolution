@@ -73,6 +73,14 @@ jobs:
         git submodule sync --recursive
         git submodule update --init --force --recursive --depth=1
 
+    - name: Cache xmake dependencies
+      if: steps.scope.outputs.full == 'true'
+      uses: actions/cache@v6
+      with:
+        path: ~/.xmake/packages
+        # Full builds own this namespace; targeted jobs cannot reserve its key.
+        key: ${{ runner.os }}-xmake-full-${{ matrix.arch }}-${{ matrix.mode }}-3.0.9-${{ hashFiles('**/xmake.lua') }}
+
     # Install dependencies
     - name: Update apt repositories
       if: steps.scope.outputs.full == 'true'
