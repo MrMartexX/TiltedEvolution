@@ -253,6 +253,57 @@ TEST_CASE("MutationStarted recovery rolls a partially restored replica back and 
     REQUIRE_FALSE(std::filesystem::exists(state.TransactionDirectory));
 }
 
+TEST_CASE("Prepared journal resumes exact restore after process crash", "[quest.party-state.restore-executor][fault]")
+{
+    RestoreExecutorSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 907;
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, kWorldRevision) / "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    WriteExecutorBytes(checkpoint, "CANONICAL_907");
+    WriteExecutorBytes(destination, "ORIGINAL_907");
+
+    const auto plan = BuildExecutorPlan(paths, checkpoint, destination, kWorldRevision);
+    const auto state = PrepareDurableExecutorState(paths, plan, 2003);
+    REQUIRE(state.Phase == PartyQuestReplicaRestoreJournalPhase::Prepared);
+
+    const auto report = PartyQuestReplicaRestoreExecutor::Recover(
+        paths,
+        kExecutorCampaign,
+        kExecutorPlayer,
+        PartyQuestReplicaRestoreJournal::GetJournalPath(state));
+    REQUIRE(report.Status == PartyQuestReplicaRestoreExecutionStatus::Success);
+    REQUIRE(ReadExecutorBytes(destination) == "CANONICAL_907");
+}
+
+TEST_CASE("BackupsReady journal resumes exact restore after process crash", "[quest.party-state.restore-executor][fault]")
+{
+    RestoreExecutorSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 908;
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, kWorldRevision) / "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    WriteExecutorBytes(checkpoint, "CANONICAL_908");
+    WriteExecutorBytes(destination, "ORIGINAL_908");
+
+    const auto plan = BuildExecutorPlan(paths, checkpoint, destination, kWorldRevision);
+    auto state = PrepareDurableExecutorState(paths, plan, 2004);
+    REQUIRE(state.Operations.size() == 1);
+    WriteExecutorBytes(state.Operations[0].RollbackPath, "ORIGINAL_908");
+    REQUIRE(PartyQuestReplicaRestoreJournal::MarkBackupsReady(state) ==
+        PartyQuestReplicaRestoreJournalStatus::Ready);
+    const auto journalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(state);
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(journalPath, state) ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+
+    const auto report = PartyQuestReplicaRestoreExecutor::Recover(
+        paths, kExecutorCampaign, kExecutorPlayer, journalPath);
+    REQUIRE(report.Status == PartyQuestReplicaRestoreExecutionStatus::Success);
+    REQUIRE(ReadExecutorBytes(destination) == "CANONICAL_908");
+}
+
 TEST_CASE("Rollback cleanup preserves unknown transaction artifacts", "[quest.party-state.restore-executor][confinement]")
 {
     RestoreExecutorSandbox sandbox;
