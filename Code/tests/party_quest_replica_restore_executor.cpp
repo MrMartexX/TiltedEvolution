@@ -3,10 +3,13 @@
 #include <catch2/catch.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
+
+const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -65,6 +68,32 @@ PartyQuestCoopSavePaths BuildExecutorPaths(const RestoreExecutorSandbox& acSandb
     return *paths;
 }
 
+PartyQuestCoopSavePaths BuildExecutorPaths(const std::filesystem::path& acRoot)
+{
+    const auto paths = PartyQuestCoopSaveLayout::Build(
+        acRoot / "CoopCampaigns", kExecutorCampaign, kExecutorPlayer);
+    REQUIRE(paths.has_value());
+    return *paths;
+}
+
+bool SetExecutorEnvironment(const char* apName, const std::string& acValue)
+{
+#ifdef _WIN32
+    return _putenv_s(apName, acValue.c_str()) == 0;
+#else
+    return setenv(apName, acValue.c_str(), 1) == 0;
+#endif
+}
+
+void ClearExecutorEnvironment(const char* apName)
+{
+#ifdef _WIN32
+    _putenv_s(apName, "");
+#else
+    unsetenv(apName);
+#endif
+}
+
 PartyQuestReplicaRestorePlan BuildExecutorPlan(
     const PartyQuestCoopSavePaths& acPaths,
     const std::filesystem::path& acCheckpointSource,
@@ -102,7 +131,81 @@ PartyQuestReplicaRestoreJournalState PrepareDurableExecutorState(
         PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
     return state;
 }
+
+void RunExecutorCrashProcess(
+    const RestoreExecutorSandbox& acSandbox,
+    const char* apPhase,
+    uint64_t aWorldRevision,
+    uint64_t aRestoreId)
+{
+    REQUIRE(SetExecutorEnvironment("TP_RESTORE_CRASH_ROOT", acSandbox.Root.string()));
+    REQUIRE(SetExecutorEnvironment("TP_RESTORE_CRASH_PHASE", apPhase));
+
+    const auto& executable = GetTPTestsExecutablePath();
+    REQUIRE_FALSE(executable.empty());
+    const std::string command =
+        "\"" + executable.string() +
+        "\" \"Restore executor subprocess crash helper\" --reporter compact";
+    const int exitCode = std::system(command.c_str());
+
+    ClearExecutorEnvironment("TP_RESTORE_CRASH_PHASE");
+    ClearExecutorEnvironment("TP_RESTORE_CRASH_ROOT");
+    REQUIRE(exitCode != 0);
+
+    const auto paths = BuildExecutorPaths(acSandbox);
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, aWorldRevision) / "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    const auto plan = BuildExecutorPlan(paths, checkpoint, destination, aWorldRevision);
+    const auto prepared = PartyQuestReplicaRestoreJournal::Prepare(paths, plan, aRestoreId);
+    REQUIRE(prepared.IsReady());
+
+    const auto report = PartyQuestReplicaRestoreExecutor::Recover(
+        paths,
+        kExecutorCampaign,
+        kExecutorPlayer,
+        PartyQuestReplicaRestoreJournal::GetJournalPath(*prepared.State));
+    REQUIRE(report.Status == PartyQuestReplicaRestoreExecutionStatus::Success);
+    REQUIRE(ReadExecutorBytes(destination) ==
+        (std::string("CANONICAL_") + std::to_string(aWorldRevision)));
+}
 } // namespace
+
+TEST_CASE("Restore executor subprocess crash helper", "[.][quest.party-state.restore-executor][fault-helper]")
+{
+    const char* rootValue = std::getenv("TP_RESTORE_CRASH_ROOT");
+    const char* phaseValue = std::getenv("TP_RESTORE_CRASH_PHASE");
+    REQUIRE(rootValue != nullptr);
+    REQUIRE(phaseValue != nullptr);
+
+    const std::string phase = phaseValue;
+    const uint64_t worldRevision = phase == "Prepared" ? 910 : 911;
+    const uint64_t restoreId = phase == "Prepared" ? 3001 : 3002;
+    REQUIRE((phase == "Prepared" || phase == "BackupsReady"));
+
+    const auto paths = BuildExecutorPaths(std::filesystem::path(rootValue));
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, worldRevision) / "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    WriteExecutorBytes(checkpoint, std::string("CANONICAL_") + std::to_string(worldRevision));
+    WriteExecutorBytes(destination, std::string("ORIGINAL_") + std::to_string(worldRevision));
+
+    const auto plan = BuildExecutorPlan(paths, checkpoint, destination, worldRevision);
+    auto state = PrepareDurableExecutorState(paths, plan, restoreId);
+    if (phase == "BackupsReady")
+    {
+        WriteExecutorBytes(
+            state.Operations[0].RollbackPath,
+            std::string("ORIGINAL_") + std::to_string(worldRevision));
+        REQUIRE(PartyQuestReplicaRestoreJournal::MarkBackupsReady(state) ==
+            PartyQuestReplicaRestoreJournalStatus::Ready);
+        REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
+                    PartyQuestReplicaRestoreJournal::GetJournalPath(state), state) ==
+            PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    }
+
+    std::_Exit(86);
+}
 
 TEST_CASE("Restore executor commits verified checkpoint bytes without touching solo files", "[quest.party-state.restore-executor]")
 {
@@ -304,6 +407,21 @@ TEST_CASE("BackupsReady journal resumes exact restore after process crash", "[qu
     REQUIRE(ReadExecutorBytes(destination) == "CANONICAL_908");
 }
 
+TEST_CASE("Durable pre-mutation restore phases survive abrupt process termination", "[quest.party-state.restore-executor][fault][process]")
+{
+    SECTION("Prepared")
+    {
+        RestoreExecutorSandbox sandbox;
+        RunExecutorCrashProcess(sandbox, "Prepared", 910, 3001);
+    }
+
+    SECTION("BackupsReady")
+    {
+        RestoreExecutorSandbox sandbox;
+        RunExecutorCrashProcess(sandbox, "BackupsReady", 911, 3002);
+    }
+}
+
 TEST_CASE("Rollback cleanup preserves unknown transaction artifacts", "[quest.party-state.restore-executor][confinement]")
 {
     RestoreExecutorSandbox sandbox;
@@ -383,6 +501,47 @@ TEST_CASE("Restored recovery verifies bytes before durably committing", "[quest.
     REQUIRE(loaded.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
     REQUIRE(loaded.State.has_value());
     REQUIRE(loaded.State->Phase == PartyQuestReplicaRestoreJournalPhase::Committed);
+}
+
+TEST_CASE("Restored recovery rolls back and remains uncommitted when live bytes diverge", "[quest.party-state.restore-executor][fault]")
+{
+    RestoreExecutorSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 912;
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, kWorldRevision) / "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    WriteExecutorBytes(checkpoint, "CANONICAL_912");
+    WriteExecutorBytes(destination, "ORIGINAL_912");
+
+    const auto plan = BuildExecutorPlan(paths, checkpoint, destination, kWorldRevision);
+    auto state = PrepareDurableExecutorState(paths, plan, 3003);
+    WriteExecutorBytes(state.Operations[0].RollbackPath, "ORIGINAL_912");
+    REQUIRE(PartyQuestReplicaRestoreJournal::MarkBackupsReady(state) ==
+        PartyQuestReplicaRestoreJournalStatus::Ready);
+    const auto journalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(state);
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(journalPath, state) ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(PartyQuestReplicaRestoreJournal::MarkMutationStarted(state) ==
+        PartyQuestReplicaRestoreJournalStatus::Ready);
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(journalPath, state) ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+
+    WriteExecutorBytes(destination, "CANONICAL_912");
+    REQUIRE(PartyQuestReplicaRestoreJournal::MarkRestored(state) ==
+        PartyQuestReplicaRestoreJournalStatus::Ready);
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(journalPath, state) ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+
+    WriteExecutorBytes(destination, "CORRUPTED_RESTORED_912");
+
+    const auto report = PartyQuestReplicaRestoreExecutor::Recover(
+        paths, kExecutorCampaign, kExecutorPlayer, journalPath);
+    REQUIRE(report.Status ==
+        PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed);
+    REQUIRE(report.RollbackPerformed);
+    REQUIRE_FALSE(report.IsCheckpointRestored());
+    REQUIRE(ReadExecutorBytes(destination) == "ORIGINAL_912");
 }
 
 TEST_CASE("Committed recovery re-verifies live bytes before reporting an exact restore", "[quest.party-state.restore-executor][fault]")
