@@ -103,7 +103,8 @@ PartyQuestRuntimeApplySession BuildAssemblerSession()
         [](const PartyQuestRuntimeRecoveryState&)
         {
             return true;
-        });
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
 }
 
 PartyQuestCheckpointCaptureEpoch BeginCaptureEpoch(

@@ -95,6 +95,8 @@ TEST_CASE("Runtime session store binds a fresh player sidecar without inventing 
     const auto result = PartyQuestRuntimeSessionStore::BindAndLoad(session, paths);
     REQUIRE(result.Status == PartyQuestRuntimeSessionStoreStatus::NewSession);
     REQUIRE(result.PersistenceStatus == PartyQuestRuntimeApplyPersistenceStatus::FileNotFound);
+    REQUIRE(session.GetPersistenceGuarantee() ==
+        PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee);
     REQUIRE_FALSE(std::filesystem::exists(paths.RuntimeApplySidecar));
     REQUIRE(session.GetCoordinator().GetActive() == nullptr);
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());

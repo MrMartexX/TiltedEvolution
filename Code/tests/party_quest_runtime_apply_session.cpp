@@ -125,7 +125,7 @@ PartyQuestRuntimeDurableTransitionStatus MarkSessionPapyrusQuiescent(
 }
 } // namespace
 
-TEST_CASE("Durable runtime session persists every critical transition before publishing it", "[quest.party-state.runtime-apply.session]")
+TEST_CASE("Process-crash runtime session persists every critical transition before publishing it", "[quest.party-state.runtime-apply.session]")
 {
     DurableCapture capture;
     auto session = BuildSession(capture);
@@ -273,7 +273,7 @@ TEST_CASE("Live abort cannot clear a possibly mutated repair before checkpoint r
     REQUIRE(capture.States.back().Active == std::nullopt);
 }
 
-TEST_CASE("Pre-mutation abort is durable and needs no checkpoint rollback", "[quest.party-state.runtime-apply.session]")
+TEST_CASE("Pre-mutation abort is persisted and needs no checkpoint rollback", "[quest.party-state.runtime-apply.session]")
 {
     DurableCapture capture;
     auto session = BuildSession(capture);

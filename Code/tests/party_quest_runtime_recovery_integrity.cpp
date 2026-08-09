@@ -121,7 +121,8 @@ TEST_CASE("Committed restore journal cannot clear runtime barrier after live rep
         [&allowPersistence](const PartyQuestRuntimeRecoveryState&)
         {
             return allowPersistence;
-        });
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     REQUIRE(session.RestoreRecoveryState(BuildIntegrityRecoveryState(kWorldRevision)) ==
         PartyQuestRuntimeRecoveryDisposition::CheckpointRestoreRequired);
 

@@ -264,6 +264,7 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
 
         case PartyQuestRuntimeDurableTransitionStatus::InvalidState:
         case PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired:
+        case PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability:
             result.Status = PartyQuestRuntimeCheckpointStatus::InvalidRuntimeState;
             break;
         }

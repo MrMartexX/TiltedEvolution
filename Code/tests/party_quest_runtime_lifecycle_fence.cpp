@@ -45,7 +45,8 @@ PartyQuestRuntimeApplySession BuildLifecycleSession(LifecycleDurability& aDurabi
         [&aDurability](const PartyQuestRuntimeRecoveryState& acState)
         {
             return aDurability.Persist(acState);
-        });
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
 }
 
 PartyQuestRuntimeApplyRequest BuildLifecycleRequest(

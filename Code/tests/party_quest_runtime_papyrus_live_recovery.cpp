@@ -183,7 +183,8 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
     PartyQuestRuntimeApplySession session(
         kLiveRecoveryCampaign,
         kLiveRecoveryPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; });
+        [](const PartyQuestRuntimeRecoveryState&) { return true; },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     PartyQuestRuntimeGuardedSession guarded(session);
     const auto request = BuildLiveRecoveryRequest(transactionId, worldRevision);
 
@@ -249,7 +250,8 @@ TEST_CASE("Only terminal authoritative monitor failures request live recovery", 
     PartyQuestRuntimeApplySession session(
         kLiveRecoveryCampaign,
         kLiveRecoveryPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; });
+        [](const PartyQuestRuntimeRecoveryState&) { return true; },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     PartyQuestRuntimeGuardedSession guarded(session);
     const auto request = BuildLiveRecoveryRequest(transactionId, worldRevision);
 

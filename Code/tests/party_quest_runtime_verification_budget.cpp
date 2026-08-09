@@ -124,7 +124,8 @@ TEST_CASE("Repeated verification divergence exhausts the process budget and requ
     PartyQuestRuntimeApplySession session(
         kVerificationBudgetCampaign,
         kVerificationBudgetPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; });
+        [](const PartyQuestRuntimeRecoveryState&) { return true; },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     PartyQuestRuntimeGuardedSession guarded(session);
     const auto request = BuildVerificationBudgetRequest(transactionId, 0x3000);
     PartyQuestRuntimeVerificationMonitor verificationMonitor;
@@ -185,7 +186,8 @@ TEST_CASE("Verification deadline starts at Verifying transition and cannot wait 
     PartyQuestRuntimeApplySession session(
         kVerificationBudgetCampaign,
         kVerificationBudgetPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; });
+        [](const PartyQuestRuntimeRecoveryState&) { return true; },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     PartyQuestRuntimeGuardedSession guarded(session);
     const auto request = BuildVerificationBudgetRequest(transactionId, 0x3100);
     PartyQuestRuntimeVerificationMonitor verificationMonitor;

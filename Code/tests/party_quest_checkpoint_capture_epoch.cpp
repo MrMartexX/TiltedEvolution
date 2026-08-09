@@ -46,7 +46,8 @@ PartyQuestRuntimeApplySession BuildEpochSession()
         [](const PartyQuestRuntimeRecoveryState&)
         {
             return true;
-        });
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
 }
 } // namespace
 

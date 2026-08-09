@@ -69,7 +69,8 @@ PartyQuestRuntimeApplySession BuildGuardSession(GuardDurability& aDurability)
         [&aDurability](const PartyQuestRuntimeRecoveryState& acState)
         {
             return aDurability.Persist(acState);
-        });
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
 }
 
 PartyQuestRuntimeGuardResult MarkGuardedPapyrusQuiescent(

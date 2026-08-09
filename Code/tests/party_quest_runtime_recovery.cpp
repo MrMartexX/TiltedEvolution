@@ -174,7 +174,8 @@ PartyQuestRuntimeApplySession BuildBlockedSession(
         [&aCapture](const PartyQuestRuntimeRecoveryState& acState)
         {
             return aCapture.Persist(acState);
-        });
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     const auto disposition = session.RestoreRecoveryState(
         BuildBlockedRecoveryState(aTransactionId, aWorldRevision));
     REQUIRE(disposition == PartyQuestRuntimeRecoveryDisposition::CheckpointRestoreRequired);

@@ -38,10 +38,10 @@ struct PartyQuestRuntimeDurableVerificationResult
  * Durability barrier around PartyQuestRuntimeApplyCoordinator.
  *
  * Every state-changing transition is first applied to a copy, then the complete
- * campaign/player-bound recovery state is durably persisted, and only then
- * published in memory. This is especially important for ArmRuntimeMutation():
- * the "mutation may have occurred" marker is guaranteed durable before the
- * caller is allowed to invoke any Skyrim/Papyrus mutation.
+ * campaign/player-bound recovery state is persisted through the bound handler,
+ * and only then published in memory. ArmRuntimeMutation additionally requires
+ * an explicitly declared guarantee meeting the PoC process-crash contract.
+ * Current storage does not claim power-loss durability.
  *
  * The session still does not call Skyrim, Papyrus, save APIs or file I/O itself.
  * Production runtime integration must couple it to PartyQuestRuntimeGuardedSession

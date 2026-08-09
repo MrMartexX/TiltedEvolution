@@ -144,7 +144,8 @@ TEST_CASE("Production epoch collector rejects sidecar consistency without a comp
         [](const PartyQuestRuntimeRecoveryState&)
         {
             return true;
-        });
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     PartyQuestSaveGuard saveGuard;
     PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
     const auto request = BuildConsistencyRequest(28001, manifest);

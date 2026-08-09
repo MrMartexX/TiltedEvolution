@@ -97,7 +97,8 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
     PartyQuestRuntimeApplySession session(
         kPapyrusAuthorityCampaign,
         kPapyrusAuthorityPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; });
+        [](const PartyQuestRuntimeRecoveryState&) { return true; },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     PartyQuestRuntimeGuardedSession guarded(session);
     REQUIRE(&guarded.GetRuntimeSession() == &session);
     REQUIRE(&guarded.GetSaveGuard() == &processGuard);
@@ -226,7 +227,8 @@ TEST_CASE("Stable verification cannot be committed after its deadline", "[quest.
     PartyQuestRuntimeApplySession session(
         kPapyrusAuthorityCampaign,
         kPapyrusAuthorityPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; });
+        [](const PartyQuestRuntimeRecoveryState&) { return true; },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     PartyQuestRuntimeGuardedSession guarded(session);
     const auto request = BuildProcessGuardRequest(transactionId);
 

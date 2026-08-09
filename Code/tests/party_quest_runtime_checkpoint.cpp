@@ -156,7 +156,8 @@ PartyQuestRuntimeApplySession BuildCheckpointSession(DurableCapture& aCapture)
         [&aCapture](const PartyQuestRuntimeRecoveryState& acState)
         {
             return aCapture.Persist(acState);
-        });
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
 }
 
 PartyQuestReplicaCopyPlan BuildPreRepairPlan(

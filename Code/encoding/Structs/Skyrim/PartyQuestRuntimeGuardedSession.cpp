@@ -131,6 +131,9 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::Transition(
     case PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure:
         result.Status = PartyQuestRuntimeGuardStatus::PersistenceFailure;
         break;
+    case PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability:
+        result.Status = PartyQuestRuntimeGuardStatus::InsufficientDurability;
+        break;
     case PartyQuestRuntimeDurableTransitionStatus::InvalidState:
         result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
         break;

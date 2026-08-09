@@ -25,7 +25,8 @@ enum class PartyQuestRuntimeGuardStatus : uint8_t
     UnsafePlan,
     InvalidState,
     GuardReleaseFailed,
-    RecoveryFailed
+    RecoveryFailed,
+    InsufficientDurability
 };
 
 struct PartyQuestRuntimeGuardResult

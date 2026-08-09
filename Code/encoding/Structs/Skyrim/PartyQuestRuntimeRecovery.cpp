@@ -301,6 +301,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
 
         case PartyQuestRuntimeDurableTransitionStatus::InvalidState:
         case PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired:
+        case PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability:
             result.Status = PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState;
             return result;
         }
