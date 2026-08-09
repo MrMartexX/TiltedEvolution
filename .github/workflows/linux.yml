@@ -96,7 +96,28 @@ jobs:
     # Setup compilation mode and install project dependencies
     - name: Configure xmake and install dependencies
       if: steps.scope.outputs.full == 'true'
-      run: timeout 15m xmake config --arch=${{ matrix.arch }} --mode=${{ matrix.mode }} --yes
+      shell: bash
+      run: |
+        set +e
+        timeout 15m xmake config \
+          --arch=${{ matrix.arch }} \
+          --mode=${{ matrix.mode }} \
+          --yes
+        status=$?
+        set -e
+
+        if (( status != 0 )); then
+          while IFS= read -r log; do
+            echo "::group::xmake package failure: $log"
+            sed -n '1,240p' "$log"
+            echo "::endgroup::"
+          done < <(find "$HOME/.xmake/cache/packages" \
+            -path '*/installdir.failed/logs/install.txt' \
+            -type f \
+            -print 2>/dev/null | sort)
+        fi
+
+        exit "$status"
 
     # Build the server
     - name: Build
