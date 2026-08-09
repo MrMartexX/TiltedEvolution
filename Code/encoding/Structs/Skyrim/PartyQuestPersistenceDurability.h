@@ -23,11 +23,19 @@ struct PartyQuestPersistenceDurabilityPolicy
         PartyQuestPersistenceGuarantee::ProcessCrashResilient;
     static constexpr PartyQuestPersistenceGuarantee MinimumPoCRuntimeMutationGuarantee =
         PartyQuestPersistenceGuarantee::ProcessCrashResilient;
+    static constexpr PartyQuestPersistenceGuarantee MinimumProductionRuntimeMutationGuarantee =
+        PartyQuestPersistenceGuarantee::PowerLossDurable;
 
     [[nodiscard]] static constexpr bool Meets(
         PartyQuestPersistenceGuarantee aProvided,
         PartyQuestPersistenceGuarantee aRequired) noexcept
     {
         return static_cast<uint8_t>(aProvided) >= static_cast<uint8_t>(aRequired);
+    }
+
+    [[nodiscard]] static constexpr bool IsProductionRuntimeMutationReady(
+        PartyQuestPersistenceGuarantee aProvided) noexcept
+    {
+        return Meets(aProvided, MinimumProductionRuntimeMutationGuarantee);
     }
 };

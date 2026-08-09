@@ -356,3 +356,14 @@ TEST_CASE("Volatile persistence cannot arm runtime mutation", "[quest.party-stat
         PartyQuestRuntimeApplyState::ReadyToApply);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
 }
+
+TEST_CASE("PoC process-crash persistence is not promoted to production power-loss durability", "[quest.party-state.runtime-apply.session][durability]")
+{
+    REQUIRE(PartyQuestPersistenceDurabilityPolicy::Meets(
+        PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee,
+        PartyQuestPersistenceDurabilityPolicy::MinimumPoCRuntimeMutationGuarantee));
+    REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::IsProductionRuntimeMutationReady(
+        PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee));
+    REQUIRE(PartyQuestPersistenceDurabilityPolicy::IsProductionRuntimeMutationReady(
+        PartyQuestPersistenceGuarantee::PowerLossDurable));
+}
