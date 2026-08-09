@@ -253,6 +253,45 @@ TEST_CASE("MutationStarted recovery rolls a partially restored replica back and 
     REQUIRE_FALSE(std::filesystem::exists(state.TransactionDirectory));
 }
 
+TEST_CASE("Rollback cleanup preserves unknown transaction artifacts", "[quest.party-state.restore-executor][confinement]")
+{
+    RestoreExecutorSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 906;
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, kWorldRevision) / "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    WriteExecutorBytes(checkpoint, "CANONICAL_906");
+    WriteExecutorBytes(destination, "ORIGINAL_906");
+
+    const auto plan = BuildExecutorPlan(paths, checkpoint, destination, kWorldRevision);
+    auto state = PrepareDurableExecutorState(paths, plan, 2002);
+    REQUIRE(state.Operations.size() == 1);
+    WriteExecutorBytes(state.Operations[0].RollbackPath, "ORIGINAL_906");
+    REQUIRE(PartyQuestReplicaRestoreJournal::MarkBackupsReady(state) ==
+        PartyQuestReplicaRestoreJournalStatus::Ready);
+    const auto journalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(state);
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(journalPath, state) ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(PartyQuestReplicaRestoreJournal::MarkMutationStarted(state) ==
+        PartyQuestReplicaRestoreJournalStatus::Ready);
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(journalPath, state) ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+
+    WriteExecutorBytes(destination, "CANONICAL_906");
+    const auto unknown = state.TransactionDirectory / "unknown.keep";
+    WriteExecutorBytes(unknown, "DO_NOT_DELETE");
+
+    const auto report = PartyQuestReplicaRestoreExecutor::Recover(
+        paths, kExecutorCampaign, kExecutorPlayer, journalPath);
+    REQUIRE(report.Status == PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback);
+    REQUIRE(report.RollbackPerformed);
+    REQUIRE(report.CleanupPending);
+    REQUIRE(ReadExecutorBytes(destination) == "ORIGINAL_906");
+    REQUIRE(ReadExecutorBytes(unknown) == "DO_NOT_DELETE");
+    REQUIRE(std::filesystem::exists(journalPath));
+}
+
 TEST_CASE("Restored recovery verifies bytes before durably committing", "[quest.party-state.restore-executor]")
 {
     RestoreExecutorSandbox sandbox;

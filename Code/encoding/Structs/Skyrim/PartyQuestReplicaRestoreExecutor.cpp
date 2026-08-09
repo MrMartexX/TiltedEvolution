@@ -774,9 +774,110 @@ bool RemoveTransactionDirectory(
             return false;
         }
 
+        std::set<std::filesystem::path> allowedFiles;
+        std::set<std::filesystem::path> allowedDirectories{*transactionDirectory};
+        const auto addFile = [&](const std::filesystem::path& acPath) {
+            const auto file = AbsoluteNormalized(acPath);
+            if (!file || !IsInside(*transactionDirectory, *file))
+                return false;
+            allowedFiles.insert(*file);
+            auto parent = file->parent_path();
+            while (parent != *transactionDirectory)
+            {
+                if (parent.empty() || !IsInside(*transactionDirectory, parent))
+                    return false;
+                allowedDirectories.insert(parent);
+                parent = parent.parent_path();
+            }
+            return true;
+        };
+
+        auto journal = PartyQuestReplicaRestoreJournal::GetJournalPath(acState);
+        if (!addFile(journal))
+            return false;
+        journal += ".tmp";
+        if (!addFile(journal))
+            return false;
+        journal.replace_extension(".bak");
+        if (!addFile(journal))
+            return false;
+        for (const auto& operation : acState.Operations)
+        {
+            if (!addFile(operation.RollbackPath))
+                return false;
+            auto temporary = operation.RollbackPath;
+            temporary += ".tmp";
+            if (!addFile(temporary))
+                return false;
+        }
+
+        std::vector<std::filesystem::path> observedFiles;
+        std::vector<std::filesystem::path> observedDirectories;
         std::error_code ec;
-        std::filesystem::remove_all(*transactionDirectory, ec);
-        return !ec;
+        std::filesystem::recursive_directory_iterator iterator(
+            *transactionDirectory,
+            std::filesystem::directory_options::none,
+            ec);
+        const std::filesystem::recursive_directory_iterator end;
+        if (ec)
+            return false;
+        size_t observedEntries{};
+        const size_t maxEntries = allowedFiles.size() + allowedDirectories.size();
+        for (; iterator != end; iterator.increment(ec))
+        {
+            if (ec || ++observedEntries > maxEntries)
+                return false;
+            const auto path = AbsoluteNormalized(iterator->path());
+            if (!path)
+                return false;
+            const auto node = InspectNode(*path);
+            if (node == NodeState::RegularFile && allowedFiles.contains(*path))
+                observedFiles.push_back(*path);
+            else if (node == NodeState::Directory && allowedDirectories.contains(*path))
+                observedDirectories.push_back(*path);
+            else
+                return false;
+        }
+        if (ec)
+            return false;
+
+        // Revalidate the complete observed set before the first deletion.
+        for (const auto& file : observedFiles)
+        {
+            if (InspectNode(file) != NodeState::RegularFile ||
+                !IsParentResolvedInside(*transactionDirectory, file))
+            {
+                return false;
+            }
+        }
+        for (const auto& directory : observedDirectories)
+        {
+            if (InspectNode(directory) != NodeState::Directory ||
+                !IsResolvedInside(*transactionDirectory, directory))
+            {
+                return false;
+            }
+        }
+
+        for (const auto& file : observedFiles)
+        {
+            if (!RemoveRegularIfPresent(file))
+                return false;
+        }
+        std::sort(
+            observedDirectories.begin(),
+            observedDirectories.end(),
+            [](const auto& acLeft, const auto& acRight) {
+                return acLeft.native().size() > acRight.native().size();
+            });
+        for (const auto& directory : observedDirectories)
+        {
+            ec.clear();
+            if (!std::filesystem::remove(directory, ec) && ec)
+                return false;
+        }
+        ec.clear();
+        return std::filesystem::remove(*transactionDirectory, ec) && !ec;
     }
     catch (...)
     {
