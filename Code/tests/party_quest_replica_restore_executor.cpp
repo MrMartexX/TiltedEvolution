@@ -384,3 +384,38 @@ TEST_CASE("Restored recovery verifies bytes before durably committing", "[quest.
     REQUIRE(loaded.State.has_value());
     REQUIRE(loaded.State->Phase == PartyQuestReplicaRestoreJournalPhase::Committed);
 }
+
+TEST_CASE("Committed recovery re-verifies live bytes before reporting an exact restore", "[quest.party-state.restore-executor][fault]")
+{
+    RestoreExecutorSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 909;
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, kWorldRevision) / "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    WriteExecutorBytes(checkpoint, "CANONICAL_909");
+    WriteExecutorBytes(destination, "ORIGINAL_909");
+
+    const auto plan = BuildExecutorPlan(paths, checkpoint, destination, kWorldRevision);
+    const auto executed = PartyQuestReplicaRestoreExecutor::Execute(paths, plan, 2005);
+    REQUIRE(executed.Status == PartyQuestReplicaRestoreExecutionStatus::Success);
+
+    const auto verified = PartyQuestReplicaRestoreExecutor::Recover(
+        paths, kExecutorCampaign, kExecutorPlayer, executed.JournalPath);
+    REQUIRE(verified.Status == PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted);
+    REQUIRE(verified.IsCheckpointRestored());
+
+    WriteExecutorBytes(destination, "CORRUPTED_AFTER_COMMIT");
+    const auto rejected = PartyQuestReplicaRestoreExecutor::Recover(
+        paths, kExecutorCampaign, kExecutorPlayer, executed.JournalPath);
+    REQUIRE(rejected.Status ==
+        PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed);
+    REQUIRE_FALSE(rejected.IsCheckpointRestored());
+    REQUIRE_FALSE(rejected.RollbackPerformed);
+    REQUIRE(ReadExecutorBytes(destination) == "CORRUPTED_AFTER_COMMIT");
+
+    const auto loaded = PartyQuestReplicaRestoreJournalPersistence::Load(executed.JournalPath);
+    REQUIRE(loaded.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(loaded.State.has_value());
+    REQUIRE(loaded.State->Phase == PartyQuestReplicaRestoreJournalPhase::Committed);
+}

@@ -1400,6 +1400,16 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
 
         case PartyQuestReplicaRestoreRecoveryDisposition::Clean:
         {
+            // Committed records that verification succeeded at an earlier
+            // instant; it is not proof that the live replica still contains
+            // those bytes. Never report an exact restore without re-reading
+            // every destination from the persisted journal.
+            if (!PartyQuestReplicaRestoreJournal::VerifyRestoredTargets(state))
+            {
+                return MakeReport(
+                    state,
+                    PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed);
+            }
             auto report = MakeReport(
                 state,
                 PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted);
