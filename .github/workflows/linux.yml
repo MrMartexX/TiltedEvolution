@@ -77,6 +77,10 @@ jobs:
       if: steps.scope.outputs.full == 'true'
       run: sudo apt-get update
 
+    - name: Install build dependencies
+      if: steps.scope.outputs.full == 'true'
+      run: sudo apt-get install --no-install-recommends -y protobuf-compiler
+
     # Install xmake
     - name: Setup xmake
       if: steps.scope.outputs.full == 'true'
@@ -90,10 +94,8 @@ jobs:
       run: xmake repo --update
 
     # Setup compilation mode and install project dependencies
-    # (continue-on-error + timeout is a temporary solution until sentry-native is fixed; shouldn't affect the building step)
     - name: Configure xmake and install dependencies
       if: steps.scope.outputs.full == 'true'
-      continue-on-error: true
       run: timeout 15m xmake config --arch=${{ matrix.arch }} --mode=${{ matrix.mode }} --yes
 
     # Build the server
