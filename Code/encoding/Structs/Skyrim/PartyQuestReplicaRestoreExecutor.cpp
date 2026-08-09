@@ -665,6 +665,12 @@ bool RestoreOriginalDestinations(
             {
                 return false;
             }
+            if (aHooks.Invoke(
+                    PartyQuestReplicaRestoreExecutionBoundary::OriginalStateRestored,
+                    i) == PartyQuestReplicaRestoreExecutionDirective::FailClosed)
+            {
+                return false;
+            }
             continue;
         }
 
@@ -739,7 +745,7 @@ bool RestoreOriginalDestinations(
             return false;
         }
         if (aHooks.Invoke(
-                PartyQuestReplicaRestoreExecutionBoundary::OriginalFileRepublished,
+                PartyQuestReplicaRestoreExecutionBoundary::OriginalStateRestored,
                 i) == PartyQuestReplicaRestoreExecutionDirective::FailClosed)
         {
             return false;

@@ -125,15 +125,20 @@ PartyQuestReplicaRestorePlan BuildMultiFileExecutorPlan(
     uint64_t aWorldRevision)
 {
     const auto checkpointRoot = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
-        acPaths, PartyQuestCheckpointKind::PreRepair, aWorldRevision) / "saves";
-    const auto saveSource = checkpointRoot / "Hero.ess";
-    const auto cosaveSource = checkpointRoot / "Hero.skse";
+        acPaths, PartyQuestCheckpointKind::PreRepair, aWorldRevision);
+    const auto saveSource = checkpointRoot / "saves" / "Hero.ess";
+    const auto cosaveSource = checkpointRoot / "saves" / "Hero.skse";
+    const auto sidecarSource = checkpointRoot / "sidecars" / "external" /
+        "RequiredProvider" / "State.bin";
     const auto saveObservation =
         PartyQuestReplicaFileExecutor::ObserveRegularFile(saveSource);
     const auto cosaveObservation =
         PartyQuestReplicaFileExecutor::ObserveRegularFile(cosaveSource);
+    const auto sidecarObservation =
+        PartyQuestReplicaFileExecutor::ObserveRegularFile(sidecarSource);
     REQUIRE(saveObservation.has_value());
     REQUIRE(cosaveObservation.has_value());
+    REQUIRE(sidecarObservation.has_value());
 
     PartyQuestReplicaRestorePlan plan;
     plan.Status = PartyQuestReplicaRestorePlanStatus::Ready;
@@ -153,6 +158,12 @@ PartyQuestReplicaRestorePlan BuildMultiFileExecutorPlan(
         acPaths.SavesDirectory / "Hero.skse",
         cosaveObservation->Size,
         cosaveObservation->Digest});
+    plan.Operations.push_back({
+        PartyQuestReplicaFileKind::ExternalSidecar,
+        sidecarSource,
+        acPaths.SidecarsDirectory / "external" / "RequiredProvider" / "State.bin",
+        sidecarObservation->Size,
+        sidecarObservation->Digest});
     return plan;
 }
 
@@ -161,13 +172,16 @@ void WriteMultiFileExecutorFixture(
     uint64_t aWorldRevision)
 {
     const auto checkpointRoot = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
-        acPaths, PartyQuestCheckpointKind::PreRepair, aWorldRevision) / "saves";
+        acPaths, PartyQuestCheckpointKind::PreRepair, aWorldRevision);
     WriteExecutorBytes(
-        checkpointRoot / "Hero.ess",
+        checkpointRoot / "saves" / "Hero.ess",
         "CANONICAL_SAVE_" + std::to_string(aWorldRevision));
     WriteExecutorBytes(
-        checkpointRoot / "Hero.skse",
+        checkpointRoot / "saves" / "Hero.skse",
         "CANONICAL_COSAVE_" + std::to_string(aWorldRevision));
+    WriteExecutorBytes(
+        checkpointRoot / "sidecars" / "external" / "RequiredProvider" / "State.bin",
+        "CANONICAL_SIDECAR_" + std::to_string(aWorldRevision));
     WriteExecutorBytes(
         acPaths.SavesDirectory / "Hero.ess",
         "ORIGINAL_SAVE_" + std::to_string(aWorldRevision));
@@ -281,6 +295,8 @@ void RunExecutorCrashProcess(
             "ORIGINAL_SAVE_" + std::to_string(aWorldRevision));
         REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.skse") ==
             "ORIGINAL_COSAVE_" + std::to_string(aWorldRevision));
+        REQUIRE_FALSE(std::filesystem::exists(
+            paths.SidecarsDirectory / "external" / "RequiredProvider" / "State.bin"));
     }
     else
     {
@@ -607,7 +623,7 @@ TEST_CASE("Interrupted multi-file rollback keeps a retryable mutation journal", 
 
     RestoreBoundaryFailureScript script{{
         {PartyQuestReplicaRestoreExecutionBoundary::RestoredFilePublished, 1},
-        {PartyQuestReplicaRestoreExecutionBoundary::OriginalFileRepublished, 1}}};
+        {PartyQuestReplicaRestoreExecutionBoundary::OriginalStateRestored, 1}}};
     const auto failed = PartyQuestReplicaRestoreExecutor::Execute(
         paths,
         plan,
@@ -646,6 +662,63 @@ TEST_CASE("Interrupted multi-file rollback keeps a retryable mutation journal", 
         "ORIGINAL_SAVE_914");
     REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.skse") ==
         "ORIGINAL_COSAVE_914");
+    REQUIRE_FALSE(std::filesystem::exists(retained.State->TransactionDirectory));
+}
+
+TEST_CASE("Interrupted rollback remembers removal of a newly published required sidecar", "[quest.party-state.restore-executor][fault][multi-file][sidecar]")
+{
+    RestoreExecutorSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 915;
+    constexpr uint64_t kRestoreId = 3006;
+    WriteMultiFileExecutorFixture(paths, kWorldRevision);
+    const auto plan = BuildMultiFileExecutorPlan(paths, kWorldRevision);
+    const auto sidecar = paths.SidecarsDirectory / "external" /
+        "RequiredProvider" / "State.bin";
+    REQUIRE_FALSE(std::filesystem::exists(sidecar));
+
+    RestoreBoundaryFailureScript script{{
+        {PartyQuestReplicaRestoreExecutionBoundary::RestoredFilePublished, 2},
+        {PartyQuestReplicaRestoreExecutionBoundary::OriginalStateRestored, 2}}};
+    const auto failed = PartyQuestReplicaRestoreExecutor::Execute(
+        paths,
+        plan,
+        kRestoreId,
+        {FailAtScriptedBoundary, &script});
+
+    REQUIRE(failed.Status == PartyQuestReplicaRestoreExecutionStatus::RollbackFailed);
+    REQUIRE(failed.CompletedOperations == 3);
+    REQUIRE_FALSE(failed.RollbackPerformed);
+    REQUIRE_FALSE(failed.IsCheckpointRestored());
+    REQUIRE(script.Next == script.Steps.size());
+    REQUIRE_FALSE(std::filesystem::exists(sidecar));
+    REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.ess") ==
+        "CANONICAL_SAVE_915");
+    REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.skse") ==
+        "CANONICAL_COSAVE_915");
+
+    const auto retained = PartyQuestReplicaRestoreJournalPersistence::Load(
+        failed.JournalPath);
+    REQUIRE(retained.Status ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(retained.State.has_value());
+    REQUIRE(retained.State->Phase ==
+        PartyQuestReplicaRestoreJournalPhase::MutationStarted);
+
+    const auto recovered = PartyQuestReplicaRestoreExecutor::Recover(
+        paths,
+        kExecutorCampaign,
+        kExecutorPlayer,
+        failed.JournalPath);
+    REQUIRE(recovered.Status ==
+        PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback);
+    REQUIRE(recovered.RollbackPerformed);
+    REQUIRE_FALSE(recovered.IsCheckpointRestored());
+    REQUIRE_FALSE(std::filesystem::exists(sidecar));
+    REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.ess") ==
+        "ORIGINAL_SAVE_915");
+    REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.skse") ==
+        "ORIGINAL_COSAVE_915");
     REQUIRE_FALSE(std::filesystem::exists(retained.State->TransactionDirectory));
 }
 

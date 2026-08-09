@@ -35,7 +35,7 @@ enum class PartyQuestReplicaRestoreExecutionBoundary : uint8_t
 {
     OriginalMovedAside,
     RestoredFilePublished,
-    OriginalFileRepublished
+    OriginalStateRestored
 };
 
 enum class PartyQuestReplicaRestoreExecutionDirective : uint8_t
