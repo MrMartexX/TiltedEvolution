@@ -647,7 +647,8 @@ bool VerifyOriginalDestinations(
 bool RestoreOriginalDestinations(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaRestoreJournalState& acState,
-    bool& aCleanupPending) noexcept
+    bool& aCleanupPending,
+    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
 {
     for (size_t reverse = acState.Operations.size(); reverse > 0; --reverse)
     {
@@ -734,6 +735,12 @@ bool RestoreOriginalDestinations(
                 operation.ReplicaDestinationPath,
                 operation.OriginalSize,
                 operation.OriginalDigest))
+        {
+            return false;
+        }
+        if (aHooks.Invoke(
+                PartyQuestReplicaRestoreExecutionBoundary::OriginalFileRepublished,
+                i) == PartyQuestReplicaRestoreExecutionDirective::FailClosed)
         {
             return false;
         }
@@ -891,7 +898,8 @@ PartyQuestReplicaRestoreExecutionReport RollbackAndReport(
     PartyQuestReplicaRestoreExecutionStatus aFailureStatus,
     size_t aFailedOperation,
     const std::filesystem::path& acFailedPath,
-    bool aRecoveredRollback) noexcept
+    bool aRecoveredRollback,
+    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
 {
     auto report = MakeReport(
         acState,
@@ -902,7 +910,7 @@ PartyQuestReplicaRestoreExecutionReport RollbackAndReport(
         acFailedPath);
 
     bool cleanupPending{};
-    if (!RestoreOriginalDestinations(acPaths, acState, cleanupPending))
+    if (!RestoreOriginalDestinations(acPaths, acState, cleanupPending, aHooks))
     {
         report.Status = PartyQuestReplicaRestoreExecutionStatus::RollbackFailed;
         report.CleanupPending = cleanupPending;
@@ -920,7 +928,8 @@ RestoreFailure ReplaceStagedFiles(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaRestoreJournalState& acState,
     const std::vector<std::filesystem::path>& acStaged,
-    size_t& aCompleted) noexcept
+    size_t& aCompleted,
+    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
 {
     aCompleted = 0;
     for (size_t i = 0; i < acState.Operations.size(); ++i)
@@ -990,6 +999,16 @@ RestoreFailure ReplaceStagedFiles(
                     operation.ReplicaDestinationPath};
             }
             movedOriginal = true;
+            if (aHooks.Invoke(
+                    PartyQuestReplicaRestoreExecutionBoundary::OriginalMovedAside,
+                    i) == PartyQuestReplicaRestoreExecutionDirective::FailClosed)
+            {
+                RenameFile(oldPath, operation.ReplicaDestinationPath);
+                return {
+                    PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed,
+                    i,
+                    operation.ReplicaDestinationPath};
+            }
         }
 
         if (!RenameFile(acStaged[i], operation.ReplicaDestinationPath))
@@ -1013,13 +1032,23 @@ RestoreFailure ReplaceStagedFiles(
                 operation.ReplicaDestinationPath};
         }
         ++aCompleted;
+        if (aHooks.Invoke(
+                PartyQuestReplicaRestoreExecutionBoundary::RestoredFilePublished,
+                i) == PartyQuestReplicaRestoreExecutionDirective::FailClosed)
+        {
+            return {
+                PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed,
+                i,
+                operation.ReplicaDestinationPath};
+        }
     }
     return {};
 }
 
 PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
     const PartyQuestCoopSavePaths& acPaths,
-    PartyQuestReplicaRestoreJournalState& aState) noexcept
+    PartyQuestReplicaRestoreJournalState& aState,
+    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
 {
     const auto journalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(aState);
 
@@ -1094,7 +1123,8 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
     }
 
     size_t completed{};
-    const RestoreFailure replacement = ReplaceStagedFiles(acPaths, aState, staged, completed);
+    const RestoreFailure replacement = ReplaceStagedFiles(
+        acPaths, aState, staged, completed, aHooks);
     if (!replacement.IsSuccess())
     {
         auto report = RollbackAndReport(
@@ -1103,7 +1133,8 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
             replacement.Status,
             replacement.Index,
             replacement.Path,
-            false);
+            false,
+            aHooks);
         report.CompletedOperations = completed;
         return report;
     }
@@ -1117,7 +1148,8 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
             PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed,
             0,
             {},
-            false);
+            false,
+            aHooks);
         report.CompletedOperations = completed;
         return report;
     }
@@ -1130,7 +1162,8 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
             PartyQuestReplicaRestoreExecutionStatus::JournalPersistenceFailed,
             0,
             journalPath,
-            false);
+            false,
+            aHooks);
         report.CompletedOperations = completed;
         return report;
     }
@@ -1226,7 +1259,8 @@ bool PartyQuestReplicaRestoreResourcePolicy::HasSufficientDiskSpace(
 PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execute(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaRestorePlan& acPlan,
-    uint64_t aRestoreId) noexcept
+    uint64_t aRestoreId,
+    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
 {
     try
     {
@@ -1283,7 +1317,7 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execut
                 PartyQuestReplicaRestoreExecutionStatus::JournalPersistenceFailed);
         }
 
-        return ContinueBeforeMutation(acPaths, state);
+        return ContinueBeforeMutation(acPaths, state, aHooks);
     }
     catch (...)
     {
@@ -1300,7 +1334,8 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestCampaignId& acExpectedCampaignId,
     const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
-    const std::filesystem::path& acJournalPath) noexcept
+    const std::filesystem::path& acJournalPath,
+    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
 {
     try
     {
@@ -1349,7 +1384,7 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
         switch (PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(state))
         {
         case PartyQuestReplicaRestoreRecoveryDisposition::ResumeBeforeMutation:
-            return ContinueBeforeMutation(acPaths, state);
+            return ContinueBeforeMutation(acPaths, state, aHooks);
 
         case PartyQuestReplicaRestoreRecoveryDisposition::RollbackRequired:
             return RollbackAndReport(
@@ -1358,7 +1393,8 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
                 PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback,
                 0,
                 {},
-                true);
+                true,
+                aHooks);
 
         case PartyQuestReplicaRestoreRecoveryDisposition::VerifyThenCommit:
         {
@@ -1370,7 +1406,8 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
                     PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed,
                     0,
                     {},
-                    false);
+                    false,
+                    aHooks);
             }
             if (PartyQuestReplicaRestoreJournal::MarkCommitted(state) !=
                 PartyQuestReplicaRestoreJournalStatus::Ready)

@@ -31,6 +31,45 @@ enum class PartyQuestReplicaRestoreExecutionStatus : uint8_t
     InsufficientDiskSpace
 };
 
+enum class PartyQuestReplicaRestoreExecutionBoundary : uint8_t
+{
+    OriginalMovedAside,
+    RestoredFilePublished,
+    OriginalFileRepublished
+};
+
+enum class PartyQuestReplicaRestoreExecutionDirective : uint8_t
+{
+    Continue,
+    FailClosed
+};
+
+/**
+ * Ephemeral local execution observer used by deterministic fault validation.
+ * It is never serialized, receives no paths or bytes, and grants no mutation
+ * authority. Returning FailClosed makes the current filesystem transaction
+ * enter its normal rollback path.
+ */
+struct PartyQuestReplicaRestoreExecutionHooks
+{
+    using Callback = PartyQuestReplicaRestoreExecutionDirective (*)(
+        PartyQuestReplicaRestoreExecutionBoundary,
+        size_t,
+        void*) noexcept;
+
+    Callback OnBoundary{};
+    void* Context{};
+
+    [[nodiscard]] PartyQuestReplicaRestoreExecutionDirective Invoke(
+        PartyQuestReplicaRestoreExecutionBoundary aBoundary,
+        size_t aOperation) const noexcept
+    {
+        return OnBoundary
+            ? OnBoundary(aBoundary, aOperation, Context)
+            : PartyQuestReplicaRestoreExecutionDirective::Continue;
+    }
+};
+
 /** Local-only budget for a fresh crash-resumable restore before its journal exists. */
 struct PartyQuestReplicaRestoreResourcePolicy
 {
@@ -110,7 +149,8 @@ public:
     [[nodiscard]] static PartyQuestReplicaRestoreExecutionReport Execute(
         const PartyQuestCoopSavePaths& acPaths,
         const PartyQuestReplicaRestorePlan& acPlan,
-        uint64_t aRestoreId) noexcept;
+        uint64_t aRestoreId,
+        PartyQuestReplicaRestoreExecutionHooks aHooks = {}) noexcept;
 
     /**
      * Recovers a durable restore journal.
@@ -123,5 +163,6 @@ public:
         const PartyQuestCoopSavePaths& acPaths,
         const PartyQuestCampaignId& acExpectedCampaignId,
         const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
-        const std::filesystem::path& acJournalPath) noexcept;
+        const std::filesystem::path& acJournalPath,
+        PartyQuestReplicaRestoreExecutionHooks aHooks = {}) noexcept;
 };

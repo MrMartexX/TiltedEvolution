@@ -8,6 +8,8 @@
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <utility>
+#include <vector>
 
 const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
@@ -118,6 +120,100 @@ PartyQuestReplicaRestorePlan BuildExecutorPlan(
     return plan;
 }
 
+PartyQuestReplicaRestorePlan BuildMultiFileExecutorPlan(
+    const PartyQuestCoopSavePaths& acPaths,
+    uint64_t aWorldRevision)
+{
+    const auto checkpointRoot = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        acPaths, PartyQuestCheckpointKind::PreRepair, aWorldRevision) / "saves";
+    const auto saveSource = checkpointRoot / "Hero.ess";
+    const auto cosaveSource = checkpointRoot / "Hero.skse";
+    const auto saveObservation =
+        PartyQuestReplicaFileExecutor::ObserveRegularFile(saveSource);
+    const auto cosaveObservation =
+        PartyQuestReplicaFileExecutor::ObserveRegularFile(cosaveSource);
+    REQUIRE(saveObservation.has_value());
+    REQUIRE(cosaveObservation.has_value());
+
+    PartyQuestReplicaRestorePlan plan;
+    plan.Status = PartyQuestReplicaRestorePlanStatus::Ready;
+    plan.CampaignId = kExecutorCampaign;
+    plan.PlayerProfileId = kExecutorPlayer;
+    plan.CheckpointKind = PartyQuestCheckpointKind::PreRepair;
+    plan.CampaignWorldRevision = aWorldRevision;
+    plan.Operations.push_back({
+        PartyQuestReplicaFileKind::SkyrimSave,
+        saveSource,
+        acPaths.SavesDirectory / "Hero.ess",
+        saveObservation->Size,
+        saveObservation->Digest});
+    plan.Operations.push_back({
+        PartyQuestReplicaFileKind::SkseCosave,
+        cosaveSource,
+        acPaths.SavesDirectory / "Hero.skse",
+        cosaveObservation->Size,
+        cosaveObservation->Digest});
+    return plan;
+}
+
+void WriteMultiFileExecutorFixture(
+    const PartyQuestCoopSavePaths& acPaths,
+    uint64_t aWorldRevision)
+{
+    const auto checkpointRoot = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        acPaths, PartyQuestCheckpointKind::PreRepair, aWorldRevision) / "saves";
+    WriteExecutorBytes(
+        checkpointRoot / "Hero.ess",
+        "CANONICAL_SAVE_" + std::to_string(aWorldRevision));
+    WriteExecutorBytes(
+        checkpointRoot / "Hero.skse",
+        "CANONICAL_COSAVE_" + std::to_string(aWorldRevision));
+    WriteExecutorBytes(
+        acPaths.SavesDirectory / "Hero.ess",
+        "ORIGINAL_SAVE_" + std::to_string(aWorldRevision));
+    WriteExecutorBytes(
+        acPaths.SavesDirectory / "Hero.skse",
+        "ORIGINAL_COSAVE_" + std::to_string(aWorldRevision));
+}
+
+struct RestoreBoundaryFailureScript
+{
+    std::vector<std::pair<PartyQuestReplicaRestoreExecutionBoundary, size_t>> Steps;
+    size_t Next{};
+};
+
+PartyQuestReplicaRestoreExecutionDirective FailAtScriptedBoundary(
+    PartyQuestReplicaRestoreExecutionBoundary aBoundary,
+    size_t aOperation,
+    void* apContext) noexcept
+{
+    auto& script = *static_cast<RestoreBoundaryFailureScript*>(apContext);
+    if (script.Next < script.Steps.size() &&
+        script.Steps[script.Next] == std::pair{aBoundary, aOperation})
+    {
+        ++script.Next;
+        return PartyQuestReplicaRestoreExecutionDirective::FailClosed;
+    }
+    return PartyQuestReplicaRestoreExecutionDirective::Continue;
+}
+
+struct RestoreCrashBoundary
+{
+    PartyQuestReplicaRestoreExecutionBoundary Boundary;
+    size_t Operation{};
+};
+
+PartyQuestReplicaRestoreExecutionDirective CrashAtBoundary(
+    PartyQuestReplicaRestoreExecutionBoundary aBoundary,
+    size_t aOperation,
+    void* apContext) noexcept
+{
+    const auto& crash = *static_cast<const RestoreCrashBoundary*>(apContext);
+    if (crash.Boundary == aBoundary && crash.Operation == aOperation)
+        std::_Exit(86);
+    return PartyQuestReplicaRestoreExecutionDirective::Continue;
+}
+
 PartyQuestReplicaRestoreJournalState PrepareDurableExecutorState(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaRestorePlan& acPlan,
@@ -153,10 +249,22 @@ void RunExecutorCrashProcess(
     REQUIRE(exitCode != 0);
 
     const auto paths = BuildExecutorPaths(acSandbox);
-    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
-        paths, PartyQuestCheckpointKind::PreRepair, aWorldRevision) / "saves" / "Hero.ess";
-    const auto destination = paths.SavesDirectory / "Hero.ess";
-    const auto plan = BuildExecutorPlan(paths, checkpoint, destination, aWorldRevision);
+    const bool mutationCrash =
+        std::string(apPhase) == "OriginalMoved" ||
+        std::string(apPhase) == "FirstPublished";
+    PartyQuestReplicaRestorePlan plan;
+    if (mutationCrash)
+    {
+        plan = BuildMultiFileExecutorPlan(paths, aWorldRevision);
+    }
+    else
+    {
+        const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+            paths, PartyQuestCheckpointKind::PreRepair, aWorldRevision) /
+            "saves" / "Hero.ess";
+        plan = BuildExecutorPlan(
+            paths, checkpoint, paths.SavesDirectory / "Hero.ess", aWorldRevision);
+    }
     const auto prepared = PartyQuestReplicaRestoreJournal::Prepare(paths, plan, aRestoreId);
     REQUIRE(prepared.IsReady());
 
@@ -165,9 +273,21 @@ void RunExecutorCrashProcess(
         kExecutorCampaign,
         kExecutorPlayer,
         PartyQuestReplicaRestoreJournal::GetJournalPath(*prepared.State));
-    REQUIRE(report.Status == PartyQuestReplicaRestoreExecutionStatus::Success);
-    REQUIRE(ReadExecutorBytes(destination) ==
-        (std::string("CANONICAL_") + std::to_string(aWorldRevision)));
+    if (mutationCrash)
+    {
+        REQUIRE(report.Status == PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback);
+        REQUIRE(report.RollbackPerformed);
+        REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.ess") ==
+            "ORIGINAL_SAVE_" + std::to_string(aWorldRevision));
+        REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.skse") ==
+            "ORIGINAL_COSAVE_" + std::to_string(aWorldRevision));
+    }
+    else
+    {
+        REQUIRE(report.Status == PartyQuestReplicaRestoreExecutionStatus::Success);
+        REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.ess") ==
+            (std::string("CANONICAL_") + std::to_string(aWorldRevision)));
+    }
 }
 } // namespace
 
@@ -179,11 +299,36 @@ TEST_CASE("Restore executor subprocess crash helper", "[.][quest.party-state.res
     REQUIRE(phaseValue != nullptr);
 
     const std::string phase = phaseValue;
-    const uint64_t worldRevision = phase == "Prepared" ? 910 : 911;
-    const uint64_t restoreId = phase == "Prepared" ? 3001 : 3002;
-    REQUIRE((phase == "Prepared" || phase == "BackupsReady"));
+    const uint64_t worldRevision =
+        phase == "Prepared" ? 910 :
+        phase == "BackupsReady" ? 911 :
+        phase == "OriginalMoved" ? 913 : 914;
+    const uint64_t restoreId =
+        phase == "Prepared" ? 3001 :
+        phase == "BackupsReady" ? 3002 :
+        phase == "OriginalMoved" ? 3004 : 3005;
+    REQUIRE((phase == "Prepared" || phase == "BackupsReady" ||
+        phase == "OriginalMoved" || phase == "FirstPublished"));
 
     const auto paths = BuildExecutorPaths(std::filesystem::path(rootValue));
+    if (phase == "OriginalMoved" || phase == "FirstPublished")
+    {
+        WriteMultiFileExecutorFixture(paths, worldRevision);
+        const auto plan = BuildMultiFileExecutorPlan(paths, worldRevision);
+        RestoreCrashBoundary crash{
+            phase == "OriginalMoved"
+                ? PartyQuestReplicaRestoreExecutionBoundary::OriginalMovedAside
+                : PartyQuestReplicaRestoreExecutionBoundary::RestoredFilePublished,
+            0};
+        const auto report = PartyQuestReplicaRestoreExecutor::Execute(
+            paths,
+            plan,
+            restoreId,
+            {CrashAtBoundary, &crash});
+        FAIL("restore returned instead of terminating at the injected crash boundary: " <<
+            static_cast<int>(report.Status));
+    }
+
     const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
         paths, PartyQuestCheckpointKind::PreRepair, worldRevision) / "saves" / "Hero.ess";
     const auto destination = paths.SavesDirectory / "Hero.ess";
@@ -419,6 +564,103 @@ TEST_CASE("Durable pre-mutation restore phases survive abrupt process terminatio
     {
         RestoreExecutorSandbox sandbox;
         RunExecutorCrashProcess(sandbox, "BackupsReady", 911, 3002);
+    }
+}
+
+TEST_CASE("Partial multi-file publication rolls every destination back", "[quest.party-state.restore-executor][fault][multi-file]")
+{
+    RestoreExecutorSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 913;
+    constexpr uint64_t kRestoreId = 3004;
+    WriteMultiFileExecutorFixture(paths, kWorldRevision);
+    const auto plan = BuildMultiFileExecutorPlan(paths, kWorldRevision);
+
+    RestoreBoundaryFailureScript script{{
+        {PartyQuestReplicaRestoreExecutionBoundary::RestoredFilePublished, 0}}};
+    const auto report = PartyQuestReplicaRestoreExecutor::Execute(
+        paths,
+        plan,
+        kRestoreId,
+        {FailAtScriptedBoundary, &script});
+
+    REQUIRE(report.Status == PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed);
+    REQUIRE(report.CompletedOperations == 1);
+    REQUIRE(report.RollbackPerformed);
+    REQUIRE_FALSE(report.IsCheckpointRestored());
+    REQUIRE(script.Next == script.Steps.size());
+    REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.ess") ==
+        "ORIGINAL_SAVE_913");
+    REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.skse") ==
+        "ORIGINAL_COSAVE_913");
+    REQUIRE_FALSE(std::filesystem::exists(report.JournalPath.parent_path()));
+}
+
+TEST_CASE("Interrupted multi-file rollback keeps a retryable mutation journal", "[quest.party-state.restore-executor][fault][multi-file]")
+{
+    RestoreExecutorSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 914;
+    constexpr uint64_t kRestoreId = 3005;
+    WriteMultiFileExecutorFixture(paths, kWorldRevision);
+    const auto plan = BuildMultiFileExecutorPlan(paths, kWorldRevision);
+
+    RestoreBoundaryFailureScript script{{
+        {PartyQuestReplicaRestoreExecutionBoundary::RestoredFilePublished, 1},
+        {PartyQuestReplicaRestoreExecutionBoundary::OriginalFileRepublished, 1}}};
+    const auto failed = PartyQuestReplicaRestoreExecutor::Execute(
+        paths,
+        plan,
+        kRestoreId,
+        {FailAtScriptedBoundary, &script});
+
+    REQUIRE(failed.Status == PartyQuestReplicaRestoreExecutionStatus::RollbackFailed);
+    REQUIRE(failed.CompletedOperations == 2);
+    REQUIRE_FALSE(failed.RollbackPerformed);
+    REQUIRE_FALSE(failed.IsCheckpointRestored());
+    REQUIRE(script.Next == script.Steps.size());
+    REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.ess") ==
+        "CANONICAL_SAVE_914");
+    REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.skse") ==
+        "ORIGINAL_COSAVE_914");
+
+    const auto retained = PartyQuestReplicaRestoreJournalPersistence::Load(
+        failed.JournalPath);
+    REQUIRE(retained.Status ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(retained.State.has_value());
+    REQUIRE(retained.State->Phase ==
+        PartyQuestReplicaRestoreJournalPhase::MutationStarted);
+    REQUIRE(std::filesystem::exists(retained.State->TransactionDirectory));
+
+    const auto recovered = PartyQuestReplicaRestoreExecutor::Recover(
+        paths,
+        kExecutorCampaign,
+        kExecutorPlayer,
+        failed.JournalPath);
+    REQUIRE(recovered.Status ==
+        PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback);
+    REQUIRE(recovered.RollbackPerformed);
+    REQUIRE_FALSE(recovered.IsCheckpointRestored());
+    REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.ess") ==
+        "ORIGINAL_SAVE_914");
+    REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.skse") ==
+        "ORIGINAL_COSAVE_914");
+    REQUIRE_FALSE(std::filesystem::exists(retained.State->TransactionDirectory));
+}
+
+TEST_CASE("Multi-file restore recovers exact originals after rename-window process crashes", "[quest.party-state.restore-executor][fault][multi-file][process]")
+{
+    SECTION("destination moved aside before publication")
+    {
+        RestoreExecutorSandbox sandbox;
+        RunExecutorCrashProcess(sandbox, "OriginalMoved", 913, 3004);
+    }
+
+    SECTION("first restored file published")
+    {
+        RestoreExecutorSandbox sandbox;
+        RunExecutorCrashProcess(sandbox, "FirstPublished", 914, 3005);
     }
 }
 
