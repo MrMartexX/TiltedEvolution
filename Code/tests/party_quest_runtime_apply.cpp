@@ -427,6 +427,63 @@ TEST_CASE("Verification envelope binds exact current mutation coverage", "[quest
                     recovery.PlayerProfileId) ==
             PartyQuestRuntimeRecoveryDisposition::InvalidState);
     }
+
+    SECTION("verification schema drift fails closed")
+    {
+        ++recovery.Active->ExpectedVerification.SchemaVersion;
+        PartyQuestRuntimeApplyCoordinator restored;
+        REQUIRE(restored.RestoreRecoveryState(
+                    recovery,
+                    recovery.CampaignId,
+                    recovery.PlayerProfileId) ==
+            PartyQuestRuntimeRecoveryDisposition::InvalidState);
+    }
+
+    SECTION("unknown verification component fails closed")
+    {
+        recovery.Active->ExpectedVerification.Required =
+            recovery.Active->ExpectedVerification.Required |
+            static_cast<PartyQuestVerificationComponent>(1u << 31);
+        PartyQuestRuntimeApplyCoordinator restored;
+        REQUIRE(restored.RestoreRecoveryState(
+                    recovery,
+                    recovery.CampaignId,
+                    recovery.PlayerProfileId) ==
+            PartyQuestRuntimeRecoveryDisposition::InvalidState);
+    }
+
+    SECTION("inventory effects cannot appear without an authorized observer")
+    {
+        recovery.Active->ExpectedVerification.InventoryEffectsDigest = 0xBAD;
+        PartyQuestRuntimeApplyCoordinator restored;
+        REQUIRE(restored.RestoreRecoveryState(
+                    recovery,
+                    recovery.CampaignId,
+                    recovery.PlayerProfileId) ==
+            PartyQuestRuntimeRecoveryDisposition::InvalidState);
+    }
+
+    SECTION("world effects cannot appear without an authorized observer")
+    {
+        recovery.Active->ExpectedVerification.WorldEffectsDigest = 0xBAD;
+        PartyQuestRuntimeApplyCoordinator restored;
+        REQUIRE(restored.RestoreRecoveryState(
+                    recovery,
+                    recovery.CampaignId,
+                    recovery.PlayerProfileId) ==
+            PartyQuestRuntimeRecoveryDisposition::InvalidState);
+    }
+
+    SECTION("adapter state cannot appear without an authorized observer")
+    {
+        recovery.Active->ExpectedVerification.AdapterStateDigest = 0xBAD;
+        PartyQuestRuntimeApplyCoordinator restored;
+        REQUIRE(restored.RestoreRecoveryState(
+                    recovery,
+                    recovery.CampaignId,
+                    recovery.PlayerProfileId) ==
+            PartyQuestRuntimeRecoveryDisposition::InvalidState);
+    }
 }
 
 TEST_CASE("Verification policy rejects unknown mutation surfaces", "[quest.party-state.runtime-apply][verification-envelope]")
@@ -434,6 +491,10 @@ TEST_CASE("Verification policy rejects unknown mutation surfaces", "[quest.party
     const auto unknown = static_cast<PartyQuestApplyAction>(1u << 31);
     REQUIRE_FALSE(PartyQuestVerificationPolicy::BuildExpected(
         unknown,
+        0x1111,
+        0x2222).has_value());
+    REQUIRE_FALSE(PartyQuestVerificationPolicy::BuildExpected(
+        PartyQuestApplyAction::StageTransition | unknown,
         0x1111,
         0x2222).has_value());
 }
