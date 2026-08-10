@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestCampaignPersistence.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -272,6 +273,11 @@ TEST_CASE("Campaign identity metadata rejects invalid and corrupted archives", "
             invalidMarker.data() + kPayloadOffset,
             kLegacyPayloadSize + sizeof(uint8_t)));
     REQUIRE(PartyQuestCampaignPersistence::Decode(invalidMarker).Status ==
+            PartyQuestCampaignPersistenceStatus::InvalidData);
+
+    std::vector<uint8_t> oversized(
+        PartyQuestDurableResourcePolicy::MaxIdentityArchiveBytes + 1);
+    REQUIRE(PartyQuestCampaignPersistence::Decode(oversized).Status ==
             PartyQuestCampaignPersistenceStatus::InvalidData);
 }
 

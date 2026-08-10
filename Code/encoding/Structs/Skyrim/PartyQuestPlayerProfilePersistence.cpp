@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestPlayerProfilePersistence.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <algorithm>
 #include <array>
@@ -82,7 +83,8 @@ PartyQuestPlayerProfilePersistenceStatus ReadFile(
         return PartyQuestPlayerProfilePersistenceStatus::IoError;
 
     const auto size = static_cast<uint64_t>(end);
-    if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    if (size > PartyQuestDurableResourcePolicy::MaxIdentityArchiveBytes ||
+        size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
         return PartyQuestPlayerProfilePersistenceStatus::InvalidData;
 
     aBytes.resize(static_cast<size_t>(size));
@@ -165,6 +167,11 @@ PartyQuestPlayerProfilePersistenceResult PartyQuestPlayerProfilePersistence::Dec
     const std::vector<uint8_t>& acBytes)
 {
     PartyQuestPlayerProfilePersistenceResult result;
+    if (acBytes.size() > PartyQuestDurableResourcePolicy::MaxIdentityArchiveBytes)
+    {
+        result.Status = PartyQuestPlayerProfilePersistenceStatus::InvalidData;
+        return result;
+    }
     size_t offset{};
 
     if (acBytes.size() < kMagic.size())

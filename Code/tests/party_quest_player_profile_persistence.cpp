@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestPlayerProfilePersistence.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -59,6 +60,11 @@ TEST_CASE("Player profile identity rejects zero corruption truncation and unsupp
     unsupported[9] = 0x7F;
     REQUIRE(PartyQuestPlayerProfilePersistence::Decode(unsupported).Status ==
         PartyQuestPlayerProfilePersistenceStatus::UnsupportedVersion);
+
+    std::vector<uint8_t> oversized(
+        PartyQuestDurableResourcePolicy::MaxIdentityArchiveBytes + 1);
+    REQUIRE(PartyQuestPlayerProfilePersistence::Decode(oversized).Status ==
+        PartyQuestPlayerProfilePersistenceStatus::InvalidData);
 }
 
 TEST_CASE("Generated player profile identities are valid and distinct in-process", "[quest.party-state.player-profile]")

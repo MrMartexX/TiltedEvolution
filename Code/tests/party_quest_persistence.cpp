@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestStatePersistence.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -297,6 +298,11 @@ TEST_CASE("Party quest persistence rejects corrupted and truncated archives", "[
     unsupported[8] = 0xFF;
     unsupported[9] = 0x7F;
     REQUIRE(PartyQuestStatePersistence::Decode(unsupported).Status == PartyQuestPersistenceStatus::UnsupportedVersion);
+
+    std::vector<uint8_t> oversized(
+        PartyQuestDurableResourcePolicy::MaxCanonicalStateArchiveBytes + 1);
+    REQUIRE(PartyQuestStatePersistence::Decode(oversized).Status ==
+        PartyQuestPersistenceStatus::InvalidData);
 }
 
 TEST_CASE("Canonical state backup is never silently promoted", "[quest.party-state.persistence]")

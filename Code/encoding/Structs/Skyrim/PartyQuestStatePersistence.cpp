@@ -454,7 +454,8 @@ PartyQuestPersistenceStatus ReadFile(const std::filesystem::path& acPath, std::v
         return PartyQuestPersistenceStatus::IoError;
 
     const auto size = static_cast<uint64_t>(end);
-    if (size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+    if (size > PartyQuestDurableResourcePolicy::MaxCanonicalStateArchiveBytes ||
+        size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
         return PartyQuestPersistenceStatus::InvalidData;
 
     aBytes.resize(static_cast<size_t>(size));
@@ -529,6 +530,12 @@ std::vector<uint8_t> PartyQuestStatePersistence::Encode(
 PartyQuestPersistenceResult PartyQuestStatePersistence::Decode(const std::vector<uint8_t>& acBytes)
 {
     PartyQuestPersistenceResult result;
+    if (acBytes.size() >
+        PartyQuestDurableResourcePolicy::MaxCanonicalStateArchiveBytes)
+    {
+        result.Status = PartyQuestPersistenceStatus::InvalidData;
+        return result;
+    }
     Reader archive(acBytes.data(), acBytes.size());
 
     std::array<uint8_t, kMagic.size()> magic{};
