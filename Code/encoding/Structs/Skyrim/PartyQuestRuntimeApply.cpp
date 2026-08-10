@@ -443,8 +443,11 @@ PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplyCoordinator::RestoreR
 
     if (active.State == PartyQuestRuntimeApplyState::DeferredWorld)
     {
-        m_active = active;
-        return PartyQuestRuntimeRecoveryDisposition::DeferredRestored;
+        // World readiness may arrive long after this plan was persisted. A
+        // process restart also invalidates the local compatibility observation
+        // that issued its mutation authorization. Drop it and require a fresh
+        // current-canonical plan instead of reviving stale mutation authority.
+        return PartyQuestRuntimeRecoveryDisposition::PreMutationRestartRequired;
     }
 
     if (active.RuntimeMutationMayHaveOccurred)

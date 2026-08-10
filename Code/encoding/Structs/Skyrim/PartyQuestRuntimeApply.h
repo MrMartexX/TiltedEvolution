@@ -48,7 +48,6 @@ enum class PartyQuestRuntimeRecoveryDisposition : uint8_t
     CampaignMismatch,
     PlayerProfileMismatch,
     Clean,
-    DeferredRestored,
     PreMutationRestartRequired,
     CheckpointRestoreRequired
 };
@@ -215,8 +214,9 @@ public:
         const PartyQuestPlayerProfileId& acPlayerProfileId) const;
 
     /**
-     * Restores durable metadata into a fresh coordinator. Deferred work may be
-     * resumed. Pre-mutation work is intentionally restarted. Any record where
+     * Restores durable metadata into a fresh coordinator. All pre-mutation
+     * work, including deferred plans, is intentionally restarted so current
+     * canonical revision and compatibility can be revalidated. Any record where
      * mutation may have occurred blocks new work until checkpoint restoration
      * is explicitly acknowledged. Recovery data from another campaign or local
      * player profile is never accepted.

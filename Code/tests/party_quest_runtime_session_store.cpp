@@ -102,7 +102,7 @@ TEST_CASE("Runtime session store binds a fresh player sidecar without inventing 
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
 }
 
-TEST_CASE("Deferred runtime state resumes and future transitions persist through the bound store", "[quest.party-state.runtime-store]")
+TEST_CASE("Deferred runtime state is discarded and durably requests a fresh plan", "[quest.party-state.runtime-store]")
 {
     StoreSandbox sandbox;
     const auto paths = BuildStorePaths(sandbox);
@@ -120,19 +120,16 @@ TEST_CASE("Deferred runtime state resumes and future transitions persist through
 
     auto session = BuildStoreSession();
     const auto result = PartyQuestRuntimeSessionStore::BindAndLoad(session, paths);
-    REQUIRE(result.Status == PartyQuestRuntimeSessionStoreStatus::DeferredRestored);
-    REQUIRE(result.RecoveryDisposition == PartyQuestRuntimeRecoveryDisposition::DeferredRestored);
-    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
-    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::DeferredWorld);
-
+    REQUIRE(result.Status == PartyQuestRuntimeSessionStoreStatus::PreMutationRestarted);
+    REQUIRE(result.RecoveryDisposition ==
+        PartyQuestRuntimeRecoveryDisposition::PreMutationRestartRequired);
+    REQUIRE(session.GetCoordinator().GetActive() == nullptr);
     REQUIRE(session.MarkWorldReady(kTransactionId) ==
-        PartyQuestRuntimeDurableTransitionStatus::Applied);
+        PartyQuestRuntimeDurableTransitionStatus::InvalidState);
     const auto reloaded = PartyQuestRuntimeApplyPersistence::Load(paths.RuntimeApplySidecar);
     REQUIRE(reloaded.Status == PartyQuestRuntimeApplyPersistenceStatus::Success);
     REQUIRE(reloaded.State.has_value());
-    REQUIRE(reloaded.State->Active.has_value());
-    REQUIRE(reloaded.State->Active->State == PartyQuestRuntimeApplyState::AwaitingCheckpoint);
-    REQUIRE(reloaded.State->Active->SaveGuardActive);
+    REQUIRE_FALSE(reloaded.State->Active.has_value());
 }
 
 TEST_CASE("Pre-mutation stale runtime entry is discarded and cleanup is immediately durable", "[quest.party-state.runtime-store]")

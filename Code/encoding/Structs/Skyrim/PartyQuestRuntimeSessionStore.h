@@ -10,7 +10,6 @@ enum class PartyQuestRuntimeSessionStoreStatus : uint8_t
 {
     NewSession,
     Clean,
-    DeferredRestored,
     PreMutationRestarted,
     RecoveryRequired,
     InvalidIdentity,
@@ -34,7 +33,6 @@ struct PartyQuestRuntimeSessionStoreResult
     {
         return Status == PartyQuestRuntimeSessionStoreStatus::NewSession ||
             Status == PartyQuestRuntimeSessionStoreStatus::Clean ||
-            Status == PartyQuestRuntimeSessionStoreStatus::DeferredRestored ||
             Status == PartyQuestRuntimeSessionStoreStatus::PreMutationRestarted ||
             Status == PartyQuestRuntimeSessionStoreStatus::RecoveryRequired;
     }

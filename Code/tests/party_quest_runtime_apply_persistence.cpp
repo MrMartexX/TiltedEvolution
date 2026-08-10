@@ -518,7 +518,7 @@ TEST_CASE("Crash after mutation blocks all new apply work until checkpoint resto
     REQUIRE(afterCrash.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Started);
 }
 
-TEST_CASE("Deferred world work resumes after restart without falsely holding a save guard", "[quest.party-state.runtime-apply.persistence]")
+TEST_CASE("Deferred world work is replanned after restart", "[quest.party-state.runtime-apply.persistence]")
 {
     const auto request = BuildRecoveryRequest(60001, GameId(16, 0x1000), 130, true);
     PartyQuestRuntimeApplyCoordinator beforeRestart;
@@ -529,13 +529,12 @@ TEST_CASE("Deferred world work resumes after restart without falsely holding a s
     REQUIRE(afterRestart.RestoreRecoveryState(
                 beforeRestart.ExportRecoveryState(kCampaignId, kPlayerProfileId),
                 kCampaignId,
-                kPlayerProfileId) == PartyQuestRuntimeRecoveryDisposition::DeferredRestored);
-    REQUIRE(afterRestart.GetActive() != nullptr);
-    REQUIRE(afterRestart.GetActive()->State == PartyQuestRuntimeApplyState::DeferredWorld);
+                kPlayerProfileId) ==
+            PartyQuestRuntimeRecoveryDisposition::PreMutationRestartRequired);
+    REQUIRE(afterRestart.GetActive() == nullptr);
     REQUIRE_FALSE(afterRestart.IsSaveGuardActive());
-    REQUIRE(afterRestart.Begin(request) == PartyQuestRuntimeApplyBeginStatus::DuplicatePending);
-    REQUIRE(afterRestart.MarkWorldReady(request.TransactionId));
-    REQUIRE(afterRestart.IsSaveGuardActive());
+    REQUIRE_FALSE(afterRestart.MarkWorldReady(request.TransactionId));
+    REQUIRE(afterRestart.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Deferred);
 }
 
 TEST_CASE("Pre-mutation crash discards stale apply entry and requests a fresh plan", "[quest.party-state.runtime-apply.persistence]")

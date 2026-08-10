@@ -97,12 +97,6 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
                 loaded.Status,
                 disposition);
 
-        case PartyQuestRuntimeRecoveryDisposition::DeferredRestored:
-            return MakeStoreResult(
-                PartyQuestRuntimeSessionStoreStatus::DeferredRestored,
-                loaded.Status,
-                disposition);
-
         case PartyQuestRuntimeRecoveryDisposition::PreMutationRestartRequired:
         {
             // The coordinator deliberately dropped the stale active repair. Make
