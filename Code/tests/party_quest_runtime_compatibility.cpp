@@ -21,6 +21,7 @@ PartyQuestRuntimeCompatibilityRequirement BuildRequirement(GameId aQuestId)
     requirement.WinningOverrideFingerprint = 0x2222333344445555ull;
     requirement.ScriptFingerprint = 0x3333444455556666ull;
     requirement.NativeAdapterFingerprint = 0x4444555566667777ull;
+    requirement.AdapterMutationComponents = PartyQuestVerificationComponent::QuestSnapshot;
     return requirement;
 }
 
@@ -33,6 +34,7 @@ PartyQuestRuntimeCompatibilityFacts BuildMatchingFacts(
     facts.WinningOverrideFingerprint = acRequirement.WinningOverrideFingerprint;
     facts.ScriptFingerprint = acRequirement.ScriptFingerprint;
     facts.NativeAdapterFingerprint = acRequirement.NativeAdapterFingerprint;
+    facts.AdapterMutationComponents = acRequirement.AdapterMutationComponents;
     return facts;
 }
 } // namespace
@@ -60,6 +62,17 @@ TEST_CASE("Runtime adapter manifest rejects incomplete and duplicate requirement
     REQUIRE_FALSE(PartyQuestRuntimeCompatibilityPolicy::IsValidRequirement(invalid));
     REQUIRE_FALSE(manifest.AddRequirement(invalid));
 
+    auto missingCoverage = BuildRequirement(GameId(22, 0x1001));
+    missingCoverage.AdapterMutationComponents = PartyQuestVerificationComponent::None;
+    REQUIRE_FALSE(PartyQuestRuntimeCompatibilityPolicy::IsValidRequirement(missingCoverage));
+    REQUIRE_FALSE(manifest.AddRequirement(missingCoverage));
+
+    auto unsupportedCoverage = BuildRequirement(GameId(22, 0x1002));
+    unsupportedCoverage.AdapterMutationComponents =
+        PartyQuestVerificationComponent::InventoryEffects;
+    REQUIRE_FALSE(PartyQuestRuntimeCompatibilityPolicy::IsValidRequirement(unsupportedCoverage));
+    REQUIRE_FALSE(manifest.AddRequirement(unsupportedCoverage));
+
     const auto valid = BuildRequirement(GameId(22, 0x2000));
     REQUIRE(PartyQuestRuntimeCompatibilityPolicy::IsValidRequirement(valid));
     REQUIRE(manifest.AddRequirement(valid));
@@ -78,6 +91,8 @@ TEST_CASE("Exact runtime compatibility fingerprints authorize a native adapter t
     REQUIRE(decision.Status == PartyQuestRuntimeCompatibilityStatus::Authorized);
     REQUIRE(decision.IsAuthorized());
     REQUIRE(decision.SafetyProfile.HasVerifiedNativeAdapter());
+    REQUIRE(decision.SafetyProfile.GetAdapterMutationComponents() ==
+        PartyQuestVerificationComponent::QuestSnapshot);
 }
 
 TEST_CASE("Missing runtime compatibility evidence never authorizes mutation", "[quest.party-state.runtime-compatibility]")
@@ -133,6 +148,14 @@ TEST_CASE("Runtime compatibility reports the first exact mismatch deterministica
         facts.NativeAdapterFingerprint ^= 1ull;
         REQUIRE(PartyQuestRuntimeCompatibilityPolicy::Evaluate(requirement, facts).Status ==
             PartyQuestRuntimeCompatibilityStatus::NativeAdapterMismatch);
+    }
+
+    SECTION("adapter mutation coverage")
+    {
+        auto facts = BuildMatchingFacts(requirement);
+        facts.AdapterMutationComponents = PartyQuestVerificationComponent::WorldEffects;
+        REQUIRE(PartyQuestRuntimeCompatibilityPolicy::Evaluate(requirement, facts).Status ==
+            PartyQuestRuntimeCompatibilityStatus::AdapterMutationCoverageMismatch);
     }
 }
 

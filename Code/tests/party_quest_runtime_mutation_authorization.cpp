@@ -21,6 +21,7 @@ PartyQuestRuntimeCompatibilityRequirement BuildMutationRequirement(GameId aQuest
     requirement.WinningOverrideFingerprint = 0x9021902290239024ull;
     requirement.ScriptFingerprint = 0x9031903290339034ull;
     requirement.NativeAdapterFingerprint = 0x9041904290439044ull;
+    requirement.AdapterMutationComponents = PartyQuestVerificationComponent::QuestSnapshot;
     return requirement;
 }
 
@@ -33,6 +34,7 @@ PartyQuestRuntimeCompatibilityFacts BuildMutationFacts(
     facts.WinningOverrideFingerprint = acRequirement.WinningOverrideFingerprint;
     facts.ScriptFingerprint = acRequirement.ScriptFingerprint;
     facts.NativeAdapterFingerprint = acRequirement.NativeAdapterFingerprint;
+    facts.AdapterMutationComponents = acRequirement.AdapterMutationComponents;
     return facts;
 }
 
@@ -77,6 +79,8 @@ TEST_CASE("Runtime compatibility profile is quest-scoped mutation authority", "[
     REQUIRE(compatibility.SafetyProfile.IsVerifiedFor(firstQuest));
     REQUIRE_FALSE(compatibility.SafetyProfile.IsVerifiedFor(secondQuest));
     REQUIRE(compatibility.SafetyProfile.GetCompatibilityFingerprint() != 0);
+    REQUIRE(compatibility.SafetyProfile.GetAdapterMutationComponents() ==
+        PartyQuestVerificationComponent::QuestSnapshot);
 
     const auto firstSnapshot = BuildMutationSnapshot(firstQuest);
     const auto firstPlan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(
@@ -85,6 +89,8 @@ TEST_CASE("Runtime compatibility profile is quest-scoped mutation authority", "[
         compatibility.SafetyProfile);
     REQUIRE(firstPlan.Safety.Status == PartyQuestRuntimeSafetyStatus::RuntimeSafe);
     REQUIRE(firstPlan.MutationAuthorization.IsVerified());
+    REQUIRE(firstPlan.MutationAuthorization.GetAdapterMutationComponents() ==
+        PartyQuestVerificationComponent::QuestSnapshot);
     REQUIRE(firstPlan.MutationAuthorization.Matches(
         firstSnapshot,
         firstPlan.Actions,

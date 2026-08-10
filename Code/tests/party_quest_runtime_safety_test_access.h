@@ -15,13 +15,16 @@ public:
     [[nodiscard]] static PartyQuestRuntimeMutationAuthorization MakeMutationAuthorization(
         const QuestSnapshot& acSnapshot,
         PartyQuestApplyAction aActions,
-        bool aDryRunOnly = true) noexcept
+        bool aDryRunOnly = true,
+        PartyQuestVerificationComponent aAdapterMutationComponents =
+            PartyQuestVerificationComponent::QuestSnapshot) noexcept
     {
         constexpr uint64_t kTestCompatibilityFingerprint = 0xD15EA5E5AFE00001ull;
         return PartyQuestRuntimeMutationAuthorization(
             acSnapshot.QuestId,
             acSnapshot.ComputeDigest(),
             kTestCompatibilityFingerprint,
+            aAdapterMutationComponents,
             aActions,
             aDryRunOnly);
     }

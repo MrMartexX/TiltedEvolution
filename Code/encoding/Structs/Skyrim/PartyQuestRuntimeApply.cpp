@@ -13,7 +13,9 @@ bool RequiresWorldTargets(const PartyQuestApplyPlan& acPlan) noexcept
 bool HasValidMutationAuthorization(
     const PartyQuestRuntimeApplyRequest& acRequest) noexcept
 {
-    return acRequest.Plan.MutationAuthorization.Matches(
+    return acRequest.Plan.MutationAuthorization.GetAdapterMutationComponents() ==
+            PartyQuestVerificationComponent::QuestSnapshot &&
+        acRequest.Plan.MutationAuthorization.Matches(
         acRequest.CanonicalSnapshot,
         acRequest.Plan.Actions,
         acRequest.Plan.DryRunOnly);
@@ -55,6 +57,11 @@ PartyQuestRuntimeApplyCoordinator::ValidateAndFingerprint(
         fingerprint.CanonicalDigest,
         acRequest.Plan.MutationAuthorization.GetCompatibilityFingerprint());
     if (!envelope)
+        return std::nullopt;
+    const auto authorizedCoverage =
+        acRequest.Plan.MutationAuthorization.GetAdapterMutationComponents() |
+        PartyQuestVerificationComponent::Compatibility;
+    if (envelope->Required != authorizedCoverage)
         return std::nullopt;
     fingerprint.ExpectedVerification = *envelope;
     return fingerprint;

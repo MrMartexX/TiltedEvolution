@@ -280,6 +280,7 @@ PartyQuestApplyPlan PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(
             acSnapshot.QuestId,
             canonicalDigest,
             acProfile.GetCompatibilityFingerprint(),
+            acProfile.GetAdapterMutationComponents(),
             plan.Actions,
             plan.DryRunOnly);
     }

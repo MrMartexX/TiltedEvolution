@@ -37,6 +37,7 @@ PartyQuestRuntimeSafetyProfile BuildRuntimeAuthorization(GameId aQuestId)
     requirement.WinningOverrideFingerprint = 0x2020202020202020ull;
     requirement.ScriptFingerprint = 0x3030303030303030ull;
     requirement.NativeAdapterFingerprint = 0x4040404040404040ull;
+    requirement.AdapterMutationComponents = PartyQuestVerificationComponent::QuestSnapshot;
 
     PartyQuestRuntimeCompatibilityFacts facts;
     facts.ProfileVersion = requirement.ProfileVersion;
@@ -44,6 +45,7 @@ PartyQuestRuntimeSafetyProfile BuildRuntimeAuthorization(GameId aQuestId)
     facts.WinningOverrideFingerprint = requirement.WinningOverrideFingerprint;
     facts.ScriptFingerprint = requirement.ScriptFingerprint;
     facts.NativeAdapterFingerprint = requirement.NativeAdapterFingerprint;
+    facts.AdapterMutationComponents = requirement.AdapterMutationComponents;
 
     const auto decision = PartyQuestRuntimeCompatibilityPolicy::Evaluate(requirement, facts);
     REQUIRE(decision.IsAuthorized());
@@ -394,6 +396,9 @@ TEST_CASE("Verification envelope binds exact current mutation coverage", "[quest
         PartyQuestVerificationEnvelopeV1::kSchemaVersion);
     REQUIRE(active->ExpectedVerification.Required ==
         (PartyQuestVerificationComponent::QuestSnapshot |
+         PartyQuestVerificationComponent::Compatibility));
+    REQUIRE(active->ExpectedVerification.Required ==
+        (request.Plan.MutationAuthorization.GetAdapterMutationComponents() |
          PartyQuestVerificationComponent::Compatibility));
     REQUIRE(active->ExpectedVerification.QuestSnapshotDigest == active->CanonicalDigest);
     REQUIRE(active->ExpectedVerification.CompatibilityFingerprint ==

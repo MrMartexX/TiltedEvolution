@@ -16,13 +16,17 @@ enum class PartyQuestRuntimeCompatibilityStatus : uint8_t
     ResolvedRecordMismatch,
     WinningOverrideMismatch,
     ScriptMismatch,
-    NativeAdapterMismatch
+    NativeAdapterMismatch,
+    AdapterMutationCoverageMismatch
 };
 
 /**
  * Exact compatibility requirements for one quest-specific native repair adapter.
  * Fingerprints are opaque deterministic hashes produced by the future manifest
  * builder; zero is reserved for missing/unknown evidence and is never accepted.
+ * AdapterMutationComponents is part of the reviewed contract. The current
+ * verification observer supports QuestSnapshot-only adapters; any wider or
+ * unknown mutation surface fails closed before RuntimeSafe authorization.
  */
 struct PartyQuestRuntimeCompatibilityRequirement
 {
@@ -32,6 +36,8 @@ struct PartyQuestRuntimeCompatibilityRequirement
     uint64_t WinningOverrideFingerprint{};
     uint64_t ScriptFingerprint{};
     uint64_t NativeAdapterFingerprint{};
+    PartyQuestVerificationComponent AdapterMutationComponents{
+        PartyQuestVerificationComponent::None};
 
     bool operator==(const PartyQuestRuntimeCompatibilityRequirement&) const noexcept = default;
 };
@@ -44,6 +50,8 @@ struct PartyQuestRuntimeCompatibilityFacts
     uint64_t WinningOverrideFingerprint{};
     uint64_t ScriptFingerprint{};
     uint64_t NativeAdapterFingerprint{};
+    PartyQuestVerificationComponent AdapterMutationComponents{
+        PartyQuestVerificationComponent::None};
 
     bool operator==(const PartyQuestRuntimeCompatibilityFacts&) const noexcept = default;
 };

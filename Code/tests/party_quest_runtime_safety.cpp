@@ -44,6 +44,7 @@ PartyQuestRuntimeSafetyProfile BuildAuthorizedProfile(GameId aQuestId)
     requirement.WinningOverrideFingerprint = 0x2222222222222222ull;
     requirement.ScriptFingerprint = 0x3333333333333333ull;
     requirement.NativeAdapterFingerprint = 0x4444444444444444ull;
+    requirement.AdapterMutationComponents = PartyQuestVerificationComponent::QuestSnapshot;
 
     PartyQuestRuntimeCompatibilityFacts facts;
     facts.ProfileVersion = requirement.ProfileVersion;
@@ -51,6 +52,7 @@ PartyQuestRuntimeSafetyProfile BuildAuthorizedProfile(GameId aQuestId)
     facts.WinningOverrideFingerprint = requirement.WinningOverrideFingerprint;
     facts.ScriptFingerprint = requirement.ScriptFingerprint;
     facts.NativeAdapterFingerprint = requirement.NativeAdapterFingerprint;
+    facts.AdapterMutationComponents = requirement.AdapterMutationComponents;
 
     const auto compatibility = PartyQuestRuntimeCompatibilityPolicy::Evaluate(requirement, facts);
     REQUIRE(compatibility.IsAuthorized());

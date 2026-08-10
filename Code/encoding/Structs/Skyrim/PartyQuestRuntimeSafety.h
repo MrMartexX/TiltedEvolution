@@ -148,7 +148,9 @@ public:
 
     [[nodiscard]] bool HasVerifiedNativeAdapter() const noexcept
     {
-        return static_cast<bool>(m_questId) && m_compatibilityFingerprint != 0;
+        return static_cast<bool>(m_questId) &&
+            m_compatibilityFingerprint != 0 &&
+            m_adapterMutationComponents == PartyQuestVerificationComponent::QuestSnapshot;
     }
 
     [[nodiscard]] bool IsVerifiedFor(const GameId& acQuestId) const noexcept
@@ -166,17 +168,26 @@ public:
         return m_compatibilityFingerprint;
     }
 
+    [[nodiscard]] PartyQuestVerificationComponent GetAdapterMutationComponents() const noexcept
+    {
+        return m_adapterMutationComponents;
+    }
+
 private:
     PartyQuestRuntimeSafetyProfile(
         const GameId& acQuestId,
-        uint64_t aCompatibilityFingerprint) noexcept
+        uint64_t aCompatibilityFingerprint,
+        PartyQuestVerificationComponent aAdapterMutationComponents) noexcept
         : m_questId(acQuestId)
         , m_compatibilityFingerprint(aCompatibilityFingerprint)
+        , m_adapterMutationComponents(aAdapterMutationComponents)
     {
     }
 
     GameId m_questId{};
     uint64_t m_compatibilityFingerprint{};
+    PartyQuestVerificationComponent m_adapterMutationComponents{
+        PartyQuestVerificationComponent::None};
 
     friend class PartyQuestRuntimeCompatibilityPolicy;
 };
@@ -192,6 +203,7 @@ private:
  *  - QuestId;
  *  - canonical snapshot digest;
  *  - exact compatibility-contract fingerprint;
+ *  - exact adapter mutation component set;
  *  - exact apply-action bitset;
  *  - DryRunOnly disposition.
  *
@@ -211,6 +223,11 @@ public:
     [[nodiscard]] uint64_t GetCompatibilityFingerprint() const noexcept
     {
         return m_compatibilityFingerprint;
+    }
+
+    [[nodiscard]] PartyQuestVerificationComponent GetAdapterMutationComponents() const noexcept
+    {
+        return m_adapterMutationComponents;
     }
 
     [[nodiscard]] bool Matches(
@@ -235,17 +252,20 @@ private:
         const GameId& acQuestId,
         uint64_t aCanonicalDigest,
         uint64_t aCompatibilityFingerprint,
+        PartyQuestVerificationComponent aAdapterMutationComponents,
         PartyQuestApplyAction aActions,
         bool aDryRunOnly) noexcept
         : m_questId(acQuestId)
         , m_canonicalDigest(aCanonicalDigest)
         , m_compatibilityFingerprint(aCompatibilityFingerprint)
+        , m_adapterMutationComponents(aAdapterMutationComponents)
         , m_actions(aActions)
         , m_dryRunOnly(aDryRunOnly)
         , m_verified(
               static_cast<bool>(acQuestId) &&
               aCanonicalDigest != 0 &&
               aCompatibilityFingerprint != 0 &&
+              aAdapterMutationComponents == PartyQuestVerificationComponent::QuestSnapshot &&
               aActions != PartyQuestApplyAction::None)
     {
     }
@@ -253,6 +273,8 @@ private:
     GameId m_questId{};
     uint64_t m_canonicalDigest{};
     uint64_t m_compatibilityFingerprint{};
+    PartyQuestVerificationComponent m_adapterMutationComponents{
+        PartyQuestVerificationComponent::None};
     PartyQuestApplyAction m_actions{PartyQuestApplyAction::None};
     bool m_dryRunOnly{true};
     bool m_verified{};

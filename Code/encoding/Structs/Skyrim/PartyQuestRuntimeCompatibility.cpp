@@ -19,6 +19,9 @@ uint64_t ComputeCompatibilityFingerprint(
     hash = MixCompatibilityFingerprint(hash, acRequirement.WinningOverrideFingerprint);
     hash = MixCompatibilityFingerprint(hash, acRequirement.ScriptFingerprint);
     hash = MixCompatibilityFingerprint(hash, acRequirement.NativeAdapterFingerprint);
+    hash = MixCompatibilityFingerprint(
+        hash,
+        static_cast<uint32_t>(acRequirement.AdapterMutationComponents));
     return hash != 0 ? hash : 1;
 }
 } // namespace
@@ -31,7 +34,9 @@ bool PartyQuestRuntimeCompatibilityPolicy::IsValidRequirement(
         acRequirement.ResolvedRecordFingerprint != 0 &&
         acRequirement.WinningOverrideFingerprint != 0 &&
         acRequirement.ScriptFingerprint != 0 &&
-        acRequirement.NativeAdapterFingerprint != 0;
+        acRequirement.NativeAdapterFingerprint != 0 &&
+        acRequirement.AdapterMutationComponents ==
+            PartyQuestVerificationComponent::QuestSnapshot;
 }
 
 PartyQuestRuntimeCompatibilityDecision PartyQuestRuntimeCompatibilityPolicy::Evaluate(
@@ -50,7 +55,8 @@ PartyQuestRuntimeCompatibilityDecision PartyQuestRuntimeCompatibilityPolicy::Eva
         acFacts.ResolvedRecordFingerprint == 0 ||
         acFacts.WinningOverrideFingerprint == 0 ||
         acFacts.ScriptFingerprint == 0 ||
-        acFacts.NativeAdapterFingerprint == 0)
+        acFacts.NativeAdapterFingerprint == 0 ||
+        acFacts.AdapterMutationComponents == PartyQuestVerificationComponent::None)
     {
         decision.Status = PartyQuestRuntimeCompatibilityStatus::InvalidClientFacts;
         return decision;
@@ -86,6 +92,13 @@ PartyQuestRuntimeCompatibilityDecision PartyQuestRuntimeCompatibilityPolicy::Eva
         return decision;
     }
 
+    if (acFacts.AdapterMutationComponents != acRequirement.AdapterMutationComponents)
+    {
+        decision.Status =
+            PartyQuestRuntimeCompatibilityStatus::AdapterMutationCoverageMismatch;
+        return decision;
+    }
+
     const uint64_t compatibilityFingerprint =
         ComputeCompatibilityFingerprint(acRequirement);
     if (compatibilityFingerprint == 0)
@@ -97,7 +110,8 @@ PartyQuestRuntimeCompatibilityDecision PartyQuestRuntimeCompatibilityPolicy::Eva
     decision.Status = PartyQuestRuntimeCompatibilityStatus::Authorized;
     decision.SafetyProfile = PartyQuestRuntimeSafetyProfile(
         acRequirement.QuestId,
-        compatibilityFingerprint);
+        compatibilityFingerprint,
+        acRequirement.AdapterMutationComponents);
     return decision;
 }
 
