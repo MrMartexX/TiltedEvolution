@@ -541,8 +541,14 @@ bool QuestService::PreparePartyQuestClient(Player* apPlayer, uint32_t& aPartyId)
             m_partyQuestCoordinator.GetCanonicalState().GetWorldRevision());
     }
 
-    if (!m_partyQuestCoordinator.IsClientConnected(apPlayer->GetId()))
-        m_partyQuestCoordinator.ConnectClient(apPlayer->GetId());
+    if (!m_partyQuestCoordinator.IsClientConnected(apPlayer->GetId()) &&
+        !m_partyQuestCoordinator.ConnectClient(apPlayer->GetId()))
+    {
+        spdlog::warn(
+            "PartyQuestProtocol: rejected player {} because the bounded session capacity is exhausted",
+            apPlayer->GetId());
+        return false;
+    }
 
     MaybeStartPartyQuestShadowPeer();
     return true;
