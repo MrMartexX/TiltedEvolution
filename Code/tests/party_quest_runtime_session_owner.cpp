@@ -315,6 +315,10 @@ TEST_CASE("Runtime session owner quarantines only exact orphan copy temporaries"
     REQUIRE(bound.WorkspaceRecovery.Status ==
         PartyQuestReplicaWorkspaceRecoveryStatus::Quarantined);
     REQUIRE(bound.WorkspaceRecovery.QuarantinedFiles == 2);
+    REQUIRE(bound.WorkspaceRecovery.QuarantineFiles == 2);
+    REQUIRE(bound.WorkspaceRecovery.QuarantineBytes ==
+        std::string("UNPUBLISHED_SAVE_BYTES").size() +
+            std::string("UNPUBLISHED_CHECKPOINT_BYTES").size());
     REQUIRE(owner.IsBound());
 
     const auto quarantine =
@@ -383,6 +387,78 @@ TEST_CASE("Workspace recovery deadline fails before moving orphan bytes", "[ques
     REQUIRE(std::filesystem::exists(temporary));
     REQUIRE_FALSE(std::filesystem::exists(
         paths.MetadataDirectory / "orphan_copy_quarantine"));
+}
+
+TEST_CASE("Workspace recovery blocks an over-quota evidence quarantine", "[quest.party-state.runtime-owner][workspace-recovery][quota]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+    const auto quarantine =
+        paths.MetadataDirectory / "orphan_copy_quarantine" / "saves";
+    for (size_t i = 0;
+         i <= PartyQuestReplicaWorkspaceRecovery::MaxQuarantineFiles;
+         ++i)
+    {
+        WriteOwnerFile(
+            quarantine /
+                ("Hero" + std::to_string(i) + ".ess.tpqtmp-" +
+                    std::to_string(i + 1) + "-0"),
+            "x");
+    }
+
+    PartyQuestRuntimeSessionOwner owner;
+    const auto blocked = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(blocked.Status ==
+        PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
+    REQUIRE(blocked.WorkspaceRecovery.Status ==
+        PartyQuestReplicaWorkspaceRecoveryStatus::QuarantineQuotaExceeded);
+    REQUIRE(blocked.WorkspaceRecovery.QuarantineFiles ==
+        PartyQuestReplicaWorkspaceRecovery::MaxQuarantineFiles);
+    REQUIRE(blocked.WorkspaceRecovery.QuarantinedFiles == 0);
+    REQUIRE_FALSE(owner.IsBound());
+}
+
+TEST_CASE("Workspace recovery rejects oversized quarantine evidence", "[quest.party-state.runtime-owner][workspace-recovery][quota]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+    const auto evidence = paths.MetadataDirectory /
+        "orphan_copy_quarantine" / "saves" /
+        "Hero.ess.tpqtmp-900-0";
+    WriteOwnerFile(evidence, "x");
+    std::error_code ec;
+    std::filesystem::resize_file(
+        evidence,
+        PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes + 1,
+        ec);
+    REQUIRE_FALSE(ec);
+
+    PartyQuestRuntimeSessionOwner owner;
+    const auto blocked = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(blocked.Status ==
+        PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
+    REQUIRE(blocked.WorkspaceRecovery.Status ==
+        PartyQuestReplicaWorkspaceRecoveryStatus::QuarantineQuotaExceeded);
+    REQUIRE(blocked.WorkspaceRecovery.QuarantinedFiles == 0);
+    REQUIRE(std::filesystem::exists(evidence));
+}
+
+TEST_CASE("Workspace recovery does not adopt unknown quarantine content", "[quest.party-state.runtime-owner][workspace-recovery][quota][confinement]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+    const auto unknown = paths.MetadataDirectory /
+        "orphan_copy_quarantine" / "saves" / "operator-notes.txt";
+    WriteOwnerFile(unknown, "MUST_NOT_BE_ADOPTED_AS_ORPHAN_EVIDENCE");
+
+    PartyQuestRuntimeSessionOwner owner;
+    const auto blocked = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(blocked.Status ==
+        PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
+    REQUIRE(blocked.WorkspaceRecovery.Status ==
+        PartyQuestReplicaWorkspaceRecoveryStatus::QuarantineInvalid);
+    REQUIRE_FALSE(owner.IsBound());
+    REQUIRE(std::filesystem::exists(unknown));
 }
 
 TEST_CASE("Workspace recovery fails closed on quarantine destination conflict", "[quest.party-state.runtime-owner][workspace-recovery][confinement]")

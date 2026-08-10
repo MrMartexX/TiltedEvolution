@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestReplicaFiles.h>
 #include <Structs/Skyrim/PartyQuestReplicaWorkspaceLease.h>
 
 #include <cstddef>
@@ -16,6 +17,8 @@ enum class PartyQuestReplicaWorkspaceRecoveryStatus : uint8_t
     EntryLimitExceeded,
     CandidateUnsafe,
     DestinationConflict,
+    QuarantineInvalid,
+    QuarantineQuotaExceeded,
     DeadlineExceeded,
     IoError
 };
@@ -37,6 +40,8 @@ struct PartyQuestReplicaWorkspaceRecoveryResult
         PartyQuestReplicaWorkspaceRecoveryStatus::NotAttempted};
     size_t InspectedEntries{};
     size_t QuarantinedFiles{};
+    size_t QuarantineFiles{};
+    uint64_t QuarantineBytes{};
 
     [[nodiscard]] bool IsSuccess() const noexcept
     {
@@ -53,13 +58,19 @@ struct PartyQuestReplicaWorkspaceRecoveryResult
  * journals are never candidates. Recovery requires the exact live workspace
  * lease and preserves bytes under metadata/orphan_copy_quarantine instead of
  * deleting them. A monotonic deadline is checked between filesystem calls; it
- * cannot interrupt one synchronous OS call already in progress.
+ * cannot interrupt one synchronous OS call already in progress. Existing and
+ * newly admitted evidence share a local file/byte quota; exceeding it blocks
+ * recovery without deleting or replacing any evidence.
  */
 class PartyQuestReplicaWorkspaceRecovery final
 {
 public:
     static constexpr size_t MaxInspectedEntries = 100000;
-    static constexpr size_t MaxCandidates = 4096;
+    static constexpr size_t MaxQuarantineFiles =
+        PartyQuestReplicaResourcePolicy::MaxFiles * 4;
+    static constexpr size_t MaxCandidates = MaxQuarantineFiles;
+    static constexpr uint64_t MaxQuarantineBytes =
+        PartyQuestReplicaResourcePolicy::MaxTotalFileBytes * 4;
     static constexpr uint64_t MaxRecoveryNanoseconds =
         5ull * 60ull * 1000ull * 1000ull * 1000ull;
 
