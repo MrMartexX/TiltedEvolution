@@ -233,7 +233,17 @@ void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const
 
     const PartyQuestSyncFacts syncFacts = QuestSnapshotCollector::CollectSyncFacts(pQuest);
     const PartyQuestSyncClassification classification = ClassifyPartyQuestSync(syncFacts);
-    m_partyQuestSyncFacts[snapshot->QuestId] = syncFacts;
+    const auto factsIt = m_partyQuestSyncFacts.find(snapshot->QuestId);
+    if (factsIt == m_partyQuestSyncFacts.end() &&
+        m_partyQuestSyncFacts.size() >=
+            PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests)
+    {
+        spdlog::warn(
+            "PartyQuestProtocol observation suppressed: local quest fact limit reached ({})",
+            PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
+        return;
+    }
+    m_partyQuestSyncFacts.insert_or_assign(snapshot->QuestId, syncFacts);
 
     QuestSnapshotCollector::Log(pQuest, *snapshot, acReason);
 
@@ -255,7 +265,14 @@ void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const
     if (!m_partyQuestProtocolVerified)
     {
         const PartyQuestClientSubmissionStatus status = m_partyQuestSubmissions.QueueLatest(*snapshot);
-        if (status != PartyQuestClientSubmissionStatus::Duplicate)
+        if (status == PartyQuestClientSubmissionStatus::ResourceLimitExceeded)
+        {
+            spdlog::warn(
+                "PartyQuestProtocol snapshot suppressed pending campaign verification: reason={} tracked quest limit reached ({})",
+                acReason,
+                PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
+        }
+        else if (status != PartyQuestClientSubmissionStatus::Duplicate)
         {
             spdlog::info(
                 "PartyQuestProtocol snapshot deferred pending campaign verification: reason={} quest={:016X} stage={} status={} queued={}",
@@ -296,6 +313,12 @@ void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const
         break;
     case PartyQuestClientSubmissionStatus::InvalidSnapshot:
         spdlog::warn("PartyQuestProtocol invalid local snapshot suppressed: reason={}", acReason);
+        break;
+    case PartyQuestClientSubmissionStatus::ResourceLimitExceeded:
+        spdlog::warn(
+            "PartyQuestProtocol local submission suppressed: reason={} tracked quest limit reached ({})",
+            acReason,
+            PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
         break;
     }
 }

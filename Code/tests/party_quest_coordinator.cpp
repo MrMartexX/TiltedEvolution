@@ -11,6 +11,7 @@
 
 #include <Messages/ServerMessageFactory.h>
 #include <Structs/Skyrim/PartyQuestProtocol.h>
+#include <Structs/Skyrim/PartyQuestResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -356,6 +357,63 @@ TEST_CASE("Client protocol ids survive transient PlayerId reuse without determin
     PartyQuestClientIdAllocator secondProcess(0x5A5A5A5A5A5A5A5Aull);
     for (size_t i = 0; i < 256; ++i)
         REQUIRE_FALSE(issued.contains(secondProcess.Allocate()));
+}
+
+TEST_CASE("Client submission tracking fails closed at its quest bound", "[quest.party-state.coordinator.submission][resource-budget]")
+{
+    PartyQuestClientSubmissionQueue queue;
+    PartyQuestReplica replica;
+
+    for (size_t i = 0;
+         i < PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests;
+         ++i)
+    {
+        const auto snapshot = BuildCoordinatorSnapshot(
+            GameId(12, static_cast<uint32_t>(0xB000 + i)),
+            10);
+        REQUIRE(queue.QueueLatest(snapshot) ==
+            PartyQuestClientSubmissionStatus::Queued);
+    }
+    REQUIRE(queue.GetQueuedCount() ==
+        PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
+
+    const auto overflow = BuildCoordinatorSnapshot(GameId(12, 0xF000), 20);
+    REQUIRE(queue.QueueLatest(overflow) ==
+        PartyQuestClientSubmissionStatus::ResourceLimitExceeded);
+    REQUIRE(queue.Observe(overflow, replica).Status ==
+        PartyQuestClientSubmissionStatus::ResourceLimitExceeded);
+
+    const auto retained = BuildCoordinatorSnapshot(GameId(12, 0xB000), 30);
+    REQUIRE(queue.QueueLatest(retained) ==
+        PartyQuestClientSubmissionStatus::ReplacedQueued);
+    REQUIRE(queue.GetQueuedCount() ==
+        PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
+
+    PartyQuestClientSubmissionQueue inFlight;
+    for (size_t i = 0;
+         i < PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests;
+         ++i)
+    {
+        const auto snapshot = BuildCoordinatorSnapshot(
+            GameId(13, static_cast<uint32_t>(0x10000 + i)),
+            10);
+        REQUIRE(inFlight.MarkInFlight(i + 1, snapshot));
+    }
+    REQUIRE_FALSE(inFlight.MarkInFlight(
+        PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests + 1,
+        BuildCoordinatorSnapshot(GameId(13, 0x20000), 20)));
+    REQUIRE(inFlight.GetInFlightCount() ==
+        PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
+
+    auto oversized = BuildCoordinatorSnapshot(GameId(13, 0x30000), 30);
+    oversized.CompletedStages.resize(
+        PartyQuestResourcePolicy::MaxSnapshotCollectionEntries + 1);
+    PartyQuestClientSubmissionQueue oversizedQueue;
+    REQUIRE(oversizedQueue.QueueLatest(oversized) ==
+        PartyQuestClientSubmissionStatus::InvalidSnapshot);
+    REQUIRE(oversizedQueue.Observe(oversized, replica).Status ==
+        PartyQuestClientSubmissionStatus::InvalidSnapshot);
+    REQUIRE_FALSE(oversizedQueue.MarkInFlight(1, oversized));
 }
 
 TEST_CASE("Terminal transport identities release bounded server sessions", "[quest.party-state.coordinator][resource-budget]")

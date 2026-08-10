@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestProtocol.h>
+#include <Structs/Skyrim/PartyQuestResourcePolicy.h>
 
 #include <algorithm>
 
@@ -26,7 +27,8 @@ PartyQuestClientSubmissionDecision PartyQuestClientSubmissionQueue::Observe(
     const PartyQuestReplica& acReplica)
 {
     PartyQuestClientSubmissionDecision decision;
-    if (!acSnapshot.QuestId)
+    if (!acSnapshot.QuestId ||
+        !PartyQuestResourcePolicy::IsSnapshotWithinBounds(acSnapshot))
         return decision;
 
     SubmissionSnapshot observed;
@@ -34,10 +36,10 @@ PartyQuestClientSubmissionDecision PartyQuestClientSubmissionQueue::Observe(
     observed.Snapshot.Canonicalize();
     observed.SemanticDigest = ComputeSemanticDigest(observed.Snapshot);
 
-    QuestEntry& entry = m_quests[observed.Snapshot.QuestId];
-
-    if (entry.InFlight)
+    auto entryIt = m_quests.find(observed.Snapshot.QuestId);
+    if (entryIt != m_quests.end() && entryIt->second.InFlight)
     {
+        QuestEntry& entry = entryIt->second;
         if (entry.InFlight->SemanticDigest == observed.SemanticDigest ||
             (entry.Queued && entry.Queued->SemanticDigest == observed.SemanticDigest))
         {
@@ -52,8 +54,9 @@ PartyQuestClientSubmissionDecision PartyQuestClientSubmissionQueue::Observe(
         return decision;
     }
 
-    if (entry.Queued)
+    if (entryIt != m_quests.end() && entryIt->second.Queued)
     {
+        QuestEntry& entry = entryIt->second;
         if (entry.Queued->SemanticDigest == observed.SemanticDigest)
         {
             decision.Status = PartyQuestClientSubmissionStatus::Duplicate;
@@ -70,20 +73,26 @@ PartyQuestClientSubmissionDecision PartyQuestClientSubmissionQueue::Observe(
         if (ComputeSemanticDigest(*pCanonical) == observed.SemanticDigest)
         {
             decision.Status = PartyQuestClientSubmissionStatus::Duplicate;
-            m_quests.erase(observed.Snapshot.QuestId);
             return decision;
         }
     }
 
+    if (m_quests.size() >=
+        PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests)
+    {
+        decision.Status = PartyQuestClientSubmissionStatus::ResourceLimitExceeded;
+        return decision;
+    }
+
     decision.Status = PartyQuestClientSubmissionStatus::Ready;
     decision.ReadySnapshot = std::move(observed.Snapshot);
-    m_quests.erase(decision.ReadySnapshot->QuestId);
     return decision;
 }
 
 PartyQuestClientSubmissionStatus PartyQuestClientSubmissionQueue::QueueLatest(const QuestSnapshot& acSnapshot)
 {
-    if (!acSnapshot.QuestId)
+    if (!acSnapshot.QuestId ||
+        !PartyQuestResourcePolicy::IsSnapshotWithinBounds(acSnapshot))
         return PartyQuestClientSubmissionStatus::InvalidSnapshot;
 
     SubmissionSnapshot observed;
@@ -91,7 +100,17 @@ PartyQuestClientSubmissionStatus PartyQuestClientSubmissionQueue::QueueLatest(co
     observed.Snapshot.Canonicalize();
     observed.SemanticDigest = ComputeSemanticDigest(observed.Snapshot);
 
-    QuestEntry& entry = m_quests[observed.Snapshot.QuestId];
+    auto entryIt = m_quests.find(observed.Snapshot.QuestId);
+    if (entryIt == m_quests.end())
+    {
+        if (m_quests.size() >=
+            PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests)
+        {
+            return PartyQuestClientSubmissionStatus::ResourceLimitExceeded;
+        }
+        entryIt = m_quests.emplace(observed.Snapshot.QuestId, QuestEntry{}).first;
+    }
+    QuestEntry& entry = entryIt->second;
     if (entry.InFlight && entry.InFlight->SemanticDigest == observed.SemanticDigest)
         return PartyQuestClientSubmissionStatus::Duplicate;
 
@@ -112,10 +131,24 @@ bool PartyQuestClientSubmissionQueue::MarkInFlight(
     uint64_t aTransactionId,
     const QuestSnapshot& acSnapshot)
 {
-    if (aTransactionId == 0 || !acSnapshot.QuestId || m_transactionQuests.contains(aTransactionId))
+    if (aTransactionId == 0 || !acSnapshot.QuestId ||
+        !PartyQuestResourcePolicy::IsSnapshotWithinBounds(acSnapshot) ||
+        m_transactionQuests.contains(aTransactionId) ||
+        m_transactionQuests.size() >=
+            PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests)
         return false;
 
-    QuestEntry& entry = m_quests[acSnapshot.QuestId];
+    auto entryIt = m_quests.find(acSnapshot.QuestId);
+    if (entryIt == m_quests.end())
+    {
+        if (m_quests.size() >=
+            PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests)
+        {
+            return false;
+        }
+        entryIt = m_quests.emplace(acSnapshot.QuestId, QuestEntry{}).first;
+    }
+    QuestEntry& entry = entryIt->second;
     if (entry.InFlight)
         return false;
 

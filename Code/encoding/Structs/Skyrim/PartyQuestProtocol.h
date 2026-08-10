@@ -81,6 +81,7 @@ struct PartyQuestProtocolResourcePolicy
     static constexpr size_t MaxReportsAndPlansPerSession = 256;
     static constexpr size_t MaxClientCanonicalUpdates = 4096;
     static constexpr size_t MaxClientRepairs = 256;
+    static constexpr size_t MaxClientTrackedQuests = 4096;
 };
 
 /**
@@ -266,7 +267,8 @@ enum class PartyQuestClientSubmissionStatus : uint8_t
     Queued,
     ReplacedQueued,
     Duplicate,
-    InvalidSnapshot
+    InvalidSnapshot,
+    ResourceLimitExceeded
 };
 
 struct PartyQuestClientSubmissionDecision
