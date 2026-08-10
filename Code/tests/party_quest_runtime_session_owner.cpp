@@ -6,11 +6,16 @@
 #include <catch2/catch.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <string>
+#include <thread>
 #include <type_traits>
 #include <vector>
+
+const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -79,6 +84,39 @@ void WriteOwnerFile(
     WriteOwnerBytes(
         acPath,
         std::vector<uint8_t>(acBytes.begin(), acBytes.end()));
+}
+
+bool SetWorkspaceLeaseEnvironment(const char* apName, const std::string& acValue)
+{
+#ifdef _WIN32
+    return _putenv_s(apName, acValue.c_str()) == 0;
+#else
+    return setenv(apName, acValue.c_str(), 1) == 0;
+#endif
+}
+
+void ClearWorkspaceLeaseEnvironment(const char* apName)
+{
+#ifdef _WIN32
+    _putenv_s(apName, "");
+#else
+    unsetenv(apName);
+#endif
+}
+
+bool WaitForWorkspaceLeaseMarker(
+    const std::filesystem::path& acMarker,
+    std::chrono::steady_clock::duration aTimeout)
+{
+    const auto deadline = std::chrono::steady_clock::now() + aTimeout;
+    do
+    {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(acMarker, ec) && !ec)
+            return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
 }
 
 struct ExpiringWorkspaceRecoveryClock
@@ -286,6 +324,67 @@ TEST_CASE("Workspace lease rejects a hard-linked lock file", "[quest.party-state
     REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
         PartyQuestReplicaWorkspaceLeaseStatus::InvalidNamespace);
     REQUIRE_FALSE(lease.IsHeld());
+}
+
+TEST_CASE("Workspace lease subprocess crash helper", "[.][quest.party-state.runtime-owner][workspace-lease][fault-helper]")
+{
+    const char* rootValue = std::getenv("TP_WORKSPACE_LEASE_CRASH_ROOT");
+    REQUIRE(rootValue != nullptr);
+
+    const auto root = std::filesystem::path(rootValue);
+    const auto paths = BuildOwnerPaths(root);
+    PartyQuestReplicaWorkspaceLease lease;
+    REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
+        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    WriteOwnerFile(root / "lease-ready", "ready");
+
+    if (WaitForWorkspaceLeaseMarker(
+            root / "lease-crash",
+            std::chrono::seconds(15)))
+    {
+        // Deliberately bypass all C++ destructors. The operating system must
+        // release the native lease when this process terminates.
+        std::_Exit(97);
+    }
+    FAIL("Workspace lease crash helper timed out");
+}
+
+TEST_CASE("Workspace lease is released by abrupt subprocess termination", "[quest.party-state.runtime-owner][workspace-lease][process-crash]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+    REQUIRE(SetWorkspaceLeaseEnvironment(
+        "TP_WORKSPACE_LEASE_CRASH_ROOT",
+        sandbox.Root.string()));
+
+    const auto& executable = GetTPTestsExecutablePath();
+    REQUIRE_FALSE(executable.empty());
+    const std::string command =
+        "\"" + executable.string() +
+        "\" \"Workspace lease subprocess crash helper\" --reporter compact";
+    auto child = std::async(std::launch::async, [command]
+    {
+        return std::system(command.c_str());
+    });
+
+    const bool ready = WaitForWorkspaceLeaseMarker(
+        sandbox.Root / "lease-ready",
+        std::chrono::seconds(10));
+    PartyQuestReplicaWorkspaceLease competing;
+    const auto whileChildAlive = ready
+        ? competing.Acquire(paths, kOwnerCampaign, kOwnerPlayer)
+        : PartyQuestReplicaWorkspaceLeaseStatus::IoError;
+    WriteOwnerFile(sandbox.Root / "lease-crash", "crash");
+    const int childExitCode = child.get();
+    ClearWorkspaceLeaseEnvironment("TP_WORKSPACE_LEASE_CRASH_ROOT");
+
+    REQUIRE(ready);
+    REQUIRE(whileChildAlive == PartyQuestReplicaWorkspaceLeaseStatus::Busy);
+    REQUIRE(childExitCode != 0);
+    REQUIRE(competing.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
+        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    REQUIRE(std::filesystem::exists(
+        paths.MetadataDirectory / "party_quest_workspace.lock"));
 }
 
 TEST_CASE("Runtime session owner quarantines only exact orphan copy temporaries", "[quest.party-state.runtime-owner][workspace-recovery]")
