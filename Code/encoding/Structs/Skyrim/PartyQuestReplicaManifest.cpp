@@ -332,9 +332,11 @@ PartyQuestReplicaManifestPersistenceStatus ReadFile(
     std::ifstream file(acPath, std::ios::binary | std::ios::ate);
     if (!file.is_open())
     {
-        return std::filesystem::exists(acPath)
-            ? PartyQuestReplicaManifestPersistenceStatus::IoError
-            : PartyQuestReplicaManifestPersistenceStatus::FileNotFound;
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(acPath, ec);
+        if (ec || exists)
+            return PartyQuestReplicaManifestPersistenceStatus::IoError;
+        return PartyQuestReplicaManifestPersistenceStatus::FileNotFound;
     }
 
     const std::streampos end = file.tellg();

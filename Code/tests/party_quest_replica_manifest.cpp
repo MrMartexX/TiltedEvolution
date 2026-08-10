@@ -3,6 +3,7 @@
 
 #include <catch2/catch.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -74,6 +75,23 @@ PartyQuestCoopSavePaths BuildManifestPaths(const ManifestSandbox& acSandbox)
         kManifestPlayer);
     REQUIRE(paths.has_value());
     return *paths;
+}
+
+std::filesystem::path BuildComponentBoundedPath(size_t aBytes)
+{
+    std::filesystem::path path;
+    while (path.generic_u8string().size() < aBytes)
+    {
+        const size_t currentBytes = path.generic_u8string().size();
+        const size_t separatorBytes = path.empty() ? 0 : 1;
+        const size_t componentBytes = std::min<size_t>(
+            120,
+            aBytes - currentBytes - separatorBytes);
+        REQUIRE(componentBytes > 0);
+        path /= std::string(componentBytes, 'l');
+    }
+    REQUIRE(path.generic_u8string().size() == aBytes);
+    return path;
 }
 
 std::vector<PartyQuestReplicaFileSpec> BuildManifestSoloFiles(const ManifestSandbox& acSandbox)
@@ -347,10 +365,14 @@ TEST_CASE("Replica manifest paths fail closed before filesystem work", "[quest.p
                 manifest) ==
         PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded);
 
-    const std::filesystem::path legacyBaseWithoutSiblingSpace{
-        std::string(
-            PartyQuestReplicaResourcePolicy::MaxFilesystemPathBytes - 3,
-            'l')};
+    const std::filesystem::path overlongComponent{
+        std::string(300, 'c')};
+    REQUIRE(PartyQuestReplicaManifestStore::Load(overlongComponent).Status ==
+        PartyQuestReplicaManifestPersistenceStatus::IoError);
+
+    const std::filesystem::path legacyBaseWithoutSiblingSpace =
+        BuildComponentBoundedPath(
+            PartyQuestReplicaResourcePolicy::MaxFilesystemPathBytes - 3);
     REQUIRE(PartyQuestReplicaResourcePolicy::IsPathWithinBudget(
         legacyBaseWithoutSiblingSpace));
     REQUIRE(PartyQuestReplicaManifestStore::Load(legacyBaseWithoutSiblingSpace).Status ==
