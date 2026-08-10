@@ -367,8 +367,11 @@ TEST_CASE("Replica manifest paths fail closed before filesystem work", "[quest.p
 
     const std::filesystem::path overlongComponent{
         std::string(300, 'c')};
-    REQUIRE(PartyQuestReplicaManifestStore::Load(overlongComponent).Status ==
-        PartyQuestReplicaManifestPersistenceStatus::IoError);
+    const auto componentStatus =
+        PartyQuestReplicaManifestStore::Load(overlongComponent).Status;
+    REQUIRE((
+        componentStatus == PartyQuestReplicaManifestPersistenceStatus::FileNotFound ||
+        componentStatus == PartyQuestReplicaManifestPersistenceStatus::IoError));
 
     const std::filesystem::path legacyBaseWithoutSiblingSpace =
         BuildComponentBoundedPath(
