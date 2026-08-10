@@ -4,12 +4,6 @@
 
 namespace
 {
-uint64_t Mix(uint64_t aHash, uint64_t aValue) noexcept
-{
-    aHash ^= aValue + 0x9E3779B97F4A7C15ull + (aHash << 6) + (aHash >> 2);
-    return aHash;
-}
-
 bool GameIdLess(const GameId& acLeft, const GameId& acRight) noexcept
 {
     if (acLeft.ModId != acRight.ModId)
@@ -17,19 +11,6 @@ bool GameIdLess(const GameId& acLeft, const GameId& acRight) noexcept
     return acLeft.BaseId < acRight.BaseId;
 }
 } // namespace
-
-uint64_t PartyQuestDeferredWorldQueue::ComputeRequestFingerprint(
-    const PartyQuestRuntimeApplyRequest& acRequest) noexcept
-{
-    QuestSnapshot snapshot = acRequest.CanonicalSnapshot;
-    snapshot.Canonicalize();
-
-    uint64_t hash = 0xC4CEB9FE1A85EC53ull;
-    hash = Mix(hash, acRequest.TargetWorldRevision);
-    hash = Mix(hash, snapshot.ComputeDigest());
-    hash = Mix(hash, static_cast<uint32_t>(acRequest.Plan.Actions));
-    return hash != 0 ? hash : 1;
-}
 
 std::vector<GameId> PartyQuestDeferredWorldQueue::CollectWorldTargets(
     const QuestSnapshot& acSnapshot)
@@ -68,6 +49,7 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
 {
     if (aRequest.TransactionId == 0 ||
         aRequest.TargetWorldRevision == 0 ||
+        aRequest.SidecarManifestFingerprint == 0 ||
         !aRequest.CanonicalSnapshot.QuestId ||
         aRequest.CanonicalSnapshot.Revision == 0)
     {
@@ -89,12 +71,15 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
     }
 
     aRequest.CanonicalSnapshot.Canonicalize();
-    const uint64_t fingerprint = ComputeRequestFingerprint(aRequest);
+    const auto fingerprint =
+        PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aRequest);
+    if (!fingerprint)
+        return PartyQuestDeferredWorldEnqueueStatus::UnsafePlan;
 
     const auto seenIt = m_transactionFingerprints.find(aRequest.TransactionId);
     if (seenIt != m_transactionFingerprints.end())
     {
-        return seenIt->second == fingerprint
+        return seenIt->second == *fingerprint
             ? PartyQuestDeferredWorldEnqueueStatus::Duplicate
             : PartyQuestDeferredWorldEnqueueStatus::TransactionConflict;
     }
@@ -122,7 +107,7 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
         const uint64_t transactionId = replacement.Request.TransactionId;
         existingIt->second = std::move(replacement);
         m_transactionQuests.emplace(transactionId, questId);
-        m_transactionFingerprints.emplace(transactionId, fingerprint);
+        m_transactionFingerprints.emplace(transactionId, *fingerprint);
         return PartyQuestDeferredWorldEnqueueStatus::ReplacedOlderQuestRevision;
     }
 
@@ -134,20 +119,35 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
     const uint64_t transactionId = entry.Request.TransactionId;
     m_entries.emplace(questId, std::move(entry));
     m_transactionQuests.emplace(transactionId, questId);
-    m_transactionFingerprints.emplace(transactionId, fingerprint);
+    m_transactionFingerprints.emplace(transactionId, *fingerprint);
     return PartyQuestDeferredWorldEnqueueStatus::Queued;
 }
 
-bool PartyQuestDeferredWorldQueue::MarkReady(uint64_t aTransactionId) noexcept
+bool PartyQuestDeferredWorldQueue::MarkReady(
+    PartyQuestRuntimeApplyRequest aCurrentRequest) noexcept
 {
-    const auto transactionIt = m_transactionQuests.find(aTransactionId);
+    const uint64_t transactionId = aCurrentRequest.TransactionId;
+    const auto currentIdentity =
+        PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aCurrentRequest);
+    if (!currentIdentity)
+        return false;
+
+    const auto transactionIt = m_transactionQuests.find(transactionId);
     if (transactionIt == m_transactionQuests.end())
         return false;
 
     const auto entryIt = m_entries.find(transactionIt->second);
-    if (entryIt == m_entries.end() || entryIt->second.Request.TransactionId != aTransactionId)
+    const auto fingerprintIt = m_transactionFingerprints.find(transactionId);
+    if (entryIt == m_entries.end() ||
+        fingerprintIt == m_transactionFingerprints.end() ||
+        entryIt->second.Request.TransactionId != transactionId ||
+        fingerprintIt->second != *currentIdentity)
+    {
         return false;
+    }
 
+    aCurrentRequest.CanonicalSnapshot.Canonicalize();
+    entryIt->second.Request = std::move(aCurrentRequest);
     entryIt->second.Ready = true;
     return true;
 }

@@ -22,8 +22,8 @@ bool HasValidMutationAuthorization(
 }
 } // namespace
 
-std::optional<PartyQuestRuntimeApplyCoordinator::Fingerprint>
-PartyQuestRuntimeApplyCoordinator::ValidateAndFingerprint(
+std::optional<PartyQuestRuntimeApplyIdentity>
+PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(
     const PartyQuestRuntimeApplyRequest& acRequest) noexcept
 {
     if (acRequest.TransactionId == 0 ||
@@ -46,7 +46,7 @@ PartyQuestRuntimeApplyCoordinator::ValidateAndFingerprint(
     QuestSnapshot canonical = acRequest.CanonicalSnapshot;
     canonical.Canonicalize();
 
-    Fingerprint fingerprint;
+    PartyQuestRuntimeApplyIdentity fingerprint;
     fingerprint.QuestId = canonical.QuestId;
     fingerprint.TargetWorldRevision = acRequest.TargetWorldRevision;
     fingerprint.CanonicalDigest = canonical.ComputeDigest();
@@ -67,11 +67,11 @@ PartyQuestRuntimeApplyCoordinator::ValidateAndFingerprint(
     return fingerprint;
 }
 
-PartyQuestRuntimeApplyCoordinator::Fingerprint
+PartyQuestRuntimeApplyIdentity
 PartyQuestRuntimeApplyCoordinator::FingerprintActive(
     const PartyQuestRuntimeApplyEntry& acEntry) noexcept
 {
-    Fingerprint fingerprint;
+    PartyQuestRuntimeApplyIdentity fingerprint;
     fingerprint.QuestId = acEntry.QuestId;
     fingerprint.TargetWorldRevision = acEntry.TargetWorldRevision;
     fingerprint.CanonicalDigest = acEntry.CanonicalDigest;
@@ -160,7 +160,7 @@ PartyQuestRuntimeApplyBeginStatus PartyQuestRuntimeApplyCoordinator::Begin(
         return PartyQuestRuntimeApplyBeginStatus::UnsafePlan;
     }
 
-    const auto fingerprint = ValidateAndFingerprint(acRequest);
+    const auto fingerprint = BuildValidatedIdentity(acRequest);
     if (!fingerprint)
         return PartyQuestRuntimeApplyBeginStatus::InvalidRequest;
 
@@ -219,7 +219,7 @@ bool PartyQuestRuntimeApplyCoordinator::MarkWorldReady(
         return false;
     }
 
-    const auto currentFingerprint = ValidateAndFingerprint(acCurrentRequest);
+    const auto currentFingerprint = BuildValidatedIdentity(acCurrentRequest);
     if (!currentFingerprint || FingerprintActive(*m_active) != *currentFingerprint)
         return false;
 
@@ -426,7 +426,7 @@ PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplyCoordinator::RestoreR
             return PartyQuestRuntimeRecoveryDisposition::InvalidState;
         }
 
-        Fingerprint fingerprint;
+        PartyQuestRuntimeApplyIdentity fingerprint;
         fingerprint.QuestId = record.QuestId;
         fingerprint.TargetWorldRevision = record.TargetWorldRevision;
         fingerprint.CanonicalDigest = record.CanonicalDigest;

@@ -14,15 +14,17 @@
 
 namespace
 {
-PartyQuestRuntimeSafetyProfile BuildDeferredAuthorization(GameId aQuestId)
+PartyQuestRuntimeSafetyProfile BuildDeferredAuthorization(
+    GameId aQuestId,
+    uint32_t aProfileVersion = 1)
 {
     PartyQuestRuntimeCompatibilityRequirement requirement;
     requirement.QuestId = aQuestId;
-    requirement.ProfileVersion = 1;
-    requirement.ResolvedRecordFingerprint = 0x11;
-    requirement.WinningOverrideFingerprint = 0x22;
-    requirement.ScriptFingerprint = 0x33;
-    requirement.NativeAdapterFingerprint = 0x44;
+    requirement.ProfileVersion = aProfileVersion;
+    requirement.ResolvedRecordFingerprint = 0x11 + aProfileVersion;
+    requirement.WinningOverrideFingerprint = 0x22 + aProfileVersion;
+    requirement.ScriptFingerprint = 0x33 + aProfileVersion;
+    requirement.NativeAdapterFingerprint = 0x44 + aProfileVersion;
     requirement.AdapterMutationComponents = PartyQuestVerificationComponent::QuestSnapshot;
 
     PartyQuestRuntimeCompatibilityFacts facts;
@@ -43,7 +45,8 @@ PartyQuestRuntimeApplyRequest BuildDeferredRequest(
     GameId aQuestId,
     uint64_t aQuestRevision,
     uint64_t aWorldRevision,
-    uint32_t aTargetBaseId)
+    uint32_t aTargetBaseId,
+    uint32_t aCompatibilityProfileVersion = 1)
 {
     QuestSnapshot snapshot;
     snapshot.QuestId = aQuestId;
@@ -73,7 +76,7 @@ PartyQuestRuntimeApplyRequest BuildDeferredRequest(
     request.Plan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(
         admission,
         snapshot,
-        BuildDeferredAuthorization(aQuestId));
+        BuildDeferredAuthorization(aQuestId, aCompatibilityProfileVersion));
     REQUIRE(request.Plan.Safety.IsRuntimeSafe());
     REQUIRE(request.Plan.MutationAuthorization.IsVerified());
     REQUIRE(HasPartyQuestApplyAction(request.Plan.Actions, PartyQuestApplyAction::WaitForWorldTargets));
@@ -115,7 +118,7 @@ TEST_CASE("Deferred world queue exposes stable target identities but requires ex
     REQUIRE(entry->ReferencedWorldTargets[1] == GameId(0, 0x5001));
 
     REQUIRE(queue.TakeReady().empty());
-    REQUIRE(queue.MarkReady(request.TransactionId));
+    REQUIRE(queue.MarkReady(request));
 
     auto ready = queue.TakeReady();
     REQUIRE(ready.size() == 1);
@@ -134,6 +137,34 @@ TEST_CASE("Deferred world queue is idempotent and detects transaction reuse conf
     conflict.TargetWorldRevision = 71;
     REQUIRE(queue.Enqueue(conflict) == PartyQuestDeferredWorldEnqueueStatus::TransactionConflict);
     REQUIRE(queue.GetPendingCount() == 1);
+}
+
+TEST_CASE("Deferred world readiness rejects stale sidecar and compatibility identity", "[quest.party-state.deferred-world]")
+{
+    PartyQuestDeferredWorldQueue queue;
+    const auto request = BuildDeferredRequest(3201, GameId(42, 0x1800), 1, 72, 0x6200);
+    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+
+    auto changedSidecars = request;
+    ++changedSidecars.SidecarManifestFingerprint;
+    REQUIRE(queue.Enqueue(changedSidecars) ==
+        PartyQuestDeferredWorldEnqueueStatus::TransactionConflict);
+    REQUIRE_FALSE(queue.MarkReady(changedSidecars));
+    REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
+
+    auto changedCompatibility = BuildDeferredRequest(
+        request.TransactionId,
+        request.CanonicalSnapshot.QuestId,
+        request.CanonicalSnapshot.Revision,
+        request.TargetWorldRevision,
+        0x6200,
+        2);
+    REQUIRE(queue.Enqueue(changedCompatibility) ==
+        PartyQuestDeferredWorldEnqueueStatus::TransactionConflict);
+    REQUIRE_FALSE(queue.MarkReady(changedCompatibility));
+    REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
+
+    REQUIRE(queue.MarkReady(request));
 }
 
 TEST_CASE("Deferred world queue rejects forged or stale mutation authorization", "[quest.party-state.deferred-world][mutation-authorization]")
@@ -182,7 +213,7 @@ TEST_CASE("Newer canonical observation invalidates deferred stale work before ce
     REQUIRE_FALSE(queue.InvalidateIfOlder(questId, 6));
     REQUIRE(queue.InvalidateIfOlder(questId, 7));
     REQUIRE(queue.GetPendingCount() == 0);
-    REQUIRE_FALSE(queue.MarkReady(request.TransactionId));
+    REQUIRE_FALSE(queue.MarkReady(request));
 }
 
 TEST_CASE("Deferred world ready requests are emitted deterministically by canonical world revision", "[quest.party-state.deferred-world]")
@@ -193,8 +224,8 @@ TEST_CASE("Deferred world ready requests are emitted deterministically by canoni
 
     REQUIRE(queue.Enqueue(later) == PartyQuestDeferredWorldEnqueueStatus::Queued);
     REQUIRE(queue.Enqueue(earlier) == PartyQuestDeferredWorldEnqueueStatus::Queued);
-    REQUIRE(queue.MarkReady(later.TransactionId));
-    REQUIRE(queue.MarkReady(earlier.TransactionId));
+    REQUIRE(queue.MarkReady(later));
+    REQUIRE(queue.MarkReady(earlier));
 
     const auto ready = queue.TakeReady();
     REQUIRE(ready.size() == 2);

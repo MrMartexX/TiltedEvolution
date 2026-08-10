@@ -68,6 +68,23 @@ struct PartyQuestRuntimeApplyRequest
     PartyQuestApplyPlan Plan;
 };
 
+/**
+ * Exact, deterministic identity of one validated runtime apply request.
+ * Structural equality is used for safety decisions; this is not an
+ * authentication primitive or a collision-prone hash shortcut.
+ */
+struct PartyQuestRuntimeApplyIdentity
+{
+    GameId QuestId{};
+    uint64_t TargetWorldRevision{};
+    uint64_t CanonicalDigest{};
+    uint64_t SidecarManifestFingerprint{};
+    PartyQuestApplyAction Actions{PartyQuestApplyAction::None};
+    PartyQuestVerificationEnvelopeV1 ExpectedVerification;
+
+    bool operator==(const PartyQuestRuntimeApplyIdentity&) const noexcept = default;
+};
+
 struct PartyQuestRuntimeApplyEntry
 {
     uint64_t TransactionId{};
@@ -122,6 +139,10 @@ class PartyQuestRuntimeApplyCoordinator final
 {
 public:
     [[nodiscard]] PartyQuestRuntimeApplyBeginStatus Begin(
+        const PartyQuestRuntimeApplyRequest& acRequest) noexcept;
+
+    /** Validates production policy and builds the exact transaction identity. */
+    [[nodiscard]] static std::optional<PartyQuestRuntimeApplyIdentity> BuildValidatedIdentity(
         const PartyQuestRuntimeApplyRequest& acRequest) noexcept;
 
     /**
@@ -247,21 +268,7 @@ public:
     }
 
 private:
-    struct Fingerprint
-    {
-        GameId QuestId{};
-        uint64_t TargetWorldRevision{};
-        uint64_t CanonicalDigest{};
-        uint64_t SidecarManifestFingerprint{};
-        PartyQuestApplyAction Actions{PartyQuestApplyAction::None};
-        PartyQuestVerificationEnvelopeV1 ExpectedVerification;
-
-        bool operator==(const Fingerprint&) const noexcept = default;
-    };
-
-    [[nodiscard]] static std::optional<Fingerprint> ValidateAndFingerprint(
-        const PartyQuestRuntimeApplyRequest& acRequest) noexcept;
-    [[nodiscard]] static Fingerprint FingerprintActive(
+    [[nodiscard]] static PartyQuestRuntimeApplyIdentity FingerprintActive(
         const PartyQuestRuntimeApplyEntry& acEntry) noexcept;
     [[nodiscard]] static bool ValidateRecoveryEntry(
         const PartyQuestRuntimeApplyEntry& acEntry) noexcept;
@@ -271,7 +278,7 @@ private:
 
     std::optional<PartyQuestRuntimeApplyEntry> m_active;
     std::optional<PartyQuestRuntimeApplyEntry> m_recoveryRecord;
-    std::unordered_map<uint64_t, Fingerprint> m_committed;
+    std::unordered_map<uint64_t, PartyQuestRuntimeApplyIdentity> m_committed;
     bool m_recoveryBlocked{};
     bool m_lastAbortRequiresCheckpointRestore{};
 };
