@@ -103,6 +103,7 @@ jobs:
 
   build-poc-windows:
     runs-on: windows-2022
+    timeout-minutes: 50
 
     steps:
       - uses: actions/checkout@v7
@@ -116,6 +117,7 @@ jobs:
           $needsFull = ("${{ github.event_name }}" -ne "pull_request") -or ("${{ github.event.action }}" -ne "synchronize") -or [string]::IsNullOrWhiteSpace("${{ github.event.before }}") -or [string]::IsNullOrWhiteSpace("${{ github.event.after }}")
           if ($needsFull) {
             "full=true" >> $env:GITHUB_OUTPUT
+            "tests=true" >> $env:GITHUB_OUTPUT
             Write-Host "Full validation: non-synchronize event or missing push range."
             exit 0
           }
@@ -124,18 +126,23 @@ jobs:
           $after = "${{ github.event.after }}"
           $files = @(git diff --name-only $before $after)
           $isolated = $files.Count -gt 0
+          $hasPartyQuestTests = $false
 
           foreach ($file in $files) {
             $isPartyQuest = ($file -match '^Code/encoding/Structs/Skyrim/PartyQuest') -or ($file -match '^Code/tests/party_quest_')
             if (-not $isPartyQuest) {
               $isolated = $false
-              break
+            }
+            if ($file -match '^Code/tests/party_quest_') {
+              $hasPartyQuestTests = $true
             }
           }
 
           $full = (-not $isolated).ToString().ToLowerInvariant()
           "full=$full" >> $env:GITHUB_OUTPUT
+          "tests=$($hasPartyQuestTests.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           Write-Host "PartyQuest-only pushed range: $isolated"
+          Write-Host "PartyQuest tests changed: $hasPartyQuestTests"
 
       - name: Checkout submodules
         run: |
@@ -160,21 +167,39 @@ jobs:
       - name: Build Windows validation target and capture diagnostics
         shell: pwsh
         run: |
-          $target = if ("${{ steps.scope.outputs.full }}" -eq "true") {
-            "SkyrimTogetherClient"
+          $targets = if ("${{ steps.scope.outputs.full }}" -eq "true") {
+            @("SkyrimTogetherClient", "TPTests")
+          } elseif ("${{ steps.scope.outputs.tests }}" -eq "true") {
+            @("TPTests")
           } else {
-            "SkyrimEncoding"
+            @("SkyrimEncoding")
           }
 
-          Write-Host "Building validation target: $target"
-          xmake -y -vD $target *> poc-windows-build.log
-          $status = $LASTEXITCODE
+          Set-Content poc-windows-build.log ""
+          $status = 0
+          foreach ($target in $targets) {
+            Write-Host "Building validation target: $target"
+            xmake -y -vD $target *>> poc-windows-build.log
+            $status = $LASTEXITCODE
+            if ($status -ne 0) {
+              break
+            }
+          }
 
-          $matches = Select-String -Path poc-windows-build.log -Pattern 'error C[0-9]+|fatal error|LNK[0-9]+|error:' | Select-Object -Last 250
+          if ($status -eq 0 -and $targets -contains "TPTests") {
+            Write-Host "Running Windows TPTests"
+            xmake run TPTests *> poc-windows-test.log
+            $status = $LASTEXITCODE
+          }
+
+          $logs = @("poc-windows-build.log", "poc-windows-test.log") |
+            Where-Object { Test-Path $_ }
+          $matches = Select-String -Path $logs -Pattern 'error C[0-9]+|fatal error|LNK[0-9]+|error:|FAILED|assertion' |
+            Select-Object -Last 250
           if ($matches) {
             $matches | ForEach-Object { $_.Line } | Set-Content poc-windows-errors.txt
           } else {
-            Get-Content poc-windows-build.log -Tail 300 | Set-Content poc-windows-errors.txt
+            Get-Content $logs | Select-Object -Last 300 | Set-Content poc-windows-errors.txt
           }
 
           exit $status
@@ -187,4 +212,5 @@ jobs:
           path: |
             poc-windows-errors.txt
             poc-windows-build.log
+            poc-windows-test.log
           retention-days: 7
