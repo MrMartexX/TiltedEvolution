@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestStatePersistence.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <algorithm>
 #include <array>
@@ -13,7 +14,8 @@ constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'S', 'T', 'A', 'T', 'E'};
 constexpr uint16_t kLegacyUnboundFormatVersion = 1;
 constexpr uint16_t kFormatVersion = 2;
 constexpr uint32_t kMaxQuestCount = 100000;
-constexpr uint64_t kMaxJournalEntries = 10000000;
+constexpr uint64_t kMaxJournalEntries =
+    PartyQuestDurableResourcePolicy::MaxCanonicalJournalRecords;
 constexpr uint32_t kMaxCollectionEntries = 1000000;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;

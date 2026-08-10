@@ -358,6 +358,143 @@ TEST_CASE("Client protocol ids survive transient PlayerId reuse without determin
         REQUIRE_FALSE(issued.contains(secondProcess.Allocate()));
 }
 
+TEST_CASE("Protocol identity caches fail closed without losing retained conflict semantics", "[quest.party-state.coordinator][resource-budget]")
+{
+    SECTION("server session and transaction bounds")
+    {
+        PartyQuestProtocolCoordinator coordinator;
+        for (uint32_t clientId = 1;
+             clientId <= PartyQuestProtocolResourcePolicy::MaxSessions;
+             ++clientId)
+        {
+            REQUIRE(coordinator.ConnectClient(clientId));
+        }
+        REQUIRE_FALSE(coordinator.ConnectClient(
+            static_cast<uint32_t>(PartyQuestProtocolResourcePolicy::MaxSessions + 1)));
+        REQUIRE(coordinator.ConnectClient(1));
+
+        const GameId questId(11, 0xA000);
+        for (uint64_t i = 0;
+             i < PartyQuestProtocolResourcePolicy::MaxTransactionsPerSession;
+             ++i)
+        {
+            const auto result = coordinator.HandleTransaction(
+                1,
+                BuildCoordinatorRequest(i + 1, i + 10000, 1, questId, 1, 10));
+            REQUIRE(result.Status == PartyQuestTransactionHandleStatus::Processed);
+            REQUIRE(result.Response.Result.Status ==
+                PartyQuestApplyStatus::RevisionMismatch);
+        }
+
+        const auto overflowRequest = BuildCoordinatorRequest(
+            PartyQuestProtocolResourcePolicy::MaxTransactionsPerSession + 1,
+            999999,
+            1,
+            questId,
+            0,
+            10);
+        const auto overflow = coordinator.HandleTransaction(1, overflowRequest);
+        REQUIRE(overflow.Status ==
+            PartyQuestTransactionHandleStatus::ResourceLimitExceeded);
+        REQUIRE(overflow.Response.Result.Status ==
+            PartyQuestApplyStatus::ResourceLimitExceeded);
+        REQUIRE(coordinator.GetCanonicalState().GetWorldRevision() == 0);
+
+        const auto first = BuildCoordinatorRequest(1, 10000, 1, questId, 1, 10);
+        REQUIRE(coordinator.HandleTransaction(1, first).Status ==
+            PartyQuestTransactionHandleStatus::DuplicateRequest);
+        auto conflict = first;
+        conflict.Transaction.TransactionId = 10001;
+        REQUIRE(coordinator.HandleTransaction(1, conflict).Status ==
+            PartyQuestTransactionHandleStatus::RequestIdConflict);
+    }
+
+    SECTION("server report and plan bounds")
+    {
+        PartyQuestProtocolCoordinator coordinator;
+        REQUIRE(coordinator.ConnectClient(1));
+        PartyQuestClientSession client(1);
+
+        for (uint64_t i = 1;
+             i <= PartyQuestProtocolResourcePolicy::MaxReportsAndPlansPerSession;
+             ++i)
+        {
+            REQUIRE(coordinator.HandleReplicaReport(
+                1, client.BuildReplicaReport(i, false)).Status ==
+                PartyQuestReportHandleStatus::Generated);
+        }
+
+        REQUIRE(coordinator.HandleReplicaReport(
+            1,
+            client.BuildReplicaReport(
+                PartyQuestProtocolResourcePolicy::MaxReportsAndPlansPerSession + 1,
+                false)).Status == PartyQuestReportHandleStatus::ResourceLimitExceeded);
+        REQUIRE(coordinator.HandleReplicaReport(
+            1, client.BuildReplicaReport(1, false)).Status ==
+            PartyQuestReportHandleStatus::DuplicateReport);
+    }
+
+    SECTION("client canonical and repair bounds")
+    {
+        PartyQuestClientSession client(1);
+        const GameId questId(12, 0xB000);
+
+        for (uint64_t i = 1;
+             i <= PartyQuestProtocolResourcePolicy::MaxClientCanonicalUpdates;
+             ++i)
+        {
+            NotifyPartyQuestCanonicalUpdate update;
+            update.TransactionId = i;
+            update.WorldRevision = i;
+            update.InitiatorPlayerId = 1;
+            update.CanonicalSnapshot = BuildCoordinatorSnapshot(
+                questId, static_cast<uint16_t>(i));
+            update.CanonicalSnapshot.Revision = i;
+            update.CanonicalSnapshot.InitiatorPlayerId = 1;
+            REQUIRE(client.HandleCanonicalUpdate(update) ==
+                PartyQuestClientCanonicalStatus::Applied);
+        }
+
+        NotifyPartyQuestCanonicalUpdate overflow;
+        overflow.TransactionId =
+            PartyQuestProtocolResourcePolicy::MaxClientCanonicalUpdates + 1;
+        overflow.WorldRevision = overflow.TransactionId;
+        overflow.InitiatorPlayerId = 1;
+        overflow.CanonicalSnapshot = BuildCoordinatorSnapshot(questId, 1);
+        overflow.CanonicalSnapshot.Revision = overflow.WorldRevision;
+        overflow.CanonicalSnapshot.InitiatorPlayerId = 1;
+        REQUIRE(client.HandleCanonicalUpdate(overflow) ==
+            PartyQuestClientCanonicalStatus::ResourceLimitExceeded);
+
+        PartyQuestClientSession repairClient(1);
+        const PartyQuestCampaignId campaign{0xCAFE, 0xBABE};
+        NotifyPartyQuestRepairPlan firstPlan;
+        for (uint64_t i = 1;
+             i <= PartyQuestProtocolResourcePolicy::MaxClientRepairs;
+             ++i)
+        {
+            NotifyPartyQuestRepairPlan plan;
+            plan.ReportId = i;
+            plan.PlanId = i;
+            plan.CampaignId = campaign;
+            plan.Plan.Status = PartyQuestRepairPlanStatus::UpToDate;
+            if (i == 1)
+                firstPlan = plan;
+            REQUIRE(repairClient.HandleRepairPlan(plan).Status ==
+                PartyQuestClientRepairStatus::NoChanges);
+        }
+
+        auto overflowPlan = firstPlan;
+        overflowPlan.ReportId =
+            PartyQuestProtocolResourcePolicy::MaxClientRepairs + 1;
+        overflowPlan.PlanId = overflowPlan.ReportId;
+        REQUIRE(repairClient.HandleRepairPlan(overflowPlan).Status ==
+            PartyQuestClientRepairStatus::ResourceLimitExceeded);
+        REQUIRE(repairClient.HandleRepairPlan(firstPlan).Status ==
+            PartyQuestClientRepairStatus::Duplicate);
+    }
+}
+
 TEST_CASE("Client replica survives PlayerId rebind and resets only when CampaignId changes", "[quest.party-state.coordinator.reconnect]")
 {
     const PartyQuestCampaignId campaignA{0xAAAA, 0x1111};

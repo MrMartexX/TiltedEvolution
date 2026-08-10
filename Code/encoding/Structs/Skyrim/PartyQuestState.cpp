@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestState.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 namespace
 {
@@ -56,6 +57,15 @@ PartyQuestApplyResult PartyQuestState::Apply(const PartyQuestTransaction& acTran
     const uint64_t currentQuestRevision = GetQuestRevision(*this, transaction.QuestId);
     if (transaction.ExpectedQuestRevision != currentQuestRevision)
         return {PartyQuestApplyStatus::RevisionMismatch, m_worldRevision, currentQuestRevision};
+
+    if (m_journal.size() >=
+        PartyQuestDurableResourcePolicy::MaxCanonicalJournalRecords)
+    {
+        return {
+            PartyQuestApplyStatus::ResourceLimitExceeded,
+            m_worldRevision,
+            currentQuestRevision};
+    }
 
     QuestSnapshot canonicalSnapshot = transaction.ProposedSnapshot;
     canonicalSnapshot.Revision = currentQuestRevision + 1;

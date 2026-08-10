@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestState.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -182,4 +183,39 @@ TEST_CASE("Party quest state rejects zero transaction identifiers", "[quest.part
     REQUIRE(result.Status == PartyQuestApplyStatus::InvalidTransactionId);
     REQUIRE(state.GetWorldRevision() == 0);
     REQUIRE(state.GetJournal().empty());
+}
+
+TEST_CASE("Canonical journal fails closed at its durable identity bound", "[quest.party-state][resource-budget]")
+{
+    PartyQuestState state;
+    const GameId questId(1, 0x900);
+    const uint64_t limit =
+        PartyQuestDurableResourcePolicy::MaxCanonicalJournalRecords;
+
+    for (uint64_t i = 0; i < limit; ++i)
+    {
+        const auto result = state.Apply(BuildTransaction(
+            i + 1,
+            questId,
+            i,
+            static_cast<uint16_t>(i)));
+        REQUIRE(result.Status == PartyQuestApplyStatus::Accepted);
+    }
+
+    const auto duplicate = state.Apply(BuildTransaction(1, questId, 0, 0));
+    REQUIRE(duplicate.Status == PartyQuestApplyStatus::Duplicate);
+
+    auto conflicting = BuildTransaction(1, questId, 0, 1);
+    REQUIRE(state.Apply(conflicting).Status ==
+        PartyQuestApplyStatus::TransactionConflict);
+
+    const auto overflow = state.Apply(BuildTransaction(
+        limit + 1,
+        questId,
+        limit,
+        1));
+    REQUIRE(overflow.Status == PartyQuestApplyStatus::ResourceLimitExceeded);
+    REQUIRE(overflow.WorldRevision == limit);
+    REQUIRE(state.GetWorldRevision() == limit);
+    REQUIRE(state.GetJournal().size() == limit);
 }

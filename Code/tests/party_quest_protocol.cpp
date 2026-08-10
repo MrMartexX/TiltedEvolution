@@ -156,6 +156,14 @@ TEST_CASE("Party quest protocol messages round-trip through the real factories",
     auto decodedAdmissionRejected = RoundTripServerMessage(admissionRejected);
     REQUIRE(decodedAdmissionRejected->IsValid);
     REQUIRE(*decodedAdmissionRejected == admissionRejected);
+
+    NotifyPartyQuestTransactionResult resourceLimited;
+    resourceLimited.RequestId = 7011;
+    resourceLimited.Result = {
+        PartyQuestApplyStatus::ResourceLimitExceeded, 65536, 65536};
+    auto decodedResourceLimited = RoundTripServerMessage(resourceLimited);
+    REQUIRE(decodedResourceLimited->IsValid);
+    REQUIRE(*decodedResourceLimited == resourceLimited);
 }
 
 TEST_CASE("Reconnect report repair and acknowledgement converge without a second game client", "[quest.party-state.protocol]")

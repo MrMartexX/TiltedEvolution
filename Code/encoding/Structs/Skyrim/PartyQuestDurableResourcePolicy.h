@@ -10,5 +10,6 @@ struct PartyQuestDurableResourcePolicy
     static constexpr uint64_t MaxRuntimeApplyArchiveBytes = 16ull * 1024ull * 1024ull;
     static constexpr uint32_t MaxSerializedPathBytes = 1024;
     static constexpr uint64_t MaxCommittedRuntimeRecords = 65536;
+    static constexpr uint64_t MaxCanonicalJournalRecords = 65536;
     static constexpr uint64_t MaxRevisionCheckpointsPerKind = 128;
 };

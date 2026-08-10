@@ -16,7 +16,8 @@ enum class PartyQuestTransactionHandleStatus : uint8_t
     UnknownClient,
     InvalidMessage,
     RequestIdConflict,
-    PersistenceFailure
+    PersistenceFailure,
+    ResourceLimitExceeded
 };
 
 struct PartyQuestTransactionDispatch
@@ -33,7 +34,8 @@ enum class PartyQuestReportHandleStatus : uint8_t
     DuplicateReport,
     UnknownClient,
     InvalidMessage,
-    ReportIdConflict
+    ReportIdConflict,
+    ResourceLimitExceeded
 };
 
 struct PartyQuestReportDispatch
@@ -68,6 +70,16 @@ struct PartyQuestCoordinatorSessionInfo
     uint64_t LastVerifiedWorldRevision{};
     uint64_t PendingPlanId{};
     bool LastReportWasReconnect{};
+};
+
+/** Immutable in-memory bounds; exhaustion fails closed without canonical mutation. */
+struct PartyQuestProtocolResourcePolicy
+{
+    static constexpr size_t MaxSessions = 256;
+    static constexpr size_t MaxTransactionsPerSession = 4096;
+    static constexpr size_t MaxReportsAndPlansPerSession = 256;
+    static constexpr size_t MaxClientCanonicalUpdates = 4096;
+    static constexpr size_t MaxClientRepairs = 256;
 };
 
 /**
@@ -155,7 +167,8 @@ enum class PartyQuestClientCanonicalStatus : uint8_t
     Duplicate,
     InvalidMessage,
     TransactionConflict,
-    RevisionGap
+    RevisionGap,
+    ResourceLimitExceeded
 };
 
 enum class PartyQuestClientRepairStatus : uint8_t
@@ -166,7 +179,8 @@ enum class PartyQuestClientRepairStatus : uint8_t
     StalePlan,
     InvalidPlan,
     Duplicate,
-    PlanConflict
+    PlanConflict,
+    ResourceLimitExceeded
 };
 
 struct PartyQuestClientRepairResult

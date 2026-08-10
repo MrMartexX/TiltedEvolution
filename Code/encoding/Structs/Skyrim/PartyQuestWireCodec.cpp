@@ -244,7 +244,7 @@ void SerializeApplyResult(TiltedPhoques::Buffer::Writer& aWriter, const PartyQue
 bool DeserializeApplyResult(TiltedPhoques::Buffer::Reader& aReader, PartyQuestApplyResult& aResult) noexcept
 {
     const uint64_t status = Serialization::ReadVarInt(aReader);
-    if (status > static_cast<uint8_t>(PartyQuestApplyStatus::AdmissionRejected))
+    if (status > static_cast<uint8_t>(PartyQuestApplyStatus::ResourceLimitExceeded))
         return false;
 
     aResult.Status = static_cast<PartyQuestApplyStatus>(status);

@@ -56,7 +56,15 @@ bool PartyQuestProtocolCoordinator::ConnectClient(uint32_t aClientId)
     if (aClientId == 0)
         return false;
 
-    Session& session = m_sessions[aClientId];
+    auto sessionIt = m_sessions.find(aClientId);
+    if (sessionIt == m_sessions.end())
+    {
+        if (m_sessions.size() >= PartyQuestProtocolResourcePolicy::MaxSessions)
+            return false;
+        sessionIt = m_sessions.emplace(aClientId, Session{}).first;
+    }
+
+    Session& session = sessionIt->second;
     session.Info.Connected = true;
     ++session.Info.ConnectionGeneration;
     return true;
@@ -161,6 +169,17 @@ PartyQuestTransactionDispatch PartyQuestProtocolCoordinator::HandleTransaction(
         return dispatch;
     }
 
+    if (pSession->Transactions.size() >=
+        PartyQuestProtocolResourcePolicy::MaxTransactionsPerSession)
+    {
+        dispatch.Status = PartyQuestTransactionHandleStatus::ResourceLimitExceeded;
+        dispatch.Response.Result = {
+            PartyQuestApplyStatus::ResourceLimitExceeded,
+            m_state.GetWorldRevision(),
+            GetQuestRevision(m_state, acRequest.Transaction.QuestId)};
+        return dispatch;
+    }
+
     PartyQuestState candidateState = m_state;
     const PartyQuestApplyResult candidateResult = candidateState.Apply(acRequest.Transaction);
 
@@ -247,6 +266,15 @@ PartyQuestReportDispatch PartyQuestProtocolCoordinator::HandleReplicaReport(
         }
 
         dispatch.Status = PartyQuestReportHandleStatus::ReportIdConflict;
+        return dispatch;
+    }
+
+    if (pSession->Reports.size() >=
+            PartyQuestProtocolResourcePolicy::MaxReportsAndPlansPerSession ||
+        pSession->Plans.size() >=
+            PartyQuestProtocolResourcePolicy::MaxReportsAndPlansPerSession)
+    {
+        dispatch.Status = PartyQuestReportHandleStatus::ResourceLimitExceeded;
         return dispatch;
     }
 
@@ -438,6 +466,12 @@ PartyQuestClientCanonicalStatus PartyQuestClientSession::HandleCanonicalUpdate(
     if (acUpdate.CanonicalSnapshot.Revision != currentQuestRevision + 1)
         return PartyQuestClientCanonicalStatus::RevisionGap;
 
+    if (m_canonicalUpdates.size() >=
+        PartyQuestProtocolResourcePolicy::MaxClientCanonicalUpdates)
+    {
+        return PartyQuestClientCanonicalStatus::ResourceLimitExceeded;
+    }
+
     m_replica.ObserveLocalSnapshot(acUpdate.CanonicalSnapshot);
     m_replica.SetObservedWorldRevision(acUpdate.WorldRevision);
     m_canonicalUpdates.emplace(acUpdate.TransactionId, CanonicalCacheEntry{acUpdate});
@@ -477,6 +511,15 @@ PartyQuestClientRepairResult PartyQuestClientSession::HandleRepairPlan(const Not
         }
 
         result.Status = PartyQuestClientRepairStatus::PlanConflict;
+        result.Ack.ApplyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
+        result.Ack.PostApplyReport = m_replica.BuildReport();
+        result.Ack.IsValid = true;
+        return result;
+    }
+
+    if (m_repairs.size() >= PartyQuestProtocolResourcePolicy::MaxClientRepairs)
+    {
+        result.Status = PartyQuestClientRepairStatus::ResourceLimitExceeded;
         result.Ack.ApplyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
         result.Ack.PostApplyReport = m_replica.BuildReport();
         result.Ack.IsValid = true;
