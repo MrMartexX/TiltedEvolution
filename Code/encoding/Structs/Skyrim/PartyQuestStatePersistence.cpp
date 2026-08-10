@@ -678,8 +678,13 @@ PartyQuestPersistenceResult PartyQuestStatePersistence::Decode(const std::vector
 
 PartyQuestPersistenceStatus PartyQuestStatePersistence::SaveAtomically(
     const std::filesystem::path& acPath,
-    const PartyQuestState& acState)
+    const PartyQuestState& acState,
+    PartyQuestStatePersistenceHooks aHooks)
 {
+    const auto encoded = Encode(acState);
+    if (encoded.empty())
+        return PartyQuestPersistenceStatus::InvalidData;
+
     std::error_code ec;
     if (!acPath.parent_path().empty())
     {
@@ -696,9 +701,29 @@ PartyQuestPersistenceStatus PartyQuestStatePersistence::SaveAtomically(
     std::filesystem::remove(temporaryPath, ec);
     ec.clear();
 
-    if (!WriteFile(temporaryPath, Encode(acState)))
+    if (!WriteFile(temporaryPath, encoded))
     {
         std::filesystem::remove(temporaryPath, ec);
+        return PartyQuestPersistenceStatus::IoError;
+    }
+
+    std::vector<uint8_t> temporaryBytes;
+    const auto temporaryRead = ReadFile(temporaryPath, temporaryBytes);
+    PartyQuestPersistenceResult temporaryState;
+    temporaryState.Status = temporaryRead;
+    if (temporaryRead == PartyQuestPersistenceStatus::Success)
+        temporaryState = Decode(temporaryBytes);
+    if (temporaryState.Status != PartyQuestPersistenceStatus::Success ||
+        !temporaryState.State || Encode(*temporaryState.State) != encoded)
+    {
+        std::filesystem::remove(temporaryPath, ec);
+        return temporaryState.Status == PartyQuestPersistenceStatus::Success
+            ? PartyQuestPersistenceStatus::InvalidData
+            : temporaryState.Status;
+    }
+    if (aHooks.Invoke(PartyQuestStatePersistenceBoundary::TemporaryVerified) ==
+        PartyQuestStatePersistenceDirective::FailClosed)
+    {
         return PartyQuestPersistenceStatus::IoError;
     }
 
@@ -713,6 +738,11 @@ PartyQuestPersistenceStatus PartyQuestStatePersistence::SaveAtomically(
             std::filesystem::remove(temporaryPath, ec);
             return PartyQuestPersistenceStatus::IoError;
         }
+        if (aHooks.Invoke(PartyQuestStatePersistenceBoundary::PrimaryMovedToBackup) ==
+            PartyQuestStatePersistenceDirective::FailClosed)
+        {
+            return PartyQuestPersistenceStatus::IoError;
+        }
     }
 
     std::filesystem::rename(temporaryPath, acPath, ec);
@@ -722,6 +752,12 @@ PartyQuestPersistenceStatus PartyQuestStatePersistence::SaveAtomically(
         if (hadPrimary && std::filesystem::exists(backupPath, restoreError))
             std::filesystem::rename(backupPath, acPath, restoreError);
         std::filesystem::remove(temporaryPath, restoreError);
+        return PartyQuestPersistenceStatus::IoError;
+    }
+
+    if (aHooks.Invoke(PartyQuestStatePersistenceBoundary::TemporaryPublished) ==
+        PartyQuestStatePersistenceDirective::FailClosed)
+    {
         return PartyQuestPersistenceStatus::IoError;
     }
 
@@ -742,6 +778,20 @@ PartyQuestPersistenceResult PartyQuestStatePersistence::Load(const std::filesyst
             return primaryResult;
     }
 
+    auto temporaryPath = acPath;
+    temporaryPath += ".tmp";
+    bytes.clear();
+    const PartyQuestPersistenceStatus temporaryReadStatus = ReadFile(temporaryPath, bytes);
+    if (temporaryReadStatus == PartyQuestPersistenceStatus::Success)
+    {
+        auto temporaryResult = Decode(bytes);
+        if (temporaryResult.Status == PartyQuestPersistenceStatus::Success)
+        {
+            temporaryResult.UsedTemporary = true;
+            return temporaryResult;
+        }
+    }
+
     auto backupPath = acPath;
     backupPath += ".bak";
     bytes.clear();
@@ -751,6 +801,7 @@ PartyQuestPersistenceResult PartyQuestStatePersistence::Load(const std::filesyst
         auto backupResult = Decode(bytes);
         if (backupResult.Status == PartyQuestPersistenceStatus::Success)
         {
+            backupResult.Status = PartyQuestPersistenceStatus::BackupRecoveryRequired;
             backupResult.UsedBackup = true;
             return backupResult;
         }

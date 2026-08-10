@@ -3,8 +3,12 @@
 #include <catch2/catch.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <string>
+
+const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -77,7 +81,108 @@ void RemoveArchiveFiles(const std::filesystem::path& acPath)
     temporary += ".tmp";
     std::filesystem::remove(temporary, ec);
 }
+
+bool SetStatePersistenceEnvironment(const char* apName, const std::string& acValue)
+{
+#ifdef _WIN32
+    return _putenv_s(apName, acValue.c_str()) == 0;
+#else
+    return setenv(apName, acValue.c_str(), 1) == 0;
+#endif
+}
+
+void ClearStatePersistenceEnvironment(const char* apName)
+{
+#ifdef _WIN32
+    _putenv_s(apName, "");
+#else
+    unsetenv(apName);
+#endif
+}
+
+struct StatePersistenceCrashBoundary
+{
+    PartyQuestStatePersistenceBoundary Boundary;
+};
+
+PartyQuestStatePersistenceDirective CrashStatePersistenceAtBoundary(
+    PartyQuestStatePersistenceBoundary aBoundary,
+    void* apContext) noexcept
+{
+    const auto& crash = *static_cast<const StatePersistenceCrashBoundary*>(apContext);
+    if (crash.Boundary == aBoundary)
+        std::_Exit(91);
+    return PartyQuestStatePersistenceDirective::Continue;
+}
+
+PartyQuestState BuildNewerPersistentState()
+{
+    auto state = BuildPersistentState();
+    REQUIRE(state.Apply(
+                BuildPersistentTransaction(10004, GameId(2, 0x2000), 1, 50, 9)).Status ==
+        PartyQuestApplyStatus::Accepted);
+    return state;
+}
+
+void RunStatePersistenceCrashProcess(
+    const std::filesystem::path& acRoot,
+    const char* apBoundary)
+{
+    REQUIRE(SetStatePersistenceEnvironment(
+        "TP_STATE_PERSISTENCE_CRASH_ROOT", acRoot.string()));
+    REQUIRE(SetStatePersistenceEnvironment(
+        "TP_STATE_PERSISTENCE_CRASH_BOUNDARY", apBoundary));
+
+    const auto& executable = GetTPTestsExecutablePath();
+    REQUIRE_FALSE(executable.empty());
+    const std::string command =
+        "\"" + executable.string() +
+        "\" \"Canonical state atomic publication crash helper\" --reporter compact";
+    const int exitCode = std::system(command.c_str());
+
+    ClearStatePersistenceEnvironment("TP_STATE_PERSISTENCE_CRASH_BOUNDARY");
+    ClearStatePersistenceEnvironment("TP_STATE_PERSISTENCE_CRASH_ROOT");
+    REQUIRE(exitCode != 0);
+
+    const auto loaded = PartyQuestStatePersistence::Load(acRoot / "canonical.bin");
+    REQUIRE(loaded.Status == PartyQuestPersistenceStatus::Success);
+    REQUIRE(loaded.State.has_value());
+    const bool beforePrimaryMove = std::string(apBoundary) == "TemporaryVerified";
+    REQUIRE(loaded.State->GetWorldRevision() == (beforePrimaryMove ? 3 : 4));
+    REQUIRE(loaded.UsedTemporary ==
+        (std::string(apBoundary) == "PrimaryMovedToBackup"));
+    REQUIRE_FALSE(loaded.UsedBackup);
+}
 } // namespace
+
+TEST_CASE("Canonical state atomic publication crash helper", "[.][quest.party-state.persistence][fault-helper]")
+{
+    const char* rootValue = std::getenv("TP_STATE_PERSISTENCE_CRASH_ROOT");
+    const char* boundaryValue = std::getenv("TP_STATE_PERSISTENCE_CRASH_BOUNDARY");
+    REQUIRE(rootValue != nullptr);
+    REQUIRE(boundaryValue != nullptr);
+
+    const std::string boundary = boundaryValue;
+    REQUIRE((boundary == "TemporaryVerified" ||
+        boundary == "PrimaryMovedToBackup" ||
+        boundary == "TemporaryPublished"));
+
+    const auto path = std::filesystem::path(rootValue) / "canonical.bin";
+    REQUIRE(PartyQuestStatePersistence::SaveAtomically(path, BuildPersistentState()) ==
+        PartyQuestPersistenceStatus::Success);
+
+    StatePersistenceCrashBoundary crash{
+        boundary == "TemporaryVerified"
+            ? PartyQuestStatePersistenceBoundary::TemporaryVerified
+            : boundary == "PrimaryMovedToBackup"
+                ? PartyQuestStatePersistenceBoundary::PrimaryMovedToBackup
+                : PartyQuestStatePersistenceBoundary::TemporaryPublished};
+    const auto status = PartyQuestStatePersistence::SaveAtomically(
+        path,
+        BuildNewerPersistentState(),
+        {CrashStatePersistenceAtBoundary, &crash});
+    FAIL("Crash boundary returned with status " << static_cast<int>(status));
+}
 
 TEST_CASE("Party quest persistence round-trips checkpoint and journal", "[quest.party-state.persistence]")
 {
@@ -130,7 +235,7 @@ TEST_CASE("Party quest persistence rejects corrupted and truncated archives", "[
     REQUIRE(PartyQuestStatePersistence::Decode(unsupported).Status == PartyQuestPersistenceStatus::UnsupportedVersion);
 }
 
-TEST_CASE("Party quest persistence atomically saves and recovers the previous archive", "[quest.party-state.persistence]")
+TEST_CASE("Canonical state backup is never silently promoted", "[quest.party-state.persistence]")
 {
     const auto uniqueSuffix = std::chrono::high_resolution_clock::now().time_since_epoch().count();
     const auto path = std::filesystem::temp_directory_path() /
@@ -156,10 +261,39 @@ TEST_CASE("Party quest persistence atomically saves and recovers the previous ar
     }
 
     auto recovered = PartyQuestStatePersistence::Load(path);
-    REQUIRE(recovered.Status == PartyQuestPersistenceStatus::Success);
+    REQUIRE(recovered.Status == PartyQuestPersistenceStatus::BackupRecoveryRequired);
     REQUIRE(recovered.State.has_value());
     REQUIRE(recovered.UsedBackup);
     REQUIRE(recovered.State->GetWorldRevision() == 3);
 
     RemoveArchiveFiles(path);
+}
+
+TEST_CASE("Canonical state publication windows survive abrupt process termination", "[quest.party-state.persistence][fault][process]")
+{
+    const auto runBoundary = [](const char* apBoundary)
+    {
+        const auto nonce = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        const auto root = std::filesystem::temp_directory_path() /
+            ("tp_party_quest_state_crash_" + std::to_string(nonce));
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        REQUIRE_FALSE(ec);
+        RunStatePersistenceCrashProcess(root, apBoundary);
+        std::filesystem::remove_all(root, ec);
+        REQUIRE_FALSE(ec);
+    };
+
+    SECTION("verified temporary leaves the prior primary authoritative")
+    {
+        runBoundary("TemporaryVerified");
+    }
+    SECTION("primary moved aside exposes the complete newer temporary state")
+    {
+        runBoundary("PrimaryMovedToBackup");
+    }
+    SECTION("published primary exposes the complete newer state")
+    {
+        runBoundary("TemporaryPublished");
+    }
 }

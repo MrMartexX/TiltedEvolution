@@ -62,6 +62,7 @@ const char* PersistenceStatusName(PartyQuestPersistenceStatus aStatus) noexcept
     case PartyQuestPersistenceStatus::ChecksumMismatch: return "checksum-mismatch";
     case PartyQuestPersistenceStatus::InvalidData: return "invalid-data";
     case PartyQuestPersistenceStatus::ReplayMismatch: return "replay-mismatch";
+    case PartyQuestPersistenceStatus::BackupRecoveryRequired: return "backup-recovery-required";
     }
 
     return "unknown";
@@ -176,30 +177,6 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
         const size_t questCount = restoredState.GetQuestCount();
         const size_t journalEntries = restoredState.GetJournal().size();
 
-        if (loadResult.UsedBackup)
-        {
-            std::error_code removeError;
-            std::filesystem::remove(m_partyQuestStatePath, removeError);
-            if (removeError)
-            {
-                spdlog::error(
-                    "PartyQuestProtocol recovered a backup but could not remove the invalid primary archive '{}': {}; protocol messages will be rejected",
-                    m_partyQuestStatePath.string(),
-                    removeError.message());
-                return false;
-            }
-
-            const auto healStatus = PartyQuestStatePersistence::SaveAtomically(m_partyQuestStatePath, restoredState);
-            if (healStatus != PartyQuestPersistenceStatus::Success)
-            {
-                spdlog::error(
-                    "PartyQuestProtocol recovered a backup but could not restore the primary archive '{}': status={}; protocol messages will be rejected",
-                    m_partyQuestStatePath.string(),
-                    PersistenceStatusName(healStatus));
-                return false;
-            }
-        }
-
         size_t quarantinedQuestCount = 0;
         for (const GameId& questId : PartyQuestAdmissionPolicy::GetConfirmedServiceQuestIds())
         {
@@ -214,12 +191,12 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
         }
 
         spdlog::info(
-            "PartyQuestProtocol persistence loaded: path='{}' worldRevision={} quests={} journalEntries={} usedBackup={}",
+            "PartyQuestProtocol persistence loaded: path='{}' worldRevision={} quests={} journalEntries={} usedTemporary={}",
             m_partyQuestStatePath.string(),
             worldRevision,
             questCount,
             journalEntries,
-            loadResult.UsedBackup);
+            loadResult.UsedTemporary);
 
         if (quarantinedQuestCount != 0)
         {

@@ -17,7 +17,8 @@ enum class PartyQuestPersistenceStatus : uint8_t
     Truncated,
     ChecksumMismatch,
     InvalidData,
-    ReplayMismatch
+    ReplayMismatch,
+    BackupRecoveryRequired
 };
 
 struct PartyQuestPersistenceResult
@@ -25,6 +26,39 @@ struct PartyQuestPersistenceResult
     PartyQuestPersistenceStatus Status{PartyQuestPersistenceStatus::InvalidData};
     std::optional<PartyQuestState> State;
     bool UsedBackup{};
+    bool UsedTemporary{};
+};
+
+enum class PartyQuestStatePersistenceBoundary : uint8_t
+{
+    TemporaryVerified,
+    PrimaryMovedToBackup,
+    TemporaryPublished
+};
+
+enum class PartyQuestStatePersistenceDirective : uint8_t
+{
+    Continue,
+    FailClosed
+};
+
+/** Local-only fault observer; it carries no paths, bytes or storage authority. */
+struct PartyQuestStatePersistenceHooks
+{
+    using Callback = PartyQuestStatePersistenceDirective (*)(
+        PartyQuestStatePersistenceBoundary,
+        void*) noexcept;
+
+    Callback OnBoundary{};
+    void* Context{};
+
+    [[nodiscard]] PartyQuestStatePersistenceDirective Invoke(
+        PartyQuestStatePersistenceBoundary aBoundary) const noexcept
+    {
+        return OnBoundary
+            ? OnBoundary(aBoundary, Context)
+            : PartyQuestStatePersistenceDirective::Continue;
+    }
 };
 
 /**
@@ -45,8 +79,9 @@ public:
     /** Writes through a sibling .tmp file and retains the previous file as .bak. */
     [[nodiscard]] static PartyQuestPersistenceStatus SaveAtomically(
         const std::filesystem::path& acPath,
-        const PartyQuestState& acState);
+        const PartyQuestState& acState,
+        PartyQuestStatePersistenceHooks aHooks = {});
 
-    /** Loads the primary archive and falls back to its .bak sibling if needed. */
+    /** A stale backup is exposed only as uncertain recovery, never canonical truth. */
     [[nodiscard]] static PartyQuestPersistenceResult Load(const std::filesystem::path& acPath);
 };
