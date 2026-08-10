@@ -23,15 +23,18 @@ struct PartyQuestCampaignPersistenceResult
 {
     PartyQuestCampaignPersistenceStatus Status{PartyQuestCampaignPersistenceStatus::InvalidData};
     std::optional<PartyQuestCampaignId> CampaignId;
+    bool CanonicalArchiveRequired{};
     bool UsedBackup{};
+    bool BackupRefreshRequired{};
 };
 
 /**
- * Durable immutable metadata for the stable server campaign identity.
+ * Persistent immutable metadata for the stable server campaign identity.
  *
  * The immutable bootstrap copy is stored beside the canonical quest-state
- * archive. Current state archives also embed the same identity; bootstrap must
- * require an exact match before exposing canonical history.
+ * archive. Current state archives also embed the same identity. Metadata v2 is
+ * published only after a matching canonical archive exists and records that
+ * the archive is required on every later successful bootstrap.
  */
 class PartyQuestCampaignPersistence final
 {

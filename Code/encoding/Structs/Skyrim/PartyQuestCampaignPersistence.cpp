@@ -12,10 +12,12 @@
 namespace
 {
 constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'C', 'A', 'M', 'P', 'I'};
-constexpr uint16_t kFormatVersion = 1;
+constexpr uint16_t kLegacyFormatVersion = 1;
+constexpr uint16_t kFormatVersion = 2;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
-constexpr size_t kPayloadSize = sizeof(uint64_t) * 2;
+constexpr size_t kLegacyPayloadSize = sizeof(uint64_t) * 2;
+constexpr size_t kPayloadSize = kLegacyPayloadSize + sizeof(uint8_t);
 
 template <class T>
 void WriteInteger(std::vector<uint8_t>& aBytes, T aValue)
@@ -150,6 +152,7 @@ std::vector<uint8_t> PartyQuestCampaignPersistence::Encode(
     payload.reserve(kPayloadSize);
     WriteInteger(payload, acCampaignId.High);
     WriteInteger(payload, acCampaignId.Low);
+    WriteInteger<uint8_t>(payload, 1);
 
     std::vector<uint8_t> archive;
     archive.reserve(kMagic.size() + sizeof(uint16_t) + sizeof(uint64_t) + payload.size() + sizeof(uint64_t));
@@ -187,12 +190,15 @@ PartyQuestCampaignPersistenceResult PartyQuestCampaignPersistence::Decode(
         result.Status = PartyQuestCampaignPersistenceStatus::Truncated;
         return result;
     }
-    if (formatVersion != kFormatVersion)
+    if (formatVersion != kLegacyFormatVersion && formatVersion != kFormatVersion)
     {
         result.Status = PartyQuestCampaignPersistenceStatus::UnsupportedVersion;
         return result;
     }
-    if (payloadSize != kPayloadSize)
+    const uint64_t expectedPayloadSize = formatVersion == kFormatVersion
+        ? kPayloadSize
+        : kLegacyPayloadSize;
+    if (payloadSize != expectedPayloadSize)
     {
         result.Status = PartyQuestCampaignPersistenceStatus::InvalidData;
         return result;
@@ -211,6 +217,22 @@ PartyQuestCampaignPersistenceResult PartyQuestCampaignPersistence::Decode(
         return result;
     }
 
+    if (formatVersion == kFormatVersion)
+    {
+        uint8_t archiveRequired{};
+        if (!ReadInteger(acBytes, offset, archiveRequired))
+        {
+            result.Status = PartyQuestCampaignPersistenceStatus::Truncated;
+            return result;
+        }
+        if (archiveRequired != 1)
+        {
+            result.Status = PartyQuestCampaignPersistenceStatus::InvalidData;
+            return result;
+        }
+        result.CanonicalArchiveRequired = true;
+    }
+
     uint64_t storedChecksum{};
     if (!ReadInteger(acBytes, offset, storedChecksum))
     {
@@ -222,7 +244,9 @@ PartyQuestCampaignPersistenceResult PartyQuestCampaignPersistence::Decode(
         result.Status = PartyQuestCampaignPersistenceStatus::InvalidData;
         return result;
     }
-    if (storedChecksum != ComputeChecksum(acBytes.data() + payloadOffset, kPayloadSize))
+    if (storedChecksum != ComputeChecksum(
+            acBytes.data() + payloadOffset,
+            static_cast<size_t>(payloadSize)))
     {
         result.Status = PartyQuestCampaignPersistenceStatus::ChecksumMismatch;
         return result;
@@ -291,6 +315,29 @@ PartyQuestCampaignPersistenceStatus PartyQuestCampaignPersistence::SaveAtomicall
         return PartyQuestCampaignPersistenceStatus::IoError;
     }
 
+    auto backupTemporaryPath = backupPath;
+    backupTemporaryPath += ".tmp";
+    std::filesystem::remove(backupTemporaryPath, ec);
+    ec.clear();
+    if (!WriteFile(backupTemporaryPath, encoded))
+    {
+        std::filesystem::remove(backupTemporaryPath, ec);
+        return PartyQuestCampaignPersistenceStatus::IoError;
+    }
+
+    std::filesystem::remove(backupPath, ec);
+    if (ec)
+    {
+        std::filesystem::remove(backupTemporaryPath, ec);
+        return PartyQuestCampaignPersistenceStatus::IoError;
+    }
+    std::filesystem::rename(backupTemporaryPath, backupPath, ec);
+    if (ec)
+    {
+        std::filesystem::remove(backupTemporaryPath, ec);
+        return PartyQuestCampaignPersistenceStatus::IoError;
+    }
+
     return PartyQuestCampaignPersistenceStatus::Success;
 }
 
@@ -303,24 +350,47 @@ PartyQuestCampaignPersistenceResult PartyQuestCampaignPersistence::Load(
     PartyQuestCampaignPersistenceResult primaryResult;
     primaryResult.Status = primaryReadStatus;
     if (primaryReadStatus == PartyQuestCampaignPersistenceStatus::Success)
-    {
         primaryResult = Decode(bytes);
-        if (primaryResult.Status == PartyQuestCampaignPersistenceStatus::Success)
-            return primaryResult;
-    }
 
     auto backupPath = acPath;
     backupPath += ".bak";
     bytes.clear();
     const PartyQuestCampaignPersistenceStatus backupReadStatus = ReadFile(backupPath, bytes);
+    PartyQuestCampaignPersistenceResult backupResult;
+    backupResult.Status = backupReadStatus;
     if (backupReadStatus == PartyQuestCampaignPersistenceStatus::Success)
+        backupResult = Decode(bytes);
+
+    if (primaryResult.Status == PartyQuestCampaignPersistenceStatus::Success)
     {
-        auto backupResult = Decode(bytes);
-        if (backupResult.Status == PartyQuestCampaignPersistenceStatus::Success)
+        if (backupResult.Status == PartyQuestCampaignPersistenceStatus::Success &&
+            primaryResult.CampaignId != backupResult.CampaignId)
+        {
+            primaryResult.Status = PartyQuestCampaignPersistenceStatus::InvalidData;
+            primaryResult.CampaignId.reset();
+            return primaryResult;
+        }
+
+        if (!primaryResult.CanonicalArchiveRequired &&
+            backupResult.Status == PartyQuestCampaignPersistenceStatus::Success &&
+            backupResult.CanonicalArchiveRequired)
         {
             backupResult.UsedBackup = true;
             return backupResult;
         }
+
+        primaryResult.BackupRefreshRequired =
+            primaryResult.CanonicalArchiveRequired &&
+            (backupResult.Status != PartyQuestCampaignPersistenceStatus::Success ||
+             !backupResult.CanonicalArchiveRequired);
+
+        return primaryResult;
+    }
+
+    if (backupResult.Status == PartyQuestCampaignPersistenceStatus::Success)
+    {
+        backupResult.UsedBackup = true;
+        return backupResult;
     }
 
     return primaryResult;
