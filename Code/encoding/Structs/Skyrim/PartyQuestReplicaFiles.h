@@ -50,6 +50,8 @@ struct PartyQuestReplicaResourcePolicy
     static constexpr uint64_t MaxTotalFileBytes = 2ull * 1024ull * 1024ull * 1024ull;
     static constexpr uint64_t RequiredFreeSpaceMultiplier = 3;
     static constexpr uint64_t MinimumFreeSpaceReserveBytes = 256ull * 1024ull * 1024ull;
+    static constexpr uint64_t MaxExecutionNanoseconds =
+        5ull * 60ull * 1000ull * 1000ull * 1000ull;
 
     [[nodiscard]] static std::optional<uint64_t> RequiredFreeBytes(
         const PartyQuestReplicaCopyPlan& acPlan) noexcept;

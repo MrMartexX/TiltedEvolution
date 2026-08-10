@@ -92,6 +92,20 @@ std::vector<PartyQuestReplicaFileSpec> BuildInspectedSoloFiles(
     files.push_back(*sidecar);
     return files;
 }
+
+struct ExpiringExecutionClock
+{
+    size_t Calls{};
+};
+
+uint64_t ExpireAfterAdmission(void* apContext) noexcept
+{
+    auto& clock = *static_cast<ExpiringExecutionClock*>(apContext);
+    ++clock.Calls;
+    return clock.Calls == 1
+        ? 1
+        : PartyQuestReplicaResourcePolicy::MaxExecutionNanoseconds + 1;
+}
 } // namespace
 
 TEST_CASE("Verified import copies solo save ecosystem only into isolated co-op replica", "[quest.party-state.replica-executor]")
@@ -316,4 +330,26 @@ TEST_CASE("Executor revalidates resource limits and disk reserve before staging"
         REQUIRE_FALSE(PartyQuestReplicaResourcePolicy::HasSufficientDiskSpace(plan, *required - 1));
         REQUIRE(PartyQuestReplicaResourcePolicy::HasSufficientDiskSpace(plan, *required));
     }
+}
+
+TEST_CASE("Replica execution deadline expires before new filesystem publication", "[quest.party-state.replica-executor][resource-budget][timeout]")
+{
+    TempReplicaSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    const auto files = BuildInspectedSoloFiles(sandbox);
+    const auto plan = PartyQuestReplicaFilePlanner::BuildImportPlan(paths, files);
+    REQUIRE(plan.IsReady());
+
+    ExpiringExecutionClock clock;
+    const auto result = PartyQuestReplicaFileExecutor::ExecuteImport(
+        paths,
+        plan,
+        {ExpireAfterAdmission, &clock});
+
+    REQUIRE(result.Status ==
+        PartyQuestReplicaExecutionStatus::OperationDeadlineExceeded);
+    REQUIRE(result.CompletedOperations == 0);
+    REQUIRE(clock.Calls >= 2);
+    REQUIRE_FALSE(std::filesystem::exists(paths.SavesDirectory / "Hero.ess"));
+    REQUIRE_FALSE(std::filesystem::exists(paths.SavesDirectory / "Hero.skse"));
 }

@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cctype>
 #include <fstream>
+#include <limits>
 #include <set>
 #include <string>
 #include <system_error>
@@ -16,6 +17,39 @@ namespace
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
 constexpr size_t kIoBufferSize = 64 * 1024;
+
+struct ExecutionDeadline
+{
+    uint64_t StartedAt{};
+    uint64_t ExpiresAt{};
+};
+
+bool BuildDeadline(
+    const PartyQuestReplicaExecutionHooks& acHooks,
+    ExecutionDeadline& aDeadline) noexcept
+{
+    const uint64_t now = acHooks.NowTicks();
+    if (now == 0 ||
+        now > std::numeric_limits<uint64_t>::max() -
+            PartyQuestReplicaResourcePolicy::MaxExecutionNanoseconds)
+    {
+        return false;
+    }
+    aDeadline.StartedAt = now;
+    aDeadline.ExpiresAt =
+        now + PartyQuestReplicaResourcePolicy::MaxExecutionNanoseconds;
+    return true;
+}
+
+bool DeadlineExceeded(
+    const PartyQuestReplicaExecutionHooks& acHooks,
+    const ExecutionDeadline& acDeadline) noexcept
+{
+    const uint64_t now = acHooks.NowTicks();
+    return now == 0 ||
+        now < acDeadline.StartedAt ||
+        now >= acDeadline.ExpiresAt;
+}
 
 struct NormalizedOperation
 {
@@ -404,10 +438,15 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
     bool aCheckpoint,
     PartyQuestCheckpointKind aCheckpointKind,
     bool aRevisionScoped,
-    uint64_t aCampaignWorldRevision) noexcept
+    uint64_t aCampaignWorldRevision,
+    PartyQuestReplicaExecutionHooks aHooks) noexcept
 {
     try
     {
+        ExecutionDeadline deadline;
+        if (!BuildDeadline(aHooks, deadline))
+            return MakeFailure(PartyQuestReplicaExecutionStatus::OperationDeadlineExceeded, 0);
+
         const auto requiredFreeBytes = PartyQuestReplicaResourcePolicy::RequiredFreeBytes(acPlan);
         if (!requiredFreeBytes)
             return MakeFailure(PartyQuestReplicaExecutionStatus::ResourceLimitExceeded, 0);
@@ -423,6 +462,8 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
             operations);
         if (!validation.IsSuccess())
             return validation;
+        if (DeadlineExceeded(aHooks, deadline))
+            return MakeFailure(PartyQuestReplicaExecutionStatus::OperationDeadlineExceeded, 0);
 
         const auto playerRoot = AbsoluteNormalized(acPaths.PlayerDirectory);
         if (!playerRoot)
@@ -448,6 +489,8 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
         PartyQuestReplicaExecutionReport parentFailure;
         if (!PrepareDestinationParents(canonicalPlayerRoot, operations, parentFailure))
             return parentFailure;
+        if (DeadlineExceeded(aHooks, deadline))
+            return MakeFailure(PartyQuestReplicaExecutionStatus::OperationDeadlineExceeded, 0);
 
         const uint64_t nonce = NextCopyNonce();
         std::vector<std::filesystem::path> staged;
@@ -458,6 +501,15 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
         for (size_t i = 0; i < operations.size(); ++i)
         {
             const auto& operation = operations[i];
+            if (DeadlineExceeded(aHooks, deadline))
+            {
+                const bool rolledBack = CleanupPaths(staged);
+                return MakeFailure(
+                    rolledBack ? PartyQuestReplicaExecutionStatus::OperationDeadlineExceeded
+                               : PartyQuestReplicaExecutionStatus::RollbackFailed,
+                    i,
+                    operation.Source);
+            }
             std::filesystem::path temporary = operation.Destination;
             temporary += ".tpqtmp-" + std::to_string(nonce) + "-" + std::to_string(i);
 
@@ -512,10 +564,30 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
                 return MakeFailure(
                     PartyQuestReplicaExecutionStatus::SourceChanged, i, operation.Source);
             }
+            if (DeadlineExceeded(aHooks, deadline))
+            {
+                const bool rolledBack = CleanupPaths(staged);
+                return MakeFailure(
+                    rolledBack ? PartyQuestReplicaExecutionStatus::OperationDeadlineExceeded
+                               : PartyQuestReplicaExecutionStatus::RollbackFailed,
+                    i,
+                    operation.Source);
+            }
         }
 
         for (size_t i = 0; i < operations.size(); ++i)
         {
+            if (DeadlineExceeded(aHooks, deadline))
+            {
+                const bool rolledBack = CleanupPaths(staged) && CleanupPaths(published);
+                auto report = MakeFailure(
+                    rolledBack ? PartyQuestReplicaExecutionStatus::OperationDeadlineExceeded
+                               : PartyQuestReplicaExecutionStatus::RollbackFailed,
+                    i,
+                    operations[i].Destination);
+                report.CompletedOperations = rolledBack ? 0 : published.size();
+                return report;
+            }
             if (!DestinationParentStillSafe(canonicalPlayerRoot, operations[i].Destination))
             {
                 const bool rolledBack = CleanupPaths(staged) && CleanupPaths(published);
@@ -559,6 +631,17 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
 
         for (size_t i = 0; i < operations.size(); ++i)
         {
+            if (DeadlineExceeded(aHooks, deadline))
+            {
+                const bool rolledBack = CleanupPaths(published);
+                auto report = MakeFailure(
+                    rolledBack ? PartyQuestReplicaExecutionStatus::OperationDeadlineExceeded
+                               : PartyQuestReplicaExecutionStatus::RollbackFailed,
+                    i,
+                    operations[i].Destination);
+                report.CompletedOperations = rolledBack ? 0 : published.size();
+                return report;
+            }
             PartyQuestReplicaFileObservation finalObservation;
             const auto finalStatus = ObserveDetailed(operations[i].Destination, finalObservation);
             if (finalStatus != PartyQuestReplicaExecutionStatus::Success ||
@@ -567,6 +650,17 @@ PartyQuestReplicaExecutionReport ExecuteInternal(
                 const bool rolledBack = CleanupPaths(published);
                 auto report = MakeFailure(
                     rolledBack ? PartyQuestReplicaExecutionStatus::VerificationFailed
+                               : PartyQuestReplicaExecutionStatus::RollbackFailed,
+                    i,
+                    operations[i].Destination);
+                report.CompletedOperations = rolledBack ? 0 : published.size();
+                return report;
+            }
+            if (DeadlineExceeded(aHooks, deadline))
+            {
+                const bool rolledBack = CleanupPaths(published);
+                auto report = MakeFailure(
+                    rolledBack ? PartyQuestReplicaExecutionStatus::OperationDeadlineExceeded
                                : PartyQuestReplicaExecutionStatus::RollbackFailed,
                     i,
                     operations[i].Destination);
@@ -648,6 +742,15 @@ PartyQuestReplicaExecutionReport VerifyInternal(
 }
 } // namespace
 
+uint64_t PartyQuestReplicaExecutionHooks::NowTicks() const noexcept
+{
+    if (MonotonicNow)
+        return MonotonicNow(Context);
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return now > 0 ? static_cast<uint64_t>(now) : 0;
+}
+
 std::optional<PartyQuestReplicaFileObservation>
 PartyQuestReplicaFileExecutor::ObserveRegularFile(
     const std::filesystem::path& acPath) noexcept
@@ -685,25 +788,28 @@ std::optional<PartyQuestReplicaFileSpec> PartyQuestReplicaFileExecutor::InspectS
 
 PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::ExecuteImport(
     const PartyQuestCoopSavePaths& acPaths,
-    const PartyQuestReplicaCopyPlan& acPlan) noexcept
+    const PartyQuestReplicaCopyPlan& acPlan,
+    PartyQuestReplicaExecutionHooks aHooks) noexcept
 {
     return ExecuteInternal(
-        acPaths, acPlan, false, PartyQuestCheckpointKind::PreJoin, false, 0);
+        acPaths, acPlan, false, PartyQuestCheckpointKind::PreJoin, false, 0, aHooks);
 }
 
 PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::ExecuteCheckpoint(
     const PartyQuestCoopSavePaths& acPaths,
     PartyQuestCheckpointKind aKind,
-    const PartyQuestReplicaCopyPlan& acPlan) noexcept
+    const PartyQuestReplicaCopyPlan& acPlan,
+    PartyQuestReplicaExecutionHooks aHooks) noexcept
 {
-    return ExecuteInternal(acPaths, acPlan, true, aKind, false, 0);
+    return ExecuteInternal(acPaths, acPlan, true, aKind, false, 0, aHooks);
 }
 
 PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::ExecuteRevisionCheckpoint(
     const PartyQuestCoopSavePaths& acPaths,
     PartyQuestCheckpointKind aKind,
     uint64_t aCampaignWorldRevision,
-    const PartyQuestReplicaCopyPlan& acPlan) noexcept
+    const PartyQuestReplicaCopyPlan& acPlan,
+    PartyQuestReplicaExecutionHooks aHooks) noexcept
 {
     return ExecuteInternal(
         acPaths,
@@ -711,7 +817,8 @@ PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::ExecuteRevisionC
         true,
         aKind,
         true,
-        aCampaignWorldRevision);
+        aCampaignWorldRevision,
+        aHooks);
 }
 
 PartyQuestReplicaExecutionReport PartyQuestReplicaFileExecutor::VerifyImport(

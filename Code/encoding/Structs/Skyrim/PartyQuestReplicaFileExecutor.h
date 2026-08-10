@@ -27,7 +27,19 @@ enum class PartyQuestReplicaExecutionStatus : uint8_t
     VerificationFailed,
     RollbackFailed,
     ResourceLimitExceeded,
-    InsufficientDiskSpace
+    InsufficientDiskSpace,
+    OperationDeadlineExceeded
+};
+
+/** Testable monotonic clock only; it grants no path or mutation authority. */
+struct PartyQuestReplicaExecutionHooks
+{
+    using Clock = uint64_t (*)(void*) noexcept;
+
+    Clock MonotonicNow{};
+    void* Context{};
+
+    [[nodiscard]] uint64_t NowTicks() const noexcept;
 };
 
 struct PartyQuestReplicaFileObservation
@@ -64,6 +76,10 @@ struct PartyQuestReplicaExecutionReport
  * supported STL implementation. ENOENT/ENOTDIR returned by symlink_status are
  * therefore normalized as "missing", while all other metadata errors remain
  * fail-closed. Destination parent confinement is checked again before publish.
+ * A local monotonic deadline is checked before and between blocking filesystem
+ * operations and again before success. Expiry rolls back create-only output.
+ * It cannot interrupt one synchronous OS call already in progress and makes no
+ * such hard-cancellation claim.
  *
  * This is intentionally not wired to Skyrim's save APIs yet. The digest is a
  * deterministic transport-integrity checksum, not a cryptographic trust proof;
@@ -87,20 +103,23 @@ public:
      */
     [[nodiscard]] static PartyQuestReplicaExecutionReport ExecuteImport(
         const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestReplicaCopyPlan& acPlan) noexcept;
+        const PartyQuestReplicaCopyPlan& acPlan,
+        PartyQuestReplicaExecutionHooks aHooks = {}) noexcept;
 
     /** Legacy kind-root checkpoint execution retained for existing tooling. */
     [[nodiscard]] static PartyQuestReplicaExecutionReport ExecuteCheckpoint(
         const PartyQuestCoopSavePaths& acPaths,
         PartyQuestCheckpointKind aKind,
-        const PartyQuestReplicaCopyPlan& acPlan) noexcept;
+        const PartyQuestReplicaCopyPlan& acPlan,
+        PartyQuestReplicaExecutionHooks aHooks = {}) noexcept;
 
     /** Executes an immutable revision-scoped checkpoint plan. */
     [[nodiscard]] static PartyQuestReplicaExecutionReport ExecuteRevisionCheckpoint(
         const PartyQuestCoopSavePaths& acPaths,
         PartyQuestCheckpointKind aKind,
         uint64_t aCampaignWorldRevision,
-        const PartyQuestReplicaCopyPlan& acPlan) noexcept;
+        const PartyQuestReplicaCopyPlan& acPlan,
+        PartyQuestReplicaExecutionHooks aHooks = {}) noexcept;
 
     [[nodiscard]] static PartyQuestReplicaExecutionReport VerifyImport(
         const PartyQuestCoopSavePaths& acPaths,
