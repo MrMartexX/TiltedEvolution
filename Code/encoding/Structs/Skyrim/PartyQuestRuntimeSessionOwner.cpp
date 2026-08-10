@@ -12,6 +12,7 @@ PartyQuestRuntimeSessionOwnerBindResult MakeEarlyFailure(
     result.Store.PersistenceStatus = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
     result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
     result.GuardHeld = PartyQuestSaveGuard::GetProcessGuard().IsActive();
+    result.LeaseStatus = PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted;
     return result;
 }
 } // namespace
@@ -44,6 +45,7 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::Bind(
         {
             PartyQuestRuntimeSessionOwnerBindResult result;
             result.Store = *m_storeResult;
+            result.LeaseStatus = PartyQuestReplicaWorkspaceLeaseStatus::Acquired;
 
             if (m_session->GetCampaignId() != acCampaignId ||
                 m_session->GetPlayerProfileId() != acPlayerProfileId ||
@@ -78,6 +80,26 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::Bind(
             return result;
         }
 
+        PartyQuestReplicaWorkspaceLease workspaceLease;
+        const auto leaseStatus = workspaceLease.Acquire(
+            acPaths,
+            acCampaignId,
+            acPlayerProfileId);
+        if (leaseStatus != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
+        {
+            PartyQuestRuntimeSessionOwnerBindResult result;
+            result.Status = leaseStatus == PartyQuestReplicaWorkspaceLeaseStatus::Busy
+                ? PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceBusy
+                : PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure;
+            result.Store.Status = PartyQuestRuntimeSessionStoreStatus::InvalidLayout;
+            result.Store.PersistenceStatus =
+                PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
+            result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
+            result.GuardHeld = false;
+            result.LeaseStatus = leaseStatus;
+            return result;
+        }
+
         // Finish all potentially throwing path copies before reconciliation can
         // acquire the physical process SaveGuard for a RecoveryRequired journal.
         PartyQuestCoopSavePaths ownedPaths = acPaths;
@@ -90,6 +112,7 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::Bind(
 
         PartyQuestRuntimeSessionOwnerBindResult result;
         result.Store = store;
+        result.LeaseStatus = leaseStatus;
         if (!store.IsUsable())
         {
             result.Status = PartyQuestRuntimeSessionOwnerBindStatus::StoreRejected;
@@ -106,6 +129,7 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::Bind(
         // leaves a live owner able to retry instead of discarding durable state.
         m_paths.emplace(std::move(ownedPaths));
         m_storeResult = store;
+        m_workspaceLease = std::move(workspaceLease);
         m_session = std::move(session);
         m_guardedSession = std::move(guardedSession);
 
@@ -125,6 +149,9 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::Bind(
             : PartyQuestRuntimeSessionOwnerBindStatus::StoreRejected;
         result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
         result.GuardHeld = PartyQuestSaveGuard::GetProcessGuard().IsActive();
+        result.LeaseStatus = m_workspaceLease.IsHeld()
+            ? PartyQuestReplicaWorkspaceLeaseStatus::Acquired
+            : PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted;
         if (m_storeResult)
             result.Store = *m_storeResult;
         return result;
@@ -157,4 +184,5 @@ void PartyQuestRuntimeSessionOwner::Clear() noexcept
     m_session.reset();
     m_paths.reset();
     m_storeResult.reset();
+    m_workspaceLease.Release();
 }

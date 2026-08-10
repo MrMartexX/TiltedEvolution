@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <type_traits>
 
 namespace
@@ -185,6 +186,65 @@ TEST_CASE("Runtime session owner preserves committed transaction idempotency acr
     REQUIRE(owner.PrepareAndRelease(
                 PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
     REQUIRE_FALSE(owner.IsBound());
+}
+
+TEST_CASE("Runtime session owner holds an exclusive kernel-backed workspace lease", "[quest.party-state.runtime-owner][workspace-lease]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+
+    PartyQuestRuntimeSessionOwner first;
+    const auto firstBind = first.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(firstBind.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(firstBind.LeaseStatus ==
+        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+
+    PartyQuestRuntimeSessionOwner competing;
+    const auto blocked = competing.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(blocked.Status ==
+        PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceBusy);
+    REQUIRE(blocked.LeaseStatus == PartyQuestReplicaWorkspaceLeaseStatus::Busy);
+    REQUIRE_FALSE(competing.IsBound());
+
+    REQUIRE(first.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::Disconnect).CanProceed());
+
+    const auto acquiredAfterRelease = competing.Bind(
+        kOwnerCampaign,
+        kOwnerPlayer,
+        paths);
+    REQUIRE(acquiredAfterRelease.Status ==
+        PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(acquiredAfterRelease.LeaseStatus ==
+        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    REQUIRE(competing.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
+
+    REQUIRE(std::filesystem::exists(
+        paths.MetadataDirectory / "party_quest_workspace.lock"));
+}
+
+TEST_CASE("Workspace lease rejects a hard-linked lock file", "[quest.party-state.runtime-owner][workspace-lease][confinement]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+    std::error_code ec;
+    std::filesystem::create_directories(paths.MetadataDirectory, ec);
+    REQUIRE_FALSE(ec);
+
+    const auto external = sandbox.Root / "external.lock";
+    std::ofstream(external).put('x');
+    REQUIRE(std::filesystem::is_regular_file(external));
+
+    const auto lockPath =
+        paths.MetadataDirectory / "party_quest_workspace.lock";
+    std::filesystem::create_hard_link(external, lockPath, ec);
+    REQUIRE_FALSE(ec);
+
+    PartyQuestReplicaWorkspaceLease lease;
+    REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
+        PartyQuestReplicaWorkspaceLeaseStatus::InvalidNamespace);
+    REQUIRE_FALSE(lease.IsHeld());
 }
 
 TEST_CASE("Runtime session owner refuses invalid layout and mismatched durable identity", "[quest.party-state.runtime-owner][identity]")

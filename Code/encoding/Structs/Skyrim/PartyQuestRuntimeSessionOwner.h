@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleFence.h>
+#include <Structs/Skyrim/PartyQuestReplicaWorkspaceLease.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionStore.h>
 
 #include <cstdint>
@@ -16,7 +17,9 @@ enum class PartyQuestRuntimeSessionOwnerBindStatus : uint8_t
     InvalidIdentity,
     InvalidLayout,
     StoreRejected,
-    ReconcileBlocked
+    ReconcileBlocked,
+    WorkspaceBusy,
+    WorkspaceLeaseFailure
 };
 
 struct PartyQuestRuntimeSessionOwnerBindResult
@@ -27,6 +30,8 @@ struct PartyQuestRuntimeSessionOwnerBindResult
     PartyQuestRuntimeGuardStatus ReconcileStatus{
         PartyQuestRuntimeGuardStatus::InvalidState};
     bool GuardHeld{};
+    PartyQuestReplicaWorkspaceLeaseStatus LeaseStatus{
+        PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted};
 
     [[nodiscard]] bool IsBound() const noexcept
     {
@@ -125,6 +130,7 @@ public:
 private:
     void Clear() noexcept;
 
+    PartyQuestReplicaWorkspaceLease m_workspaceLease;
     std::unique_ptr<PartyQuestRuntimeApplySession> m_session;
     std::unique_ptr<PartyQuestRuntimeGuardedSession> m_guardedSession;
     std::optional<PartyQuestCoopSavePaths> m_paths;
