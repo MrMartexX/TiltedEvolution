@@ -188,6 +188,10 @@ jobs:
 
           if ($status -eq 0 -and $targets -contains "TPTests") {
             Write-Host "Running Windows TPTests"
+            $testTemp = Join-Path $env:RUNNER_TEMP "tpq"
+            New-Item -ItemType Directory -Force -Path $testTemp | Out-Null
+            $env:TEMP = $testTemp
+            $env:TMP = $testTemp
             xmake run TPTests *> poc-windows-test.log
             $status = $LASTEXITCODE
           }

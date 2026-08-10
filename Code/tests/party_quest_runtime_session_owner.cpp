@@ -5,6 +5,8 @@
 
 #include <catch2/catch.hpp>
 
+#include "TPTestsSubprocess.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -14,8 +16,6 @@
 #include <thread>
 #include <type_traits>
 #include <vector>
-
-const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -357,14 +357,10 @@ TEST_CASE("Workspace lease is released by abrupt subprocess termination", "[ques
         "TP_WORKSPACE_LEASE_CRASH_ROOT",
         sandbox.Root.string()));
 
-    const auto& executable = GetTPTestsExecutablePath();
-    REQUIRE_FALSE(executable.empty());
-    const std::string command =
-        "\"" + executable.string() +
-        "\" \"Workspace lease subprocess crash helper\" --reporter compact";
-    auto child = std::async(std::launch::async, [command]
+    auto child = std::async(std::launch::async, []
     {
-        return std::system(command.c_str());
+        return RunTPTestsSubprocess(
+            "Workspace lease subprocess crash helper");
     });
 
     const bool ready = WaitForWorkspaceLeaseMarker(

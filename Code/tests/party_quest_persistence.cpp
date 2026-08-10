@@ -3,13 +3,13 @@
 
 #include <catch2/catch.hpp>
 
+#include "TPTestsSubprocess.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
-
-const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -189,12 +189,8 @@ void RunStatePersistenceCrashProcess(
     REQUIRE(SetStatePersistenceEnvironment(
         "TP_STATE_PERSISTENCE_CRASH_BOUNDARY", apBoundary));
 
-    const auto& executable = GetTPTestsExecutablePath();
-    REQUIRE_FALSE(executable.empty());
-    const std::string command =
-        "\"" + executable.string() +
-        "\" \"Canonical state atomic publication crash helper\" --reporter compact";
-    const int exitCode = std::system(command.c_str());
+    const int exitCode = RunTPTestsSubprocess(
+        "Canonical state atomic publication crash helper");
 
     ClearStatePersistenceEnvironment("TP_STATE_PERSISTENCE_CRASH_BOUNDARY");
     ClearStatePersistenceEnvironment("TP_STATE_PERSISTENCE_CRASH_ROOT");

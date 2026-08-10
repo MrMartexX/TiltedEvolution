@@ -13,14 +13,14 @@
 
 #include <catch2/catch.hpp>
 
+#include "TPTestsSubprocess.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
 #include <utility>
-
-const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -250,12 +250,8 @@ void RunRuntimeApplyCrashProcess(
     REQUIRE(SetRuntimeApplyEnvironment(
         "TP_RUNTIME_APPLY_CRASH_BOUNDARY", apBoundary));
 
-    const auto& executable = GetTPTestsExecutablePath();
-    REQUIRE_FALSE(executable.empty());
-    const std::string command =
-        "\"" + executable.string() +
-        "\" \"Runtime apply journal atomic publication crash helper\" --reporter compact";
-    const int exitCode = std::system(command.c_str());
+    const int exitCode = RunTPTestsSubprocess(
+        "Runtime apply journal atomic publication crash helper");
 
     ClearRuntimeApplyEnvironment("TP_RUNTIME_APPLY_CRASH_BOUNDARY");
     ClearRuntimeApplyEnvironment("TP_RUNTIME_APPLY_CRASH_ROOT");

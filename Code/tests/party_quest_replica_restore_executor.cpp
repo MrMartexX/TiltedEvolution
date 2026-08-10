@@ -2,6 +2,8 @@
 
 #include <catch2/catch.hpp>
 
+#include "TPTestsSubprocess.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
@@ -10,8 +12,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -288,12 +288,8 @@ void RunExecutorCrashProcess(
     REQUIRE(SetExecutorEnvironment("TP_RESTORE_CRASH_ROOT", acSandbox.Root.string()));
     REQUIRE(SetExecutorEnvironment("TP_RESTORE_CRASH_PHASE", apPhase));
 
-    const auto& executable = GetTPTestsExecutablePath();
-    REQUIRE_FALSE(executable.empty());
-    const std::string command =
-        "\"" + executable.string() +
-        "\" \"Restore executor subprocess crash helper\" --reporter compact";
-    const int exitCode = std::system(command.c_str());
+    const int exitCode = RunTPTestsSubprocess(
+        "Restore executor subprocess crash helper");
 
     ClearExecutorEnvironment("TP_RESTORE_CRASH_PHASE");
     ClearExecutorEnvironment("TP_RESTORE_CRASH_ROOT");

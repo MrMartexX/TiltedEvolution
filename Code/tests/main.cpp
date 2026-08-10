@@ -1,7 +1,15 @@
 #define CATCH_CONFIG_RUNNER
 #include <catch2/catch.hpp>
 
+#include "TPTestsSubprocess.h"
+
+#include <cstdlib>
 #include <filesystem>
+#include <string>
+
+#ifdef _WIN32
+#include <process.h>
+#endif
 
 namespace
 {
@@ -11,6 +19,31 @@ std::filesystem::path s_executablePath;
 const std::filesystem::path& GetTPTestsExecutablePath() noexcept
 {
     return s_executablePath;
+}
+
+int RunTPTestsSubprocess(std::string_view aTestName)
+{
+    if (s_executablePath.empty() || aTestName.empty())
+        return -1;
+
+#ifdef _WIN32
+    // Avoid cmd.exe quoting rules: _wspawnl passes the executable and Catch
+    // test selector as distinct arguments and waits for the child to exit.
+    const std::wstring testName(aTestName.begin(), aTestName.end());
+    return static_cast<int>(_wspawnl(
+        _P_WAIT,
+        s_executablePath.c_str(),
+        s_executablePath.c_str(),
+        testName.c_str(),
+        L"--reporter",
+        L"compact",
+        static_cast<const wchar_t*>(nullptr)));
+#else
+    const std::string command =
+        "\"" + s_executablePath.string() + "\" \"" +
+        std::string(aTestName) + "\" --reporter compact";
+    return std::system(command.c_str());
+#endif
 }
 
 int main(int argc, char* argv[])

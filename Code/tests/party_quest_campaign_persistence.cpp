@@ -3,6 +3,8 @@
 
 #include <catch2/catch.hpp>
 
+#include "TPTestsSubprocess.h"
+
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -10,8 +12,6 @@
 #include <fstream>
 #include <string>
 #include <vector>
-
-const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -137,12 +137,8 @@ void RunCampaignPersistenceCrashProcess(
     REQUIRE(SetCampaignPersistenceEnvironment(
         "TP_CAMPAIGN_PERSISTENCE_CRASH_BOUNDARY", apBoundary));
 
-    const auto& executable = GetTPTestsExecutablePath();
-    REQUIRE_FALSE(executable.empty());
-    const std::string command =
-        "\"" + executable.string() +
-        "\" \"Campaign metadata atomic publication crash helper\" --reporter compact";
-    const int exitCode = std::system(command.c_str());
+    const int exitCode = RunTPTestsSubprocess(
+        "Campaign metadata atomic publication crash helper");
 
     ClearCampaignPersistenceEnvironment("TP_CAMPAIGN_PERSISTENCE_CRASH_BOUNDARY");
     ClearCampaignPersistenceEnvironment("TP_CAMPAIGN_PERSISTENCE_CRASH_ROOT");

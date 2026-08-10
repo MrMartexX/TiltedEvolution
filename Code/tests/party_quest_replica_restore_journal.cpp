@@ -4,14 +4,14 @@
 
 #include <catch2/catch.hpp>
 
+#include "TPTestsSubprocess.h"
+
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
-
-const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -134,12 +134,8 @@ void RunRestoreJournalCrashProcess(
     REQUIRE(SetRestoreJournalEnvironment(
         "TP_RESTORE_JOURNAL_CRASH_BOUNDARY", apBoundary));
 
-    const auto& executable = GetTPTestsExecutablePath();
-    REQUIRE_FALSE(executable.empty());
-    const std::string command =
-        "\"" + executable.string() +
-        "\" \"Restore journal atomic publication crash helper\" --reporter compact";
-    const int exitCode = std::system(command.c_str());
+    const int exitCode = RunTPTestsSubprocess(
+        "Restore journal atomic publication crash helper");
 
     ClearRestoreJournalEnvironment("TP_RESTORE_JOURNAL_CRASH_BOUNDARY");
     ClearRestoreJournalEnvironment("TP_RESTORE_JOURNAL_CRASH_ROOT");
