@@ -18,6 +18,10 @@
 
 namespace
 {
+const PartyQuestCampaignId kLivePersistenceCampaign{
+    0xABCDEF0123456789ull,
+    0x9876543210ABCDEFull};
+
 QuestSnapshot BuildLivePersistenceSnapshot(GameId aQuestId, uint16_t aStage)
 {
     QuestSnapshot snapshot;
@@ -81,7 +85,8 @@ TEST_CASE("Durable coordinator state survives restart and keeps transaction dedu
     firstCoordinator.SetDurableCommitHandler(
         [&path](const PartyQuestState& acState)
         {
-            return PartyQuestStatePersistence::SaveAtomically(path, acState) ==
+            return PartyQuestStatePersistence::SaveAtomically(
+                       path, kLivePersistenceCampaign, acState) ==
                 PartyQuestPersistenceStatus::Success;
         });
     REQUIRE(firstCoordinator.ConnectClient(1));
@@ -94,6 +99,7 @@ TEST_CASE("Durable coordinator state survives restart and keeps transaction dedu
 
     auto loaded = PartyQuestStatePersistence::Load(path);
     REQUIRE(loaded.Status == PartyQuestPersistenceStatus::Success);
+    REQUIRE(loaded.CampaignId == kLivePersistenceCampaign);
     REQUIRE(loaded.State.has_value());
     REQUIRE(loaded.State->GetWorldRevision() == 1);
     REQUIRE(loaded.State->GetJournal().size() == 1);
@@ -103,7 +109,8 @@ TEST_CASE("Durable coordinator state survives restart and keeps transaction dedu
     restartedCoordinator.SetDurableCommitHandler(
         [&path](const PartyQuestState& acState)
         {
-            return PartyQuestStatePersistence::SaveAtomically(path, acState) ==
+            return PartyQuestStatePersistence::SaveAtomically(
+                       path, kLivePersistenceCampaign, acState) ==
                 PartyQuestPersistenceStatus::Success;
         });
     REQUIRE(restartedCoordinator.ConnectClient(1));
@@ -126,6 +133,7 @@ TEST_CASE("Durable coordinator state survives restart and keeps transaction dedu
 
     auto reloaded = PartyQuestStatePersistence::Load(path);
     REQUIRE(reloaded.Status == PartyQuestPersistenceStatus::Success);
+    REQUIRE(reloaded.CampaignId == kLivePersistenceCampaign);
     REQUIRE(reloaded.State.has_value());
     REQUIRE(reloaded.State->GetWorldRevision() == 2);
     REQUIRE(reloaded.State->GetJournal().size() == 2);

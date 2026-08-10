@@ -12,6 +12,61 @@ const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
+const PartyQuestCampaignId kPersistenceCampaign{
+    0x1234567890ABCDEFull,
+    0x0FEDCBA098765432ull};
+
+constexpr uint64_t kTestFnvOffsetBasis = 14695981039346656037ull;
+constexpr uint64_t kTestFnvPrime = 1099511628211ull;
+
+uint64_t ComputeTestChecksum(const uint8_t* apData, size_t aSize) noexcept
+{
+    uint64_t checksum = kTestFnvOffsetBasis;
+    for (size_t i = 0; i < aSize; ++i)
+    {
+        checksum ^= apData[i];
+        checksum *= kTestFnvPrime;
+    }
+    return checksum;
+}
+
+void WriteLittleEndian64(std::vector<uint8_t>& aBytes, size_t aOffset, uint64_t aValue)
+{
+    REQUIRE(aOffset <= aBytes.size());
+    REQUIRE(aBytes.size() - aOffset >= sizeof(aValue));
+    for (size_t i = 0; i < sizeof(aValue); ++i)
+        aBytes[aOffset + i] = static_cast<uint8_t>((aValue >> (i * 8)) & 0xFF);
+}
+
+std::vector<uint8_t> MakeLegacyUnboundArchive(const PartyQuestState& acState)
+{
+    const auto bound = PartyQuestStatePersistence::Encode(kPersistenceCampaign, acState);
+    constexpr size_t kHeaderSize = 8 + sizeof(uint16_t) + sizeof(uint64_t);
+    constexpr size_t kCampaignIdSize = sizeof(uint64_t) * 2;
+    constexpr size_t kChecksumSize = sizeof(uint64_t);
+    REQUIRE(bound.size() >= kHeaderSize + kCampaignIdSize + kChecksumSize);
+
+    std::vector<uint8_t> legacy(bound.begin(), bound.begin() + kHeaderSize);
+    legacy[8] = 1;
+    legacy[9] = 0;
+    const size_t payloadEnd = bound.size() - kChecksumSize;
+    legacy.insert(
+        legacy.end(),
+        bound.begin() + kHeaderSize + kCampaignIdSize,
+        bound.begin() + payloadEnd);
+
+    const uint64_t legacyPayloadSize =
+        static_cast<uint64_t>(payloadEnd - kHeaderSize - kCampaignIdSize);
+    WriteLittleEndian64(legacy, 10, legacyPayloadSize);
+    const uint64_t checksum = ComputeTestChecksum(
+        legacy.data() + kHeaderSize,
+        static_cast<size_t>(legacyPayloadSize));
+    const size_t checksumOffset = legacy.size();
+    legacy.resize(checksumOffset + kChecksumSize);
+    WriteLittleEndian64(legacy, checksumOffset, checksum);
+    return legacy;
+}
+
 QuestSnapshot BuildPersistentSnapshot(GameId aQuestId, uint16_t aStage)
 {
     QuestSnapshot snapshot;
@@ -146,6 +201,7 @@ void RunStatePersistenceCrashProcess(
 
     const auto loaded = PartyQuestStatePersistence::Load(acRoot / "canonical.bin");
     REQUIRE(loaded.Status == PartyQuestPersistenceStatus::Success);
+    REQUIRE(loaded.CampaignId == kPersistenceCampaign);
     REQUIRE(loaded.State.has_value());
     const bool beforePrimaryMove = std::string(apBoundary) == "TemporaryVerified";
     REQUIRE(loaded.State->GetWorldRevision() == (beforePrimaryMove ? 3 : 4));
@@ -168,7 +224,8 @@ TEST_CASE("Canonical state atomic publication crash helper", "[.][quest.party-st
         boundary == "TemporaryPublished"));
 
     const auto path = std::filesystem::path(rootValue) / "canonical.bin";
-    REQUIRE(PartyQuestStatePersistence::SaveAtomically(path, BuildPersistentState()) ==
+    REQUIRE(PartyQuestStatePersistence::SaveAtomically(
+                path, kPersistenceCampaign, BuildPersistentState()) ==
         PartyQuestPersistenceStatus::Success);
 
     StatePersistenceCrashBoundary crash{
@@ -179,6 +236,7 @@ TEST_CASE("Canonical state atomic publication crash helper", "[.][quest.party-st
                 : PartyQuestStatePersistenceBoundary::TemporaryPublished};
     const auto status = PartyQuestStatePersistence::SaveAtomically(
         path,
+        kPersistenceCampaign,
         BuildNewerPersistentState(),
         {CrashStatePersistenceAtBoundary, &crash});
     FAIL("Crash boundary returned with status " << static_cast<int>(status));
@@ -187,13 +245,16 @@ TEST_CASE("Canonical state atomic publication crash helper", "[.][quest.party-st
 TEST_CASE("Party quest persistence round-trips checkpoint and journal", "[quest.party-state.persistence]")
 {
     PartyQuestState original = BuildPersistentState();
-    const auto firstEncoding = PartyQuestStatePersistence::Encode(original);
-    const auto secondEncoding = PartyQuestStatePersistence::Encode(original);
+    const auto firstEncoding = PartyQuestStatePersistence::Encode(
+        kPersistenceCampaign, original);
+    const auto secondEncoding = PartyQuestStatePersistence::Encode(
+        kPersistenceCampaign, original);
 
     REQUIRE(firstEncoding == secondEncoding);
 
     auto loaded = PartyQuestStatePersistence::Decode(firstEncoding);
     REQUIRE(loaded.Status == PartyQuestPersistenceStatus::Success);
+    REQUIRE(loaded.CampaignId == kPersistenceCampaign);
     REQUIRE(loaded.State.has_value());
     REQUIRE_FALSE(loaded.UsedBackup);
     REQUIRE(loaded.State->GetWorldRevision() == original.GetWorldRevision());
@@ -218,7 +279,10 @@ TEST_CASE("Party quest persistence round-trips checkpoint and journal", "[quest.
 
 TEST_CASE("Party quest persistence rejects corrupted and truncated archives", "[quest.party-state.persistence]")
 {
-    const auto encoded = PartyQuestStatePersistence::Encode(BuildPersistentState());
+    REQUIRE(PartyQuestStatePersistence::Encode({}, BuildPersistentState()).empty());
+
+    const auto encoded = PartyQuestStatePersistence::Encode(
+        kPersistenceCampaign, BuildPersistentState());
 
     auto corrupted = encoded;
     REQUIRE(corrupted.size() > 20);
@@ -243,7 +307,9 @@ TEST_CASE("Canonical state backup is never silently promoted", "[quest.party-sta
     RemoveArchiveFiles(path);
 
     PartyQuestState state = BuildPersistentState();
-    REQUIRE(PartyQuestStatePersistence::SaveAtomically(path, state) == PartyQuestPersistenceStatus::Success);
+    REQUIRE(PartyQuestStatePersistence::SaveAtomically(
+                path, kPersistenceCampaign, state) ==
+        PartyQuestPersistenceStatus::Success);
 
     auto firstLoad = PartyQuestStatePersistence::Load(path);
     REQUIRE(firstLoad.Status == PartyQuestPersistenceStatus::Success);
@@ -252,7 +318,9 @@ TEST_CASE("Canonical state backup is never silently promoted", "[quest.party-sta
     REQUIRE_FALSE(firstLoad.UsedBackup);
 
     REQUIRE(state.Apply(BuildPersistentTransaction(10004, GameId(2, 0x2000), 1, 50, 9)).Status == PartyQuestApplyStatus::Accepted);
-    REQUIRE(PartyQuestStatePersistence::SaveAtomically(path, state) == PartyQuestPersistenceStatus::Success);
+    REQUIRE(PartyQuestStatePersistence::SaveAtomically(
+                path, kPersistenceCampaign, state) ==
+        PartyQuestPersistenceStatus::Success);
 
     {
         std::ofstream corruptPrimary(path, std::ios::binary | std::ios::trunc);
@@ -262,11 +330,40 @@ TEST_CASE("Canonical state backup is never silently promoted", "[quest.party-sta
 
     auto recovered = PartyQuestStatePersistence::Load(path);
     REQUIRE(recovered.Status == PartyQuestPersistenceStatus::BackupRecoveryRequired);
+    REQUIRE(recovered.CampaignId == kPersistenceCampaign);
     REQUIRE(recovered.State.has_value());
     REQUIRE(recovered.UsedBackup);
     REQUIRE(recovered.State->GetWorldRevision() == 3);
 
     RemoveArchiveFiles(path);
+}
+
+TEST_CASE("Legacy canonical state decodes unbound and rewrites as campaign-bound v2", "[quest.party-state.persistence][migration]")
+{
+    const auto state = BuildPersistentState();
+    const auto legacy = MakeLegacyUnboundArchive(state);
+    const auto decodedLegacy = PartyQuestStatePersistence::Decode(legacy);
+    REQUIRE(decodedLegacy.Status == PartyQuestPersistenceStatus::Success);
+    REQUIRE_FALSE(decodedLegacy.CampaignId.has_value());
+    REQUIRE(decodedLegacy.State.has_value());
+    REQUIRE(decodedLegacy.State->GetWorldRevision() == state.GetWorldRevision());
+
+    const auto migrated = PartyQuestStatePersistence::Decode(
+        PartyQuestStatePersistence::Encode(kPersistenceCampaign, *decodedLegacy.State));
+    REQUIRE(migrated.Status == PartyQuestPersistenceStatus::Success);
+    REQUIRE(migrated.CampaignId == kPersistenceCampaign);
+    REQUIRE(migrated.State.has_value());
+    REQUIRE(migrated.State->GetJournal() == state.GetJournal());
+}
+
+TEST_CASE("Canonical state archive exposes exact campaign binding for bootstrap validation", "[quest.party-state.persistence][campaign-id]")
+{
+    const PartyQuestCampaignId otherCampaign{0xAAAAAAAAAAAAAAAAull, 0xBBBBBBBBBBBBBBBBull};
+    const auto decoded = PartyQuestStatePersistence::Decode(
+        PartyQuestStatePersistence::Encode(kPersistenceCampaign, BuildPersistentState()));
+    REQUIRE(decoded.Status == PartyQuestPersistenceStatus::Success);
+    REQUIRE(decoded.CampaignId == kPersistenceCampaign);
+    REQUIRE(decoded.CampaignId != otherCampaign);
 }
 
 TEST_CASE("Canonical state publication windows survive abrupt process termination", "[quest.party-state.persistence][fault][process]")

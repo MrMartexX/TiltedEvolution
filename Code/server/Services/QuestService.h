@@ -40,7 +40,9 @@ private:
     void OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept;
 
     [[nodiscard]] bool InitializePartyQuestPersistence() noexcept;
-    [[nodiscard]] bool InitializePartyQuestCampaignIdentity(bool aHadStateArchive) noexcept;
+    [[nodiscard]] bool InitializePartyQuestCampaignIdentity(
+        bool aHadStateArchive,
+        const std::optional<PartyQuestCampaignId>& acEmbeddedCampaignId) noexcept;
     [[nodiscard]] bool PersistPartyQuestState(const PartyQuestState& acState) noexcept;
     [[nodiscard]] bool PreparePartyQuestClient(Player* apPlayer, uint32_t& aPartyId) noexcept;
     [[nodiscard]] bool IsPartyActive(uint32_t aPartyId) const noexcept;

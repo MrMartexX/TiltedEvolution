@@ -29,9 +29,9 @@ struct PartyQuestCampaignPersistenceResult
 /**
  * Durable immutable metadata for the stable server campaign identity.
  *
- * The identity is stored beside the canonical quest-state archive. It is kept
- * separate because it is immutable while the state archive is replaced for
- * every accepted canonical transaction.
+ * The immutable bootstrap copy is stored beside the canonical quest-state
+ * archive. Current state archives also embed the same identity; bootstrap must
+ * require an exact match before exposing canonical history.
  */
 class PartyQuestCampaignPersistence final
 {

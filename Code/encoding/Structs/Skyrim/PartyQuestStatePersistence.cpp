@@ -10,7 +10,8 @@
 namespace
 {
 constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'S', 'T', 'A', 'T', 'E'};
-constexpr uint16_t kFormatVersion = 1;
+constexpr uint16_t kLegacyUnboundFormatVersion = 1;
+constexpr uint16_t kFormatVersion = 2;
 constexpr uint32_t kMaxQuestCount = 100000;
 constexpr uint64_t kMaxJournalEntries = 10000000;
 constexpr uint32_t kMaxCollectionEntries = 1000000;
@@ -476,9 +477,16 @@ bool WriteFile(const std::filesystem::path& acPath, const std::vector<uint8_t>& 
 }
 } // namespace
 
-std::vector<uint8_t> PartyQuestStatePersistence::Encode(const PartyQuestState& acState)
+std::vector<uint8_t> PartyQuestStatePersistence::Encode(
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestState& acState)
 {
+    if (!acCampaignId.IsValid())
+        return {};
+
     Writer payload;
+    payload.Write(acCampaignId.High);
+    payload.Write(acCampaignId.Low);
     payload.Write(acState.GetWorldRevision());
 
     std::vector<const QuestSnapshot*> quests;
@@ -540,7 +548,7 @@ PartyQuestPersistenceResult PartyQuestStatePersistence::Decode(const std::vector
         result.Status = PartyQuestPersistenceStatus::Truncated;
         return result;
     }
-    if (formatVersion != kFormatVersion)
+    if (formatVersion != kLegacyUnboundFormatVersion && formatVersion != kFormatVersion)
     {
         result.Status = PartyQuestPersistenceStatus::UnsupportedVersion;
         return result;
@@ -583,6 +591,22 @@ PartyQuestPersistenceResult PartyQuestStatePersistence::Decode(const std::vector
     }
 
     Reader payload(pPayload, payloadSize);
+    if (formatVersion == kFormatVersion)
+    {
+        PartyQuestCampaignId campaignId;
+        if (!payload.Read(campaignId.High) || !payload.Read(campaignId.Low))
+        {
+            result.Status = PartyQuestPersistenceStatus::Truncated;
+            return result;
+        }
+        if (!campaignId.IsValid())
+        {
+            result.Status = PartyQuestPersistenceStatus::InvalidData;
+            return result;
+        }
+        result.CampaignId = campaignId;
+    }
+
     uint64_t checkpointWorldRevision{};
     uint32_t checkpointQuestCount{};
     if (!payload.Read(checkpointWorldRevision) || !payload.Read(checkpointQuestCount))
@@ -678,10 +702,11 @@ PartyQuestPersistenceResult PartyQuestStatePersistence::Decode(const std::vector
 
 PartyQuestPersistenceStatus PartyQuestStatePersistence::SaveAtomically(
     const std::filesystem::path& acPath,
+    const PartyQuestCampaignId& acCampaignId,
     const PartyQuestState& acState,
     PartyQuestStatePersistenceHooks aHooks)
 {
-    const auto encoded = Encode(acState);
+    const auto encoded = Encode(acCampaignId, acState);
     if (encoded.empty())
         return PartyQuestPersistenceStatus::InvalidData;
 
@@ -714,7 +739,8 @@ PartyQuestPersistenceStatus PartyQuestStatePersistence::SaveAtomically(
     if (temporaryRead == PartyQuestPersistenceStatus::Success)
         temporaryState = Decode(temporaryBytes);
     if (temporaryState.Status != PartyQuestPersistenceStatus::Success ||
-        !temporaryState.State || Encode(*temporaryState.State) != encoded)
+        temporaryState.CampaignId != acCampaignId ||
+        !temporaryState.State || Encode(acCampaignId, *temporaryState.State) != encoded)
     {
         std::filesystem::remove(temporaryPath, ec);
         return temporaryState.Status == PartyQuestPersistenceStatus::Success

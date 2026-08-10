@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestCampaign.h>
 #include <Structs/Skyrim/PartyQuestState.h>
 
 #include <cstdint>
@@ -24,6 +25,7 @@ enum class PartyQuestPersistenceStatus : uint8_t
 struct PartyQuestPersistenceResult
 {
     PartyQuestPersistenceStatus Status{PartyQuestPersistenceStatus::InvalidData};
+    std::optional<PartyQuestCampaignId> CampaignId;
     std::optional<PartyQuestState> State;
     bool UsedBackup{};
     bool UsedTemporary{};
@@ -64,21 +66,24 @@ struct PartyQuestStatePersistenceHooks
 /**
  * Durable, self-validating storage for the canonical party quest state.
  *
- * Format version 1 stores a canonical checkpoint together with the complete
- * accepted transaction journal. Loading replays the journal and verifies that
- * it exactly reproduces the checkpoint before exposing the restored state.
- * A later format can compact the historical prefix without changing the
- * PartyQuestState transaction contract.
+ * Format version 2 binds the checksum-covered canonical checkpoint and
+ * complete accepted transaction journal to one stable CampaignId. Version 1
+ * remains readable only for controlled one-time migration and is exposed with
+ * no CampaignId. Loading replays the journal and verifies that it exactly
+ * reproduces the checkpoint before exposing the restored state.
  */
 class PartyQuestStatePersistence final
 {
 public:
-    [[nodiscard]] static std::vector<uint8_t> Encode(const PartyQuestState& acState);
+    [[nodiscard]] static std::vector<uint8_t> Encode(
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestState& acState);
     [[nodiscard]] static PartyQuestPersistenceResult Decode(const std::vector<uint8_t>& acBytes);
 
     /** Writes through a sibling .tmp file and retains the previous file as .bak. */
     [[nodiscard]] static PartyQuestPersistenceStatus SaveAtomically(
         const std::filesystem::path& acPath,
+        const PartyQuestCampaignId& acCampaignId,
         const PartyQuestState& acState,
         PartyQuestStatePersistenceHooks aHooks = {});
 

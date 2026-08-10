@@ -210,8 +210,34 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
         }
     }
 
-    if (!InitializePartyQuestCampaignIdentity(hadStateArchive))
+    if (!InitializePartyQuestCampaignIdentity(
+            hadStateArchive,
+            loadResult.CampaignId))
         return false;
+
+    if (hadStateArchive && !loadResult.CampaignId)
+    {
+        const auto migrationStatus = PartyQuestStatePersistence::SaveAtomically(
+            m_partyQuestStatePath,
+            m_campaignId,
+            m_partyQuestCoordinator.GetCanonicalState());
+        if (migrationStatus != PartyQuestPersistenceStatus::Success)
+        {
+            spdlog::error(
+                "PartyQuestProtocol could not bind legacy canonical state to campaign={:016X}{:016X}: path='{}' status={}; protocol messages will be rejected",
+                m_campaignId.High,
+                m_campaignId.Low,
+                m_partyQuestStatePath.string(),
+                PersistenceStatusName(migrationStatus));
+            return false;
+        }
+
+        spdlog::info(
+            "PartyQuestProtocol migrated legacy canonical state to campaign-bound archive: campaign={:016X}{:016X} path='{}'",
+            m_campaignId.High,
+            m_campaignId.Low,
+            m_partyQuestStatePath.string());
+    }
 
     m_partyQuestCoordinator.SetDurableCommitHandler(
         [this](const PartyQuestState& acState)
@@ -222,12 +248,16 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
     return true;
 }
 
-bool QuestService::InitializePartyQuestCampaignIdentity(bool aHadStateArchive) noexcept
+bool QuestService::InitializePartyQuestCampaignIdentity(
+    bool aHadStateArchive,
+    const std::optional<PartyQuestCampaignId>& acEmbeddedCampaignId) noexcept
 {
     auto loadResult = PartyQuestCampaignPersistence::Load(m_partyQuestCampaignIdPath);
     if (loadResult.Status == PartyQuestCampaignPersistenceStatus::FileNotFound)
     {
-        m_campaignId = PartyQuestCampaignPersistence::GenerateCampaignId();
+        m_campaignId = acEmbeddedCampaignId
+            ? *acEmbeddedCampaignId
+            : PartyQuestCampaignPersistence::GenerateCampaignId();
         const auto saveStatus = PartyQuestCampaignPersistence::SaveAtomically(
             m_partyQuestCampaignIdPath,
             m_campaignId);
@@ -259,6 +289,16 @@ bool QuestService::InitializePartyQuestCampaignIdentity(bool aHadStateArchive) n
     }
 
     m_campaignId = *loadResult.CampaignId;
+    if (acEmbeddedCampaignId && *acEmbeddedCampaignId != m_campaignId)
+    {
+        spdlog::error(
+            "PartyQuestProtocol campaign identity mismatch: metadata={:016X}{:016X} canonicalArchive={:016X}{:016X}; protocol messages will be rejected",
+            m_campaignId.High,
+            m_campaignId.Low,
+            acEmbeddedCampaignId->High,
+            acEmbeddedCampaignId->Low);
+        return false;
+    }
     if (loadResult.UsedBackup)
     {
         std::error_code removeError;
@@ -300,7 +340,10 @@ bool QuestService::PersistPartyQuestState(const PartyQuestState& acState) noexce
         return true;
 
     const PartyQuestPersistenceStatus status =
-        PartyQuestStatePersistence::SaveAtomically(m_partyQuestStatePath, acState);
+        PartyQuestStatePersistence::SaveAtomically(
+            m_partyQuestStatePath,
+            m_campaignId,
+            acState);
     if (status != PartyQuestPersistenceStatus::Success)
     {
         spdlog::error(
