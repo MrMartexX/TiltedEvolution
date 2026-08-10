@@ -13,6 +13,7 @@
 #include <Messages/ServerMessageFactory.h>
 
 #include <Structs/Skyrim/PartyQuestRepair.h>
+#include <Structs/Skyrim/PartyQuestResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -164,6 +165,65 @@ TEST_CASE("Party quest protocol messages round-trip through the real factories",
     auto decodedResourceLimited = RoundTripServerMessage(resourceLimited);
     REQUIRE(decodedResourceLimited->IsValid);
     REQUIRE(*decodedResourceLimited == resourceLimited);
+}
+
+TEST_CASE("Wire decoders reject resource counts before collection allocation", "[quest.party-state.protocol][resource-budget]")
+{
+    SECTION("snapshot collection count")
+    {
+        Buffer buffer(1024);
+        Buffer::Writer writer(&buffer);
+        Serialization::WriteVarInt(writer, QuestSnapshot::SchemaVersion);
+        const GameId questId(1, 0x100);
+        questId.Serialize(writer);
+        Serialization::WriteVarInt(
+            writer, static_cast<uint8_t>(QuestSnapshotStatus::Running));
+        Serialization::WriteVarInt(writer, 10);
+        Serialization::WriteVarInt(writer, 1);
+        Serialization::WriteVarInt(writer, 1);
+        Serialization::WriteVarInt(writer, 0);
+        Serialization::WriteVarInt(
+            writer,
+            PartyQuestResourcePolicy::MaxSnapshotCollectionEntries + 1);
+
+        Buffer::Reader reader(&buffer);
+        QuestSnapshot snapshot;
+        REQUIRE_FALSE(PartyQuestWireCodec::DeserializeQuestSnapshot(
+            reader, snapshot));
+        REQUIRE(snapshot.CompletedStages.empty());
+    }
+
+    SECTION("replica report quest count")
+    {
+        Buffer buffer(1024);
+        Buffer::Writer writer(&buffer);
+        Serialization::WriteVarInt(writer, 0);
+        Serialization::WriteVarInt(
+            writer, PartyQuestResourcePolicy::MaxWireQuestEntries + 1);
+
+        Buffer::Reader reader(&buffer);
+        PartyQuestReplicaReport report;
+        REQUIRE_FALSE(PartyQuestWireCodec::DeserializeReplicaReport(
+            reader, report));
+        REQUIRE(report.Quests.empty());
+    }
+
+    SECTION("repair plan quest count")
+    {
+        Buffer buffer(1024);
+        Buffer::Writer writer(&buffer);
+        Serialization::WriteVarInt(
+            writer, static_cast<uint8_t>(PartyQuestRepairPlanStatus::RepairRequired));
+        Serialization::WriteVarInt(writer, 0);
+        Serialization::WriteVarInt(writer, 1);
+        Serialization::WriteVarInt(
+            writer, PartyQuestResourcePolicy::MaxWireQuestEntries + 1);
+
+        Buffer::Reader reader(&buffer);
+        PartyQuestRepairPlan plan;
+        REQUIRE_FALSE(PartyQuestWireCodec::DeserializeRepairPlan(reader, plan));
+        REQUIRE(plan.Items.empty());
+    }
 }
 
 TEST_CASE("Reconnect report repair and acknowledgement converge without a second game client", "[quest.party-state.protocol]")

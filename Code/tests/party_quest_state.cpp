@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestState.h>
 #include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
+#include <Structs/Skyrim/PartyQuestResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -218,4 +219,45 @@ TEST_CASE("Canonical journal fails closed at its durable identity bound", "[ques
     REQUIRE(overflow.WorldRevision == limit);
     REQUIRE(state.GetWorldRevision() == limit);
     REQUIRE(state.GetJournal().size() == limit);
+}
+
+TEST_CASE("Canonical state remains inside its wire resource envelope", "[quest.party-state][resource-budget]")
+{
+    SECTION("snapshot collections")
+    {
+        PartyQuestState state;
+        auto transaction = BuildTransaction(90001, GameId(13, 1), 0, 10);
+        transaction.ProposedSnapshot.CompletedStages.resize(
+            PartyQuestResourcePolicy::MaxSnapshotCollectionEntries + 1);
+
+        REQUIRE(state.Apply(transaction).Status ==
+            PartyQuestApplyStatus::ResourceLimitExceeded);
+        REQUIRE(state.GetWorldRevision() == 0);
+        REQUIRE(state.GetJournal().empty());
+    }
+
+    SECTION("unique canonical quests")
+    {
+        PartyQuestState state;
+        for (size_t i = 0;
+             i < PartyQuestResourcePolicy::MaxWireQuestEntries;
+             ++i)
+        {
+            REQUIRE(state.Apply(BuildTransaction(
+                100000 + i,
+                GameId(13, static_cast<uint32_t>(i + 1)),
+                0,
+                10)).Status == PartyQuestApplyStatus::Accepted);
+        }
+
+        REQUIRE(state.Apply(BuildTransaction(
+            200000,
+            GameId(13, 0xFFFFF),
+            0,
+            10)).Status == PartyQuestApplyStatus::ResourceLimitExceeded);
+        REQUIRE(state.GetQuestCount() ==
+            PartyQuestResourcePolicy::MaxWireQuestEntries);
+        REQUIRE(state.GetWorldRevision() ==
+            PartyQuestResourcePolicy::MaxWireQuestEntries);
+    }
 }

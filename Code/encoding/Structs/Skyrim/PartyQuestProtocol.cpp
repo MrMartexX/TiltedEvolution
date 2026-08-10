@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestProtocol.h>
+#include <Structs/Skyrim/PartyQuestResourcePolicy.h>
 
 #include <algorithm>
 #include <atomic>
@@ -144,6 +145,17 @@ PartyQuestTransactionDispatch PartyQuestProtocolCoordinator::HandleTransaction(
         dispatch.Status = PartyQuestTransactionHandleStatus::InvalidMessage;
         dispatch.Response.Result = {
             PartyQuestApplyStatus::InvalidTransactionId,
+            m_state.GetWorldRevision(),
+            GetQuestRevision(m_state, acRequest.Transaction.QuestId)};
+        return dispatch;
+    }
+
+    if (!PartyQuestResourcePolicy::IsSnapshotWithinBounds(
+            acRequest.Transaction.ProposedSnapshot))
+    {
+        dispatch.Status = PartyQuestTransactionHandleStatus::ResourceLimitExceeded;
+        dispatch.Response.Result = {
+            PartyQuestApplyStatus::ResourceLimitExceeded,
             m_state.GetWorldRevision(),
             GetQuestRevision(m_state, acRequest.Transaction.QuestId)};
         return dispatch;

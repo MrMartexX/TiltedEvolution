@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestState.h>
 #include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
+#include <Structs/Skyrim/PartyQuestResourcePolicy.h>
 
 namespace
 {
@@ -39,6 +40,15 @@ PartyQuestApplyResult PartyQuestState::Apply(const PartyQuestTransaction& acTran
     if (acTransaction.TransactionId == 0)
         return {PartyQuestApplyStatus::InvalidTransactionId, m_worldRevision, GetQuestRevision(*this, acTransaction.QuestId)};
 
+    if (!PartyQuestResourcePolicy::IsSnapshotWithinBounds(
+            acTransaction.ProposedSnapshot))
+    {
+        return {
+            PartyQuestApplyStatus::ResourceLimitExceeded,
+            m_worldRevision,
+            GetQuestRevision(*this, acTransaction.QuestId)};
+    }
+
     const PartyQuestTransaction transaction = CanonicalizeTransaction(acTransaction);
 
     const auto transactionIt = m_transactionJournalIndices.find(transaction.TransactionId);
@@ -57,6 +67,15 @@ PartyQuestApplyResult PartyQuestState::Apply(const PartyQuestTransaction& acTran
     const uint64_t currentQuestRevision = GetQuestRevision(*this, transaction.QuestId);
     if (transaction.ExpectedQuestRevision != currentQuestRevision)
         return {PartyQuestApplyStatus::RevisionMismatch, m_worldRevision, currentQuestRevision};
+
+    if (!FindQuest(transaction.QuestId) &&
+        m_quests.size() >= PartyQuestResourcePolicy::MaxWireQuestEntries)
+    {
+        return {
+            PartyQuestApplyStatus::ResourceLimitExceeded,
+            m_worldRevision,
+            currentQuestRevision};
+    }
 
     if (m_journal.size() >=
         PartyQuestDurableResourcePolicy::MaxCanonicalJournalRecords)

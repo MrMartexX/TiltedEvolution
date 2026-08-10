@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestWireCodec.h>
+#include <Structs/Skyrim/PartyQuestResourcePolicy.h>
 
 #include <TiltedCore/Serialization.hpp>
 
@@ -9,9 +10,6 @@ using TiltedPhoques::Serialization;
 
 namespace
 {
-constexpr uint64_t kMaxQuestEntries = 100000;
-constexpr uint64_t kMaxCollectionEntries = 1000000;
-
 bool GameIdLess(const GameId& acLeft, const GameId& acRight) noexcept
 {
     if (acLeft.ModId != acRight.ModId)
@@ -144,13 +142,13 @@ bool DeserializeQuestSnapshot(TiltedPhoques::Buffer::Reader& aReader, QuestSnaps
         snapshot.SceneParticipantPlayerId = static_cast<uint32_t>(Serialization::ReadVarInt(aReader) & 0xFFFFFFFF);
 
     size_t count{};
-    if (!ReadCount(aReader, kMaxCollectionEntries, count))
+    if (!ReadCount(aReader, PartyQuestResourcePolicy::MaxSnapshotCollectionEntries, count))
         return false;
     snapshot.CompletedStages.reserve(count);
     for (size_t i = 0; i < count; ++i)
         snapshot.CompletedStages.push_back(static_cast<uint16_t>(Serialization::ReadVarInt(aReader) & 0xFFFF));
 
-    if (!ReadCount(aReader, kMaxCollectionEntries, count))
+    if (!ReadCount(aReader, PartyQuestResourcePolicy::MaxSnapshotCollectionEntries, count))
         return false;
     snapshot.Objectives.reserve(count);
     for (size_t i = 0; i < count; ++i)
@@ -164,7 +162,7 @@ bool DeserializeQuestSnapshot(TiltedPhoques::Buffer::Reader& aReader, QuestSnaps
         snapshot.Objectives.push_back(objective);
     }
 
-    if (!ReadCount(aReader, kMaxCollectionEntries, count))
+    if (!ReadCount(aReader, PartyQuestResourcePolicy::MaxSnapshotCollectionEntries, count))
         return false;
     snapshot.ReferenceAliases.reserve(count);
     for (size_t i = 0; i < count; ++i)
@@ -176,7 +174,7 @@ bool DeserializeQuestSnapshot(TiltedPhoques::Buffer::Reader& aReader, QuestSnaps
         snapshot.ReferenceAliases.push_back(alias);
     }
 
-    if (!ReadCount(aReader, kMaxCollectionEntries, count))
+    if (!ReadCount(aReader, PartyQuestResourcePolicy::MaxSnapshotCollectionEntries, count))
         return false;
     snapshot.LocationAliases.reserve(count);
     for (size_t i = 0; i < count; ++i)
@@ -188,7 +186,7 @@ bool DeserializeQuestSnapshot(TiltedPhoques::Buffer::Reader& aReader, QuestSnaps
         snapshot.LocationAliases.push_back(alias);
     }
 
-    if (!ReadCount(aReader, kMaxCollectionEntries, count))
+    if (!ReadCount(aReader, PartyQuestResourcePolicy::MaxSnapshotCollectionEntries, count))
         return false;
     snapshot.CreatedReferences.reserve(count);
     for (size_t i = 0; i < count; ++i)
@@ -282,7 +280,7 @@ bool DeserializeReplicaReport(TiltedPhoques::Buffer::Reader& aReader, PartyQuest
     report.WorldRevision = Serialization::ReadVarInt(aReader);
 
     size_t count{};
-    if (!ReadCount(aReader, kMaxQuestEntries, count))
+    if (!ReadCount(aReader, PartyQuestResourcePolicy::MaxWireQuestEntries, count))
         return false;
     report.Quests.reserve(count);
 
@@ -336,7 +334,7 @@ bool DeserializeRepairPlan(TiltedPhoques::Buffer::Reader& aReader, PartyQuestRep
     plan.TargetWorldRevision = Serialization::ReadVarInt(aReader);
 
     size_t count{};
-    if (!ReadCount(aReader, kMaxQuestEntries, count))
+    if (!ReadCount(aReader, PartyQuestResourcePolicy::MaxWireQuestEntries, count))
         return false;
     plan.Items.reserve(count);
 
@@ -361,7 +359,7 @@ bool DeserializeRepairPlan(TiltedPhoques::Buffer::Reader& aReader, PartyQuestRep
     }
 
     size_t removalCount{};
-    if (!ReadCount(aReader, kMaxQuestEntries, removalCount))
+    if (!ReadCount(aReader, PartyQuestResourcePolicy::MaxWireQuestEntries, removalCount))
         return false;
     plan.RemovedQuestIds.reserve(removalCount);
     seenQuestIds.reserve(seenQuestIds.size() + removalCount);
