@@ -42,6 +42,11 @@ public:
     void Release() noexcept;
 
     [[nodiscard]] bool IsHeld() const noexcept { return m_nativeHandle != kInvalidHandle; }
+    /** Process-local capability check; this grants no remote path authority. */
+    [[nodiscard]] bool Protects(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acPlayerProfileId) const noexcept;
     [[nodiscard]] const std::filesystem::path& GetLockPath() const noexcept { return m_lockPath; }
 
 private:
@@ -49,4 +54,7 @@ private:
 
     intptr_t m_nativeHandle{kInvalidHandle};
     std::filesystem::path m_lockPath;
+    std::filesystem::path m_playerDirectory;
+    PartyQuestCampaignId m_campaignId;
+    PartyQuestPlayerProfileId m_playerProfileId;
 };

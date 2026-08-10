@@ -2,6 +2,7 @@
 
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleFence.h>
 #include <Structs/Skyrim/PartyQuestReplicaWorkspaceLease.h>
+#include <Structs/Skyrim/PartyQuestReplicaWorkspaceRecovery.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionStore.h>
 
 #include <cstdint>
@@ -19,7 +20,8 @@ enum class PartyQuestRuntimeSessionOwnerBindStatus : uint8_t
     StoreRejected,
     ReconcileBlocked,
     WorkspaceBusy,
-    WorkspaceLeaseFailure
+    WorkspaceLeaseFailure,
+    WorkspaceRecoveryFailure
 };
 
 struct PartyQuestRuntimeSessionOwnerBindResult
@@ -32,6 +34,7 @@ struct PartyQuestRuntimeSessionOwnerBindResult
     bool GuardHeld{};
     PartyQuestReplicaWorkspaceLeaseStatus LeaseStatus{
         PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted};
+    PartyQuestReplicaWorkspaceRecoveryResult WorkspaceRecovery;
 
     [[nodiscard]] bool IsBound() const noexcept
     {
@@ -54,9 +57,11 @@ struct PartyQuestRuntimeSessionOwnerBindResult
  * PartyQuestCoopSavePaths. It never generates either identity and therefore
  * cannot silently collapse independent characters into one runtime journal.
  *
- * Bind() always hydrates through PartyQuestRuntimeSessionStore, preserving the
- * committed TransactionId journal and any recovery barrier before publishing a
- * guarded session. RecoveryRequired reconstructs the real process SaveGuard via
+ * Bind() first acquires the exact kernel-backed workspace lease and quarantines
+ * only unpublished replica copy temporaries. It then hydrates through
+ * PartyQuestRuntimeSessionStore, preserving the committed TransactionId journal
+ * and any recovery barrier before publishing a guarded session.
+ * RecoveryRequired reconstructs the real process SaveGuard via
  * ReconcileLoadedState(). A usable hydrated session is retained even when that
  * reconciliation is blocked, so durable recovery evidence is never discarded
  * just because another process-local guard appeared concurrently.
@@ -94,7 +99,10 @@ public:
 
     [[nodiscard]] bool IsBound() const noexcept
     {
-        return m_session != nullptr && m_guardedSession != nullptr && m_paths.has_value();
+        return m_workspaceLease.IsHeld() && m_session != nullptr &&
+            m_guardedSession != nullptr && m_paths.has_value() &&
+            m_workspaceRecoveryResult.has_value() &&
+            m_workspaceRecoveryResult->IsSuccess();
     }
 
     [[nodiscard]] bool IsRecoveryBlocked() const noexcept
@@ -135,4 +143,6 @@ private:
     std::unique_ptr<PartyQuestRuntimeGuardedSession> m_guardedSession;
     std::optional<PartyQuestCoopSavePaths> m_paths;
     std::optional<PartyQuestRuntimeSessionStoreResult> m_storeResult;
+    std::optional<PartyQuestReplicaWorkspaceRecoveryResult>
+        m_workspaceRecoveryResult;
 };

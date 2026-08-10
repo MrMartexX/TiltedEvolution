@@ -102,6 +102,11 @@ PartyQuestReplicaWorkspaceLease::PartyQuestReplicaWorkspaceLease(
     PartyQuestReplicaWorkspaceLease&& aRhs) noexcept
     : m_nativeHandle(std::exchange(aRhs.m_nativeHandle, kInvalidHandle))
     , m_lockPath(std::move(aRhs.m_lockPath))
+    , m_playerDirectory(std::move(aRhs.m_playerDirectory))
+    , m_campaignId(std::exchange(aRhs.m_campaignId, PartyQuestCampaignId{}))
+    , m_playerProfileId(std::exchange(
+          aRhs.m_playerProfileId,
+          PartyQuestPlayerProfileId{}))
 {
 }
 
@@ -114,6 +119,11 @@ PartyQuestReplicaWorkspaceLease& PartyQuestReplicaWorkspaceLease::operator=(
     Release();
     m_nativeHandle = std::exchange(aRhs.m_nativeHandle, kInvalidHandle);
     m_lockPath = std::move(aRhs.m_lockPath);
+    m_playerDirectory = std::move(aRhs.m_playerDirectory);
+    m_campaignId = std::exchange(aRhs.m_campaignId, PartyQuestCampaignId{});
+    m_playerProfileId = std::exchange(
+        aRhs.m_playerProfileId,
+        PartyQuestPlayerProfileId{});
     return *this;
 }
 
@@ -208,7 +218,39 @@ PartyQuestReplicaWorkspaceLeaseStatus PartyQuestReplicaWorkspaceLease::Acquire(
 #endif
 
     m_lockPath = lockPath;
+    m_playerDirectory = metadata->parent_path();
+    m_campaignId = acCampaignId;
+    m_playerProfileId = acPlayerProfileId;
     return PartyQuestReplicaWorkspaceLeaseStatus::Acquired;
+}
+
+bool PartyQuestReplicaWorkspaceLease::Protects(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acPlayerProfileId) const noexcept
+{
+    if (!IsHeld() || acCampaignId != m_campaignId ||
+        acPlayerProfileId != m_playerProfileId ||
+        !PartyQuestCoopSaveLayout::Matches(
+            acPaths,
+            acCampaignId,
+            acPlayerProfileId))
+    {
+        return false;
+    }
+
+    try
+    {
+        std::error_code ec;
+        const auto canonicalPlayer = std::filesystem::weakly_canonical(
+            acPaths.PlayerDirectory, ec);
+        return !ec && !canonicalPlayer.empty() &&
+            canonicalPlayer.lexically_normal() == m_playerDirectory;
+    }
+    catch (...)
+    {
+        return false;
+    }
 }
 
 void PartyQuestReplicaWorkspaceLease::Release() noexcept
@@ -225,4 +267,7 @@ void PartyQuestReplicaWorkspaceLease::Release() noexcept
 
     m_nativeHandle = kInvalidHandle;
     m_lockPath.clear();
+    m_playerDirectory.clear();
+    m_campaignId = {};
+    m_playerProfileId = {};
 }

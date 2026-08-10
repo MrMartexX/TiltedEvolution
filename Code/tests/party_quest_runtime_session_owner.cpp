@@ -8,7 +8,9 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <string>
 #include <type_traits>
+#include <vector>
 
 namespace
 {
@@ -52,6 +54,31 @@ PartyQuestCoopSavePaths BuildOwnerPaths(
         acPlayer);
     REQUIRE(paths.has_value());
     return *paths;
+}
+
+void WriteOwnerBytes(
+    const std::filesystem::path& acPath,
+    const std::vector<uint8_t>& acBytes)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(acPath.parent_path(), ec);
+    REQUIRE_FALSE(ec);
+    std::ofstream file(acPath, std::ios::binary | std::ios::trunc);
+    REQUIRE(file.is_open());
+    file.write(
+        reinterpret_cast<const char*>(acBytes.data()),
+        static_cast<std::streamsize>(acBytes.size()));
+    file.flush();
+    REQUIRE(file.good());
+}
+
+void WriteOwnerFile(
+    const std::filesystem::path& acPath,
+    const std::string& acBytes)
+{
+    WriteOwnerBytes(
+        acPath,
+        std::vector<uint8_t>(acBytes.begin(), acBytes.end()));
 }
 
 PartyQuestRuntimeRecoveryState BuildOwnerState()
@@ -245,6 +272,99 @@ TEST_CASE("Workspace lease rejects a hard-linked lock file", "[quest.party-state
     REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
         PartyQuestReplicaWorkspaceLeaseStatus::InvalidNamespace);
     REQUIRE_FALSE(lease.IsHeld());
+}
+
+TEST_CASE("Runtime session owner quarantines only exact orphan copy temporaries", "[quest.party-state.runtime-owner][workspace-recovery]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+    const auto saveTemporary =
+        paths.SavesDirectory / "Hero.ess.tpqtmp-123-0";
+    const auto checkpointTemporary = paths.CheckpointsDirectory /
+        "PreRepair" / "Revision_0000000000000001" / "saves" /
+        "Hero.skse.tpqtmp-456-1";
+    const auto malformedTemporary =
+        paths.SidecarsDirectory / "provider.bin.tpqtmp-456-invalid";
+    WriteOwnerFile(saveTemporary, "UNPUBLISHED_SAVE_BYTES");
+    WriteOwnerFile(checkpointTemporary, "UNPUBLISHED_CHECKPOINT_BYTES");
+    WriteOwnerFile(malformedTemporary, "NOT_AN_EXACT_TEMPORARY");
+
+    auto runtimeTemporary = paths.RuntimeApplySidecar;
+    runtimeTemporary += ".tmp";
+    WriteOwnerBytes(
+        runtimeTemporary,
+        PartyQuestRuntimeApplyPersistence::Encode(BuildOwnerState()));
+
+    PartyQuestRuntimeSessionOwner owner;
+    const auto bound = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(bound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(bound.WorkspaceRecovery.Status ==
+        PartyQuestReplicaWorkspaceRecoveryStatus::Quarantined);
+    REQUIRE(bound.WorkspaceRecovery.QuarantinedFiles == 2);
+    REQUIRE(owner.IsBound());
+
+    const auto quarantine =
+        paths.MetadataDirectory / "orphan_copy_quarantine";
+    REQUIRE_FALSE(std::filesystem::exists(saveTemporary));
+    REQUIRE_FALSE(std::filesystem::exists(checkpointTemporary));
+    REQUIRE(std::filesystem::exists(
+        quarantine / "saves" / saveTemporary.filename()));
+    REQUIRE(std::filesystem::exists(
+        quarantine / checkpointTemporary.lexically_relative(
+            paths.PlayerDirectory)));
+    REQUIRE(std::filesystem::exists(malformedTemporary));
+    REQUIRE(std::filesystem::exists(runtimeTemporary));
+
+    REQUIRE(owner.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
+}
+
+TEST_CASE("Workspace recovery requires the exact live lease capability", "[quest.party-state.runtime-owner][workspace-recovery][capability]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+    const auto temporary =
+        paths.SavesDirectory / "Hero.ess.tpqtmp-654-0";
+    WriteOwnerFile(temporary, "UNOWNED_ORPHAN_BYTES");
+
+    PartyQuestReplicaWorkspaceLease unheldLease;
+    const auto rejected =
+        PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
+            paths,
+            kOwnerCampaign,
+            kOwnerPlayer,
+            unheldLease);
+    REQUIRE(rejected.Status ==
+        PartyQuestReplicaWorkspaceRecoveryStatus::InvalidLease);
+    REQUIRE(std::filesystem::exists(temporary));
+    REQUIRE_FALSE(std::filesystem::exists(
+        paths.MetadataDirectory / "orphan_copy_quarantine"));
+}
+
+TEST_CASE("Workspace recovery fails closed on quarantine destination conflict", "[quest.party-state.runtime-owner][workspace-recovery][confinement]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+    const auto temporary =
+        paths.SavesDirectory / "Hero.ess.tpqtmp-777-0";
+    const auto quarantined = paths.MetadataDirectory /
+        "orphan_copy_quarantine" / "saves" / temporary.filename();
+    WriteOwnerFile(temporary, "CURRENT_ORPHAN_BYTES");
+    WriteOwnerFile(quarantined, "PRIOR_QUARANTINE_BYTES");
+
+    PartyQuestRuntimeSessionOwner owner;
+    const auto blocked = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(blocked.Status ==
+        PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
+    REQUIRE(blocked.WorkspaceRecovery.Status ==
+        PartyQuestReplicaWorkspaceRecoveryStatus::DestinationConflict);
+    REQUIRE_FALSE(owner.IsBound());
+    REQUIRE(std::filesystem::exists(temporary));
+    REQUIRE(std::filesystem::exists(quarantined));
+
+    PartyQuestReplicaWorkspaceLease retryLease;
+    REQUIRE(retryLease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
+        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
 }
 
 TEST_CASE("Runtime session owner refuses invalid layout and mismatched durable identity", "[quest.party-state.runtime-owner][identity]")
