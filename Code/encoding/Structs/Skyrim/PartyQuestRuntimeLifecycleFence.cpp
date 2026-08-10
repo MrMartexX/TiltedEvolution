@@ -69,6 +69,7 @@ PartyQuestRuntimeLifecycleFenceResult PartyQuestRuntimeLifecycleFence::Prepare(
     case PartyQuestRuntimeGuardStatus::DuplicatePending:
     case PartyQuestRuntimeGuardStatus::DuplicateCommitted:
     case PartyQuestRuntimeGuardStatus::RecoveryBlocked:
+    case PartyQuestRuntimeGuardStatus::ResourceLimitExceeded:
     case PartyQuestRuntimeGuardStatus::TransactionConflict:
     case PartyQuestRuntimeGuardStatus::InvalidRequest:
     case PartyQuestRuntimeGuardStatus::UnsafePlan:

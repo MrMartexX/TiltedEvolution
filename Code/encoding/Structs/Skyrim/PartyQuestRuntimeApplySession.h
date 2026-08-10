@@ -14,6 +14,7 @@ enum class PartyQuestRuntimeDurableBeginStatus : uint8_t
     TransactionConflict,
     Busy,
     RecoveryBlocked,
+    ResourceLimitExceeded,
     InvalidRequest,
     UnsafePlan,
     PersistenceFailure

@@ -95,6 +95,24 @@ PartyQuestRuntimeApplyRequest BuildRecoveryRequest(
     return request;
 }
 
+PartyQuestRuntimeCommittedRecord BuildCommittedRecord(
+    const PartyQuestRuntimeApplyRequest& acRequest)
+{
+    const auto identity =
+        PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(acRequest);
+    REQUIRE(identity.has_value());
+
+    PartyQuestRuntimeCommittedRecord record;
+    record.TransactionId = acRequest.TransactionId;
+    record.TargetWorldRevision = identity->TargetWorldRevision;
+    record.QuestId = identity->QuestId;
+    record.CanonicalDigest = identity->CanonicalDigest;
+    record.SidecarManifestFingerprint = identity->SidecarManifestFingerprint;
+    record.Actions = identity->Actions;
+    record.ExpectedVerification = identity->ExpectedVerification;
+    return record;
+}
+
 void CommitRecoveryRequest(
     PartyQuestRuntimeApplyCoordinator& aCoordinator,
     const PartyQuestRuntimeApplyRequest& acRequest)
@@ -591,4 +609,68 @@ TEST_CASE("Runtime apply persistence rejects oversized archives before decode", 
         0);
     REQUIRE(PartyQuestRuntimeApplyPersistence::Decode(oversized).Status ==
         PartyQuestRuntimeApplyPersistenceStatus::ResourceLimitExceeded);
+}
+
+TEST_CASE("Runtime coordinator enforces committed identity bounds before admission", "[quest.party-state.runtime-apply][resource-bounds]")
+{
+    const auto committedRequest =
+        BuildRecoveryRequest(90001, GameId(91, 0x1000), 900);
+
+    PartyQuestRuntimeRecoveryState state;
+    state.CampaignId = kCampaignId;
+    state.PlayerProfileId = kPlayerProfileId;
+    state.Committed.reserve(
+        PartyQuestDurableResourcePolicy::MaxCommittedRuntimeRecords + 1);
+    state.Committed.push_back(BuildCommittedRecord(committedRequest));
+
+    constexpr PartyQuestApplyAction kActions =
+        PartyQuestApplyAction::StageTransition |
+        PartyQuestApplyAction::WaitForPapyrusQuiescence |
+        PartyQuestApplyAction::ResnapshotAndVerify;
+    for (uint64_t index = 1;
+         index < PartyQuestDurableResourcePolicy::MaxCommittedRuntimeRecords;
+         ++index)
+    {
+        PartyQuestRuntimeCommittedRecord record;
+        record.TransactionId = 100000 + index;
+        record.TargetWorldRevision = 1000 + index;
+        record.QuestId = GameId(92, static_cast<uint32_t>(0x2000 + index));
+        record.CanonicalDigest = 0xA000000000000000ull + index;
+        record.SidecarManifestFingerprint =
+            PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
+        record.Actions = kActions;
+        record.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
+            record.Actions,
+            record.CanonicalDigest,
+            0x92001001);
+        state.Committed.push_back(record);
+    }
+
+    auto overflow = state.Committed.back();
+    overflow.TransactionId = 200000;
+    state.Committed.push_back(overflow);
+    PartyQuestRuntimeApplyCoordinator oversized;
+    REQUIRE(oversized.RestoreRecoveryState(
+                state,
+                kCampaignId,
+                kPlayerProfileId) ==
+            PartyQuestRuntimeRecoveryDisposition::InvalidState);
+
+    state.Committed.pop_back();
+    PartyQuestRuntimeApplyCoordinator bounded;
+    REQUIRE(bounded.RestoreRecoveryState(
+                state,
+                kCampaignId,
+                kPlayerProfileId) ==
+            PartyQuestRuntimeRecoveryDisposition::Clean);
+
+    REQUIRE(bounded.Begin(committedRequest) ==
+        PartyQuestRuntimeApplyBeginStatus::DuplicateCommitted);
+    auto conflict = committedRequest;
+    ++conflict.TargetWorldRevision;
+    REQUIRE(bounded.Begin(conflict) ==
+        PartyQuestRuntimeApplyBeginStatus::TransactionConflict);
+    REQUIRE(bounded.Begin(BuildRecoveryRequest(90002, GameId(91, 0x2000), 901)) ==
+        PartyQuestRuntimeApplyBeginStatus::ResourceLimitExceeded);
+    REQUIRE(bounded.GetActive() == nullptr);
 }

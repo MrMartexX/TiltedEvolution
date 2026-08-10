@@ -28,6 +28,8 @@ PartyQuestRuntimeGuardStatus TranslateBegin(
         return PartyQuestRuntimeGuardStatus::InvalidState;
     case PartyQuestRuntimeDurableBeginStatus::RecoveryBlocked:
         return PartyQuestRuntimeGuardStatus::RecoveryBlocked;
+    case PartyQuestRuntimeDurableBeginStatus::ResourceLimitExceeded:
+        return PartyQuestRuntimeGuardStatus::ResourceLimitExceeded;
     case PartyQuestRuntimeDurableBeginStatus::InvalidRequest:
         return PartyQuestRuntimeGuardStatus::InvalidRequest;
     case PartyQuestRuntimeDurableBeginStatus::UnsafePlan:

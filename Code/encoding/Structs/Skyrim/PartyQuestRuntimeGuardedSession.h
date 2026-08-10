@@ -18,6 +18,7 @@ enum class PartyQuestRuntimeGuardStatus : uint8_t
     GuardBusy,
     GuardMismatch,
     RecoveryBlocked,
+    ResourceLimitExceeded,
     CheckpointRestoreRequired,
     PersistenceFailure,
     TransactionConflict,

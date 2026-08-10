@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeApply.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <algorithm>
 #include <unordered_set>
@@ -170,6 +171,12 @@ PartyQuestRuntimeApplyBeginStatus PartyQuestRuntimeApplyCoordinator::Begin(
         return committedIt->second == *fingerprint
             ? PartyQuestRuntimeApplyBeginStatus::DuplicateCommitted
             : PartyQuestRuntimeApplyBeginStatus::TransactionConflict;
+    }
+
+    if (m_committed.size() >=
+        PartyQuestDurableResourcePolicy::MaxCommittedRuntimeRecords)
+    {
+        return PartyQuestRuntimeApplyBeginStatus::ResourceLimitExceeded;
     }
 
     if (m_active)
@@ -404,6 +411,12 @@ PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplyCoordinator::RestoreR
 
     if (acState.PlayerProfileId != acExpectedPlayerProfileId)
         return PartyQuestRuntimeRecoveryDisposition::PlayerProfileMismatch;
+
+    if (acState.Committed.size() >
+        PartyQuestDurableResourcePolicy::MaxCommittedRuntimeRecords)
+    {
+        return PartyQuestRuntimeRecoveryDisposition::InvalidState;
+    }
 
     std::unordered_set<uint64_t> transactionIds;
     transactionIds.reserve(acState.Committed.size() + (acState.Active ? 1 : 0));

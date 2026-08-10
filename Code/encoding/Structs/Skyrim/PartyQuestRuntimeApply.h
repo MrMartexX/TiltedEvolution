@@ -30,6 +30,7 @@ enum class PartyQuestRuntimeApplyBeginStatus : uint8_t
     TransactionConflict,
     Busy,
     RecoveryBlocked,
+    ResourceLimitExceeded,
     InvalidRequest,
     UnsafePlan
 };

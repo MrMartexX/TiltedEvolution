@@ -58,6 +58,7 @@ PartyQuestRuntimeDurableBeginStatus PartyQuestRuntimeApplySession::TranslateBegi
     case PartyQuestRuntimeApplyBeginStatus::TransactionConflict: return PartyQuestRuntimeDurableBeginStatus::TransactionConflict;
     case PartyQuestRuntimeApplyBeginStatus::Busy: return PartyQuestRuntimeDurableBeginStatus::Busy;
     case PartyQuestRuntimeApplyBeginStatus::RecoveryBlocked: return PartyQuestRuntimeDurableBeginStatus::RecoveryBlocked;
+    case PartyQuestRuntimeApplyBeginStatus::ResourceLimitExceeded: return PartyQuestRuntimeDurableBeginStatus::ResourceLimitExceeded;
     case PartyQuestRuntimeApplyBeginStatus::InvalidRequest: return PartyQuestRuntimeDurableBeginStatus::InvalidRequest;
     case PartyQuestRuntimeApplyBeginStatus::UnsafePlan: return PartyQuestRuntimeDurableBeginStatus::UnsafePlan;
     }
