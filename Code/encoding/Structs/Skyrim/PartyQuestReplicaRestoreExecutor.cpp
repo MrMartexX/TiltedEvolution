@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestReplicaRestoreExecutor.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <iomanip>
 #include <limits>
@@ -13,6 +14,38 @@
 
 namespace
 {
+struct RestoreExecutionDeadline
+{
+    uint64_t StartedAt{};
+    uint64_t ExpiresAt{};
+};
+
+bool BuildDeadline(
+    const PartyQuestReplicaRestoreExecutionHooks& acHooks,
+    RestoreExecutionDeadline& aDeadline) noexcept
+{
+    const uint64_t now = acHooks.NowTicks();
+    if (now == 0 ||
+        now > std::numeric_limits<uint64_t>::max() -
+            PartyQuestReplicaResourcePolicy::MaxExecutionNanoseconds)
+    {
+        return false;
+    }
+    aDeadline.StartedAt = now;
+    aDeadline.ExpiresAt =
+        now + PartyQuestReplicaResourcePolicy::MaxExecutionNanoseconds;
+    return true;
+}
+
+bool DeadlineExceeded(
+    const PartyQuestReplicaRestoreExecutionHooks& acHooks,
+    const RestoreExecutionDeadline& acDeadline) noexcept
+{
+    const uint64_t now = acHooks.NowTicks();
+    return now == 0 || now < acDeadline.StartedAt ||
+        now >= acDeadline.ExpiresAt;
+}
+
 enum class NodeState : uint8_t
 {
     Missing,
@@ -935,12 +968,20 @@ RestoreFailure ReplaceStagedFiles(
     const PartyQuestReplicaRestoreJournalState& acState,
     const std::vector<std::filesystem::path>& acStaged,
     size_t& aCompleted,
-    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
+    PartyQuestReplicaRestoreExecutionHooks aHooks,
+    const RestoreExecutionDeadline& acDeadline) noexcept
 {
     aCompleted = 0;
     for (size_t i = 0; i < acState.Operations.size(); ++i)
     {
         const auto& operation = acState.Operations[i];
+        if (DeadlineExceeded(aHooks, acDeadline))
+        {
+            return {
+                PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded,
+                i,
+                operation.ReplicaDestinationPath};
+        }
         if (i >= acStaged.size() ||
             !Matches(
                 acStaged[i],
@@ -1047,6 +1088,13 @@ RestoreFailure ReplaceStagedFiles(
                 i,
                 operation.ReplicaDestinationPath};
         }
+        if (DeadlineExceeded(aHooks, acDeadline))
+        {
+            return {
+                PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded,
+                i,
+                operation.ReplicaDestinationPath};
+        }
     }
     return {};
 }
@@ -1054,9 +1102,17 @@ RestoreFailure ReplaceStagedFiles(
 PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
     const PartyQuestCoopSavePaths& acPaths,
     PartyQuestReplicaRestoreJournalState& aState,
-    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
+    PartyQuestReplicaRestoreExecutionHooks aHooks,
+    const RestoreExecutionDeadline& acDeadline) noexcept
 {
     const auto journalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(aState);
+
+    if (DeadlineExceeded(aHooks, acDeadline))
+    {
+        return MakeReport(
+            aState,
+            PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
+    }
 
     if (aState.Phase == PartyQuestReplicaRestoreJournalPhase::Prepared)
     {
@@ -1097,6 +1153,13 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
         return MakeReport(aState, PartyQuestReplicaRestoreExecutionStatus::InvalidPlan);
     }
 
+    if (DeadlineExceeded(aHooks, acDeadline))
+    {
+        return MakeReport(
+            aState,
+            PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
+    }
+
     std::vector<std::filesystem::path> staged;
     const RestoreFailure staging = StageCheckpointBytes(acPaths, aState, staged);
     if (!staging.IsSuccess())
@@ -1108,6 +1171,15 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
         for (const auto& path : staged)
             RemoveRegularIfPresent(path);
         return MakeReport(aState, destinations.Status, destinations.Index, destinations.Path);
+    }
+
+    if (DeadlineExceeded(aHooks, acDeadline))
+    {
+        for (const auto& path : staged)
+            RemoveRegularIfPresent(path);
+        return MakeReport(
+            aState,
+            PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
     }
 
     if (PartyQuestReplicaRestoreJournal::MarkMutationStarted(aState) !=
@@ -1130,7 +1202,7 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
 
     size_t completed{};
     const RestoreFailure replacement = ReplaceStagedFiles(
-        acPaths, aState, staged, completed, aHooks);
+        acPaths, aState, staged, completed, aHooks, acDeadline);
     if (!replacement.IsSuccess())
     {
         auto report = RollbackAndReport(
@@ -1139,6 +1211,20 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
             replacement.Status,
             replacement.Index,
             replacement.Path,
+            false,
+            aHooks);
+        report.CompletedOperations = completed;
+        return report;
+    }
+
+    if (DeadlineExceeded(aHooks, acDeadline))
+    {
+        auto report = RollbackAndReport(
+            acPaths,
+            aState,
+            PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded,
+            completed,
+            {},
             false,
             aHooks);
         report.CompletedOperations = completed;
@@ -1174,6 +1260,15 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
         return report;
     }
 
+    if (DeadlineExceeded(aHooks, acDeadline))
+    {
+        auto report = MakeReport(
+            aState,
+            PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
+        report.CompletedOperations = completed;
+        return report;
+    }
+
     if (PartyQuestReplicaRestoreJournal::MarkCommitted(aState) !=
         PartyQuestReplicaRestoreJournalStatus::Ready)
     {
@@ -1200,6 +1295,15 @@ PartyQuestReplicaRestoreExecutionReport ContinueBeforeMutation(
     return report;
 }
 } // namespace
+
+uint64_t PartyQuestReplicaRestoreExecutionHooks::NowTicks() const noexcept
+{
+    if (MonotonicNow)
+        return MonotonicNow(Context);
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    return now > 0 ? static_cast<uint64_t>(now) : 0;
+}
 
 std::optional<uint64_t> PartyQuestReplicaRestoreResourcePolicy::RequiredFreeBytes(
     const PartyQuestReplicaRestoreJournalState& acState) noexcept
@@ -1270,6 +1374,17 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execut
 {
     try
     {
+        RestoreExecutionDeadline deadline;
+        if (!BuildDeadline(aHooks, deadline))
+        {
+            PartyQuestReplicaRestoreJournalState emptyState;
+            auto report = MakeReport(
+                emptyState,
+                PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
+            report.JournalPath.clear();
+            return report;
+        }
+
         const auto prepared = PartyQuestReplicaRestoreJournal::Prepare(
             acPaths, acPlan, aRestoreId);
         if (!prepared.IsReady())
@@ -1323,7 +1438,7 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execut
                 PartyQuestReplicaRestoreExecutionStatus::JournalPersistenceFailed);
         }
 
-        return ContinueBeforeMutation(acPaths, state, aHooks);
+        return ContinueBeforeMutation(acPaths, state, aHooks, deadline);
     }
     catch (...)
     {
@@ -1345,6 +1460,9 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
 {
     try
     {
+        RestoreExecutionDeadline deadline;
+        const bool hasDeadline = BuildDeadline(aHooks, deadline);
+
         const auto loaded = PartyQuestReplicaRestoreJournalPersistence::Load(acJournalPath);
         if (loaded.Status ==
             PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired)
@@ -1390,7 +1508,13 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
         switch (PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(state))
         {
         case PartyQuestReplicaRestoreRecoveryDisposition::ResumeBeforeMutation:
-            return ContinueBeforeMutation(acPaths, state, aHooks);
+            if (!hasDeadline)
+            {
+                return MakeReport(
+                    state,
+                    PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
+            }
+            return ContinueBeforeMutation(acPaths, state, aHooks, deadline);
 
         case PartyQuestReplicaRestoreRecoveryDisposition::RollbackRequired:
             return RollbackAndReport(
@@ -1404,6 +1528,12 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
 
         case PartyQuestReplicaRestoreRecoveryDisposition::VerifyThenCommit:
         {
+            if (!hasDeadline || DeadlineExceeded(aHooks, deadline))
+            {
+                return MakeReport(
+                    state,
+                    PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
+            }
             if (!PartyQuestReplicaRestoreJournal::VerifyRestoredTargets(state))
             {
                 return RollbackAndReport(
@@ -1414,6 +1544,12 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
                     {},
                     false,
                     aHooks);
+            }
+            if (DeadlineExceeded(aHooks, deadline))
+            {
+                return MakeReport(
+                    state,
+                    PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
             }
             if (PartyQuestReplicaRestoreJournal::MarkCommitted(state) !=
                 PartyQuestReplicaRestoreJournalStatus::Ready)
@@ -1443,6 +1579,12 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
 
         case PartyQuestReplicaRestoreRecoveryDisposition::Clean:
         {
+            if (!hasDeadline || DeadlineExceeded(aHooks, deadline))
+            {
+                return MakeReport(
+                    state,
+                    PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
+            }
             // Committed records that verification succeeded at an earlier
             // instant; it is not proof that the live replica still contains
             // those bytes. Never report an exact restore without re-reading
@@ -1452,6 +1594,12 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
                 return MakeReport(
                     state,
                     PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed);
+            }
+            if (DeadlineExceeded(aHooks, deadline))
+            {
+                return MakeReport(
+                    state,
+                    PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
             }
             auto report = MakeReport(
                 state,

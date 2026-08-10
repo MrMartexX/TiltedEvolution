@@ -228,6 +228,43 @@ PartyQuestReplicaRestoreExecutionDirective CrashAtBoundary(
     return PartyQuestReplicaRestoreExecutionDirective::Continue;
 }
 
+struct RestoreDeadlineScript
+{
+    uint64_t Now{1};
+    bool ExpireAfterAdmission{};
+    bool ExpireOnFirstPublication{};
+    size_t Reads{};
+};
+
+uint64_t ReadRestoreDeadline(void* apContext) noexcept
+{
+    auto& script = *static_cast<RestoreDeadlineScript*>(apContext);
+    ++script.Reads;
+    if (script.ExpireAfterAdmission && script.Reads > 1)
+        return PartyQuestReplicaResourcePolicy::MaxExecutionNanoseconds + 1;
+    return script.Now;
+}
+
+PartyQuestReplicaRestoreExecutionDirective ExpireRestoreAtBoundary(
+    PartyQuestReplicaRestoreExecutionBoundary aBoundary,
+    size_t aOperation,
+    void* apContext) noexcept
+{
+    auto& script = *static_cast<RestoreDeadlineScript*>(apContext);
+    if (script.ExpireOnFirstPublication &&
+        aBoundary == PartyQuestReplicaRestoreExecutionBoundary::RestoredFilePublished &&
+        aOperation == 0)
+    {
+        script.Now = PartyQuestReplicaResourcePolicy::MaxExecutionNanoseconds + 1;
+    }
+    return PartyQuestReplicaRestoreExecutionDirective::Continue;
+}
+
+uint64_t InvalidRestoreDeadline(void*) noexcept
+{
+    return 0;
+}
+
 PartyQuestReplicaRestoreJournalState PrepareDurableExecutorState(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaRestorePlan& acPlan,
@@ -612,6 +649,62 @@ TEST_CASE("Partial multi-file publication rolls every destination back", "[quest
     REQUIRE_FALSE(std::filesystem::exists(report.JournalPath.parent_path()));
 }
 
+TEST_CASE("Restore deadline preserves the journal boundary and exact originals", "[quest.party-state.restore-executor][resource-budget][timeout]")
+{
+    SECTION("expiry before MutationStarted leaves live replica untouched")
+    {
+        RestoreExecutorSandbox sandbox;
+        const auto paths = BuildExecutorPaths(sandbox);
+        constexpr uint64_t kWorldRevision = 916;
+        WriteMultiFileExecutorFixture(paths, kWorldRevision);
+        const auto plan = BuildMultiFileExecutorPlan(paths, kWorldRevision);
+
+        RestoreDeadlineScript script{1, true};
+        const auto report = PartyQuestReplicaRestoreExecutor::Execute(
+            paths,
+            plan,
+            3007,
+            {nullptr, &script, ReadRestoreDeadline});
+
+        REQUIRE(report.Status ==
+            PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
+        REQUIRE(report.CompletedOperations == 0);
+        REQUIRE_FALSE(report.RollbackPerformed);
+        REQUIRE_FALSE(report.IsCheckpointRestored());
+        REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.ess") ==
+            "ORIGINAL_SAVE_916");
+        REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.skse") ==
+            "ORIGINAL_COSAVE_916");
+    }
+
+    SECTION("expiry after publication completes exact rollback")
+    {
+        RestoreExecutorSandbox sandbox;
+        const auto paths = BuildExecutorPaths(sandbox);
+        constexpr uint64_t kWorldRevision = 917;
+        WriteMultiFileExecutorFixture(paths, kWorldRevision);
+        const auto plan = BuildMultiFileExecutorPlan(paths, kWorldRevision);
+
+        RestoreDeadlineScript script{1, false, true};
+        const auto report = PartyQuestReplicaRestoreExecutor::Execute(
+            paths,
+            plan,
+            3008,
+            {ExpireRestoreAtBoundary, &script, ReadRestoreDeadline});
+
+        REQUIRE(report.Status ==
+            PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
+        REQUIRE(report.CompletedOperations == 1);
+        REQUIRE(report.RollbackPerformed);
+        REQUIRE_FALSE(report.IsCheckpointRestored());
+        REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.ess") ==
+            "ORIGINAL_SAVE_917");
+        REQUIRE(ReadExecutorBytes(paths.SavesDirectory / "Hero.skse") ==
+            "ORIGINAL_COSAVE_917");
+        REQUIRE_FALSE(std::filesystem::exists(report.JournalPath.parent_path()));
+    }
+}
+
 TEST_CASE("Interrupted multi-file rollback keeps a retryable mutation journal", "[quest.party-state.restore-executor][fault][multi-file]")
 {
     RestoreExecutorSandbox sandbox;
@@ -653,7 +746,8 @@ TEST_CASE("Interrupted multi-file rollback keeps a retryable mutation journal", 
         paths,
         kExecutorCampaign,
         kExecutorPlayer,
-        failed.JournalPath);
+        failed.JournalPath,
+        {nullptr, nullptr, InvalidRestoreDeadline});
     REQUIRE(recovered.Status ==
         PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback);
     REQUIRE(recovered.RollbackPerformed);

@@ -28,7 +28,8 @@ enum class PartyQuestReplicaRestoreExecutionStatus : uint8_t
     RestoredVerificationFailed,
     RollbackFailed,
     ResourceLimitExceeded,
-    InsufficientDiskSpace
+    InsufficientDiskSpace,
+    OperationDeadlineExceeded
 };
 
 enum class PartyQuestReplicaRestoreExecutionBoundary : uint8_t
@@ -56,9 +57,11 @@ struct PartyQuestReplicaRestoreExecutionHooks
         PartyQuestReplicaRestoreExecutionBoundary,
         size_t,
         void*) noexcept;
+    using Clock = uint64_t (*)(void*) noexcept;
 
     Callback OnBoundary{};
     void* Context{};
+    Clock MonotonicNow{};
 
     [[nodiscard]] PartyQuestReplicaRestoreExecutionDirective Invoke(
         PartyQuestReplicaRestoreExecutionBoundary aBoundary,
@@ -68,6 +71,8 @@ struct PartyQuestReplicaRestoreExecutionHooks
             ? OnBoundary(aBoundary, aOperation, Context)
             : PartyQuestReplicaRestoreExecutionDirective::Continue;
     }
+
+    [[nodiscard]] uint64_t NowTicks() const noexcept;
 };
 
 /** Local-only budget for a fresh crash-resumable restore before its journal exists. */
@@ -142,6 +147,12 @@ struct PartyQuestReplicaRestoreExecutionReport
  * first restores the pre-mutation bytes (or removes destinations that originally
  * did not exist), verifies that rollback, and terminates that restore attempt.
  * The caller may then build a fresh plan from current canonical state.
+ * A local monotonic deadline is checked around synchronous filesystem
+ * boundaries. Before MutationStarted, expiry leaves resumable journal state and
+ * no live mutation. After that barrier, expiry takes the exact rollback path;
+ * rollback itself is never interrupted by the deadline. Once Restored is
+ * durable, expiry leaves that phase for re-verification by Recover. One blocking
+ * OS call already in progress cannot be forcibly cancelled.
  */
 class PartyQuestReplicaRestoreExecutor final
 {
