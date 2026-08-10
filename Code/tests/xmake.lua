@@ -6,6 +6,9 @@ target("TPTests")
         ".", "../encoding")
     add_headerfiles("**.h")
     add_files("*.cpp")
+    if is_plat("windows") then
+        add_files("TPTests.rc")
+    end
     add_deps("SkyrimEncoding")
     add_packages(
         "tiltedcore",

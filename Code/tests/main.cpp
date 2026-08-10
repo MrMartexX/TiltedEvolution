@@ -27,14 +27,15 @@ int RunTPTestsSubprocess(std::string_view aTestName)
         return -1;
 
 #ifdef _WIN32
-    // Avoid cmd.exe quoting rules: _wspawnl passes the executable and Catch
-    // test selector as distinct arguments and waits for the child to exit.
+    // Avoid cmd.exe entirely. The Windows CRT still formats a command line, so
+    // preserve the Catch selector as one argument with explicit quotes.
     const std::wstring testName(aTestName.begin(), aTestName.end());
+    const std::wstring quotedTestName = L"\"" + testName + L"\"";
     return static_cast<int>(_wspawnl(
         _P_WAIT,
         s_executablePath.c_str(),
         s_executablePath.c_str(),
-        testName.c_str(),
+        quotedTestName.c_str(),
         L"--reporter",
         L"compact",
         static_cast<const wchar_t*>(nullptr)));
