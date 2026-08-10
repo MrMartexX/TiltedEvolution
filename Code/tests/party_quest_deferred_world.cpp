@@ -232,3 +232,64 @@ TEST_CASE("Deferred world ready requests are emitted deterministically by canoni
     REQUIRE(ready[0].TargetWorldRevision == 101);
     REQUIRE(ready[1].TargetWorldRevision == 102);
 }
+
+TEST_CASE("Deferred world queue fails closed at local pending and transaction-history bounds", "[quest.party-state.deferred-world][resource-bounds]")
+{
+    SECTION("pending quest bound")
+    {
+        PartyQuestDeferredWorldQueue queue;
+        for (size_t index = 0; index < PartyQuestDeferredWorldQueue::MaxPendingEntries; ++index)
+        {
+            const auto request = BuildDeferredRequest(
+                7000 + index,
+                GameId(50, static_cast<uint32_t>(0x1000 + index)),
+                1,
+                200 + index,
+                static_cast<uint32_t>(0x2000 + index * 2));
+            REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+        }
+
+        const auto overflow = BuildDeferredRequest(
+            8000,
+            GameId(51, 0x1000),
+            1,
+            900,
+            0x5000);
+        REQUIRE(queue.Enqueue(overflow) ==
+            PartyQuestDeferredWorldEnqueueStatus::ResourceLimitExceeded);
+        REQUIRE(queue.GetPendingCount() == PartyQuestDeferredWorldQueue::MaxPendingEntries);
+    }
+
+    SECTION("remembered transaction bound")
+    {
+        PartyQuestDeferredWorldQueue queue;
+        const GameId questId(52, 0x1000);
+        for (size_t index = 0;
+             index < PartyQuestDeferredWorldQueue::MaxRememberedTransactions;
+             ++index)
+        {
+            const auto request = BuildDeferredRequest(
+                10000 + index,
+                questId,
+                1 + index,
+                1000 + index,
+                static_cast<uint32_t>(0x6000 + index));
+            const auto expected = index == 0
+                ? PartyQuestDeferredWorldEnqueueStatus::Queued
+                : PartyQuestDeferredWorldEnqueueStatus::ReplacedOlderQuestRevision;
+            REQUIRE(queue.Enqueue(request) == expected);
+        }
+
+        const auto overflow = BuildDeferredRequest(
+            20000,
+            questId,
+            PartyQuestDeferredWorldQueue::MaxRememberedTransactions + 1,
+            6000,
+            0x9000);
+        REQUIRE(queue.Enqueue(overflow) ==
+            PartyQuestDeferredWorldEnqueueStatus::ResourceLimitExceeded);
+        REQUIRE(queue.GetRememberedTransactionCount() ==
+            PartyQuestDeferredWorldQueue::MaxRememberedTransactions);
+        REQUIRE(queue.GetPendingCount() == 1);
+    }
+}

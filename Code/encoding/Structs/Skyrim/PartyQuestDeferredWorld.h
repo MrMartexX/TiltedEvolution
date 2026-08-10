@@ -15,6 +15,7 @@ enum class PartyQuestDeferredWorldEnqueueStatus : uint8_t
     Duplicate,
     Stale,
     TransactionConflict,
+    ResourceLimitExceeded,
     InvalidRequest,
     UnsafePlan,
     NotDeferred
@@ -43,11 +44,16 @@ struct PartyQuestDeferredWorldEntry
  * A deferred request also needs the exact compatibility-bound runtime mutation
  * authorization carried by its apply plan. This is defense in depth: the
  * RuntimeApply coordinator validates the same proof again before admitting the
- * transaction.
+ * transaction. Pending work and remembered transaction identities have local
+ * immutable ceilings; reaching either ceiling fails closed until lifecycle
+ * replacement constructs a fresh campaign queue.
  */
 class PartyQuestDeferredWorldQueue final
 {
 public:
+    static constexpr size_t MaxPendingEntries = 256;
+    static constexpr size_t MaxRememberedTransactions = 4096;
+
     [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus Enqueue(
         PartyQuestRuntimeApplyRequest aRequest);
 
@@ -67,6 +73,10 @@ public:
         uint64_t aTransactionId) const noexcept;
 
     [[nodiscard]] size_t GetPendingCount() const noexcept { return m_entries.size(); }
+    [[nodiscard]] size_t GetRememberedTransactionCount() const noexcept
+    {
+        return m_transactionFingerprints.size();
+    }
 
 private:
     [[nodiscard]] static std::vector<GameId> CollectWorldTargets(

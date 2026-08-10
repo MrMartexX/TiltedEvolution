@@ -84,6 +84,9 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
             : PartyQuestDeferredWorldEnqueueStatus::TransactionConflict;
     }
 
+    if (m_transactionFingerprints.size() >= MaxRememberedTransactions)
+        return PartyQuestDeferredWorldEnqueueStatus::ResourceLimitExceeded;
+
     const GameId questId = aRequest.CanonicalSnapshot.QuestId;
     const auto existingIt = m_entries.find(questId);
     if (existingIt != m_entries.end())
@@ -110,6 +113,9 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
         m_transactionFingerprints.emplace(transactionId, *fingerprint);
         return PartyQuestDeferredWorldEnqueueStatus::ReplacedOlderQuestRevision;
     }
+
+    if (m_entries.size() >= MaxPendingEntries)
+        return PartyQuestDeferredWorldEnqueueStatus::ResourceLimitExceeded;
 
     PartyQuestDeferredWorldEntry entry;
     entry.ReferencedWorldTargets = CollectWorldTargets(aRequest.CanonicalSnapshot);
