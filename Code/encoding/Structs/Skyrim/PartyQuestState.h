@@ -70,6 +70,8 @@ public:
     [[nodiscard]] PartyQuestApplyResult Apply(const PartyQuestTransaction& acTransaction);
 
     [[nodiscard]] const QuestSnapshot* FindQuest(const GameId& acQuestId) const noexcept;
+    [[nodiscard]] bool HasAppliedTransaction(
+        const PartyQuestTransaction& acTransaction) const;
     [[nodiscard]] uint64_t GetWorldRevision() const noexcept { return m_worldRevision; }
     [[nodiscard]] size_t GetQuestCount() const noexcept { return m_quests.size(); }
     [[nodiscard]] const std::unordered_map<GameId, QuestSnapshot>& GetQuests() const noexcept { return m_quests; }

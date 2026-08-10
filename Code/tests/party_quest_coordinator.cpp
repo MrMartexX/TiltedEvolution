@@ -434,6 +434,46 @@ TEST_CASE("Protocol identity caches fail closed without losing retained conflict
             PartyQuestReportHandleStatus::DuplicateReport);
     }
 
+    SECTION("applied transactions renew the bounded reply cache")
+    {
+        PartyQuestProtocolCoordinator coordinator;
+        REQUIRE(coordinator.ConnectClient(1));
+
+        const GameId questId(11, 0xA100);
+        const auto applied = BuildCoordinatorRequest(1, 10000, 1, questId, 0, 10);
+        const auto accepted = coordinator.HandleTransaction(1, applied);
+        REQUIRE(accepted.Response.Result.Status == PartyQuestApplyStatus::Accepted);
+
+        for (uint64_t i = 1;
+             i < PartyQuestProtocolResourcePolicy::MaxTransactionsPerSession;
+             ++i)
+        {
+            const auto rejected = coordinator.HandleTransaction(
+                1,
+                BuildCoordinatorRequest(i + 1, i + 10000, 1, questId, 99, 20));
+            REQUIRE(rejected.Response.Result.Status ==
+                PartyQuestApplyStatus::RevisionMismatch);
+        }
+
+        const auto renewed = coordinator.HandleTransaction(
+            1,
+            BuildCoordinatorRequest(
+                PartyQuestProtocolResourcePolicy::MaxTransactionsPerSession + 1,
+                999999,
+                1,
+                questId,
+                1,
+                30));
+        REQUIRE(renewed.Status == PartyQuestTransactionHandleStatus::Processed);
+        REQUIRE(renewed.Response.Result.Status ==
+            PartyQuestApplyStatus::Accepted);
+
+        const auto durableDuplicate = coordinator.HandleTransaction(1, applied);
+        REQUIRE(durableDuplicate.Status == PartyQuestTransactionHandleStatus::Processed);
+        REQUIRE(durableDuplicate.Response.Result.Status == PartyQuestApplyStatus::Duplicate);
+        REQUIRE(coordinator.GetCanonicalState().GetWorldRevision() == 2);
+    }
+
     SECTION("client canonical and repair bounds")
     {
         PartyQuestClientSession client(1);

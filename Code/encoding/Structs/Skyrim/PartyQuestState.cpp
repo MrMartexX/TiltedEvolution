@@ -110,3 +110,14 @@ const QuestSnapshot* PartyQuestState::FindQuest(const GameId& acQuestId) const n
     const auto it = m_quests.find(acQuestId);
     return it != m_quests.end() ? &it->second : nullptr;
 }
+
+bool PartyQuestState::HasAppliedTransaction(
+    const PartyQuestTransaction& acTransaction) const
+{
+    const auto transactionIt =
+        m_transactionJournalIndices.find(acTransaction.TransactionId);
+    if (transactionIt == m_transactionJournalIndices.end())
+        return false;
+
+    return m_journal[transactionIt->second].Transaction == acTransaction;
+}

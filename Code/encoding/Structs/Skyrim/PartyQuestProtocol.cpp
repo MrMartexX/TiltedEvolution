@@ -97,6 +97,26 @@ PartyQuestProtocolCoordinator::Session* PartyQuestProtocolCoordinator::FindMutab
     return &it->second;
 }
 
+bool PartyQuestProtocolCoordinator::EvictOldestAppliedTransaction(
+    Session& aSession)
+{
+    for (auto orderIt = aSession.TransactionOrder.begin();
+         orderIt != aSession.TransactionOrder.end();
+         ++orderIt)
+    {
+        const auto transactionIt = aSession.Transactions.find(*orderIt);
+        if (transactionIt == aSession.Transactions.end())
+            return false;
+        if (!m_state.HasAppliedTransaction(transactionIt->second.Transaction))
+            continue;
+
+        aSession.Transactions.erase(transactionIt);
+        aSession.TransactionOrder.erase(orderIt);
+        return true;
+    }
+    return false;
+}
+
 bool PartyQuestProtocolCoordinator::EvictOldestCompletedRepair(
     Session& aSession) noexcept
 {
@@ -209,12 +229,15 @@ PartyQuestTransactionDispatch PartyQuestProtocolCoordinator::HandleTransaction(
     if (pSession->Transactions.size() >=
         PartyQuestProtocolResourcePolicy::MaxTransactionsPerSession)
     {
-        dispatch.Status = PartyQuestTransactionHandleStatus::ResourceLimitExceeded;
-        dispatch.Response.Result = {
-            PartyQuestApplyStatus::ResourceLimitExceeded,
-            m_state.GetWorldRevision(),
-            GetQuestRevision(m_state, acRequest.Transaction.QuestId)};
-        return dispatch;
+        if (!EvictOldestAppliedTransaction(*pSession))
+        {
+            dispatch.Status = PartyQuestTransactionHandleStatus::ResourceLimitExceeded;
+            dispatch.Response.Result = {
+                PartyQuestApplyStatus::ResourceLimitExceeded,
+                m_state.GetWorldRevision(),
+                GetQuestRevision(m_state, acRequest.Transaction.QuestId)};
+            return dispatch;
+        }
     }
 
     PartyQuestState candidateState = m_state;
@@ -256,6 +279,7 @@ PartyQuestTransactionDispatch PartyQuestProtocolCoordinator::HandleTransaction(
     pSession->Transactions.emplace(
         acRequest.RequestId,
         TransactionCacheEntry{acRequest.Transaction, dispatch.Response});
+    pSession->TransactionOrder.push_back(acRequest.RequestId);
     if (dispatch.Response.Result.Status == PartyQuestApplyStatus::Accepted &&
         dispatch.Response.CanonicalSnapshot)
     {

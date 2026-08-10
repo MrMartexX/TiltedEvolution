@@ -148,12 +148,14 @@ private:
     {
         PartyQuestCoordinatorSessionInfo Info;
         std::unordered_map<uint64_t, TransactionCacheEntry> Transactions;
+        std::deque<uint64_t> TransactionOrder;
         std::unordered_map<uint64_t, ReportCacheEntry> Reports;
         std::unordered_map<uint64_t, PlanCacheEntry> Plans;
         std::deque<uint64_t> PlanOrder;
     };
 
     [[nodiscard]] Session* FindMutableConnectedSession(uint32_t aClientId) noexcept;
+    [[nodiscard]] bool EvictOldestAppliedTransaction(Session& aSession);
     [[nodiscard]] static bool EvictOldestCompletedRepair(Session& aSession) noexcept;
     [[nodiscard]] uint64_t AllocatePlanId() noexcept;
     [[nodiscard]] std::vector<uint32_t> BuildConnectedRecipientList() const;
