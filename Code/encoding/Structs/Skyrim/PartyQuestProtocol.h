@@ -98,6 +98,8 @@ public:
 
     bool ConnectClient(uint32_t aClientId);
     bool DisconnectClient(uint32_t aClientId);
+    /** Permanently removes a session only after its transport identity disconnected. */
+    bool ForgetDisconnectedClient(uint32_t aClientId);
     [[nodiscard]] bool IsClientConnected(uint32_t aClientId) const noexcept;
 
     /** Installs a pre-commit durability barrier. An empty handler disables it. */

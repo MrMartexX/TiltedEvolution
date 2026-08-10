@@ -82,6 +82,16 @@ bool PartyQuestProtocolCoordinator::DisconnectClient(uint32_t aClientId)
     return true;
 }
 
+bool PartyQuestProtocolCoordinator::ForgetDisconnectedClient(uint32_t aClientId)
+{
+    const auto it = m_sessions.find(aClientId);
+    if (it == m_sessions.end() || it->second.Info.Connected)
+        return false;
+
+    m_sessions.erase(it);
+    return true;
+}
+
 bool PartyQuestProtocolCoordinator::IsClientConnected(uint32_t aClientId) const noexcept
 {
     const auto it = m_sessions.find(aClientId);

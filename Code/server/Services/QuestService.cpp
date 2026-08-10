@@ -715,7 +715,11 @@ void QuestService::OnPartyQuestRepairAck(const PacketEvent<RequestPartyQuestRepa
 void QuestService::OnPlayerLeave(const PlayerLeaveEvent& acEvent) noexcept
 {
     if (acEvent.pPlayer)
-        m_partyQuestCoordinator.DisconnectClient(acEvent.pPlayer->GetId());
+    {
+        const uint32_t playerId = acEvent.pPlayer->GetId();
+        if (m_partyQuestCoordinator.DisconnectClient(playerId))
+            m_partyQuestCoordinator.ForgetDisconnectedClient(playerId);
+    }
 }
 
 void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessage) noexcept

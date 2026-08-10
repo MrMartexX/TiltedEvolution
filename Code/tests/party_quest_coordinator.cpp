@@ -358,6 +358,27 @@ TEST_CASE("Client protocol ids survive transient PlayerId reuse without determin
         REQUIRE_FALSE(issued.contains(secondProcess.Allocate()));
 }
 
+TEST_CASE("Terminal transport identities release bounded server sessions", "[quest.party-state.coordinator][resource-budget]")
+{
+    PartyQuestProtocolCoordinator coordinator;
+
+    REQUIRE(coordinator.ConnectClient(1));
+    REQUIRE_FALSE(coordinator.ForgetDisconnectedClient(1));
+    REQUIRE(coordinator.DisconnectClient(1));
+    REQUIRE(coordinator.FindSession(1));
+    REQUIRE(coordinator.ForgetDisconnectedClient(1));
+    REQUIRE_FALSE(coordinator.FindSession(1));
+
+    for (uint32_t clientId = 2;
+         clientId <= PartyQuestProtocolResourcePolicy::MaxSessions + 2;
+         ++clientId)
+    {
+        REQUIRE(coordinator.ConnectClient(clientId));
+        REQUIRE(coordinator.DisconnectClient(clientId));
+        REQUIRE(coordinator.ForgetDisconnectedClient(clientId));
+    }
+}
+
 TEST_CASE("Protocol identity caches fail closed without losing retained conflict semantics", "[quest.party-state.coordinator][resource-budget]")
 {
     SECTION("server session and transaction bounds")
