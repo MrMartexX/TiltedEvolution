@@ -255,3 +255,45 @@ TEST_CASE("Replica planner enforces local file and byte budgets", "[quest.party-
             PartyQuestReplicaCopyPlanStatus::ResourceTotalSizeExceeded);
     }
 }
+
+TEST_CASE("Replica planner reserves bounded space for crash-safe temporary paths", "[quest.party-state.replica-files][resource-budget][path-budget]")
+{
+    const std::filesystem::path maximumPath{
+        std::string(PartyQuestReplicaResourcePolicy::MaxFilesystemPathBytes, 'a')};
+    const std::filesystem::path excessivePath{
+        std::string(PartyQuestReplicaResourcePolicy::MaxFilesystemPathBytes + 1, 'a')};
+    const std::filesystem::path maximumMutablePath{
+        std::string(PartyQuestReplicaResourcePolicy::MaxMutablePathBytes, 'b')};
+    const std::filesystem::path excessiveMutablePath{
+        std::string(PartyQuestReplicaResourcePolicy::MaxMutablePathBytes + 1, 'b')};
+
+    REQUIRE(PartyQuestReplicaResourcePolicy::IsPathWithinBudget(maximumPath));
+    REQUIRE_FALSE(PartyQuestReplicaResourcePolicy::IsPathWithinBudget(excessivePath));
+    REQUIRE(PartyQuestReplicaResourcePolicy::IsMutablePathWithinBudget(maximumMutablePath));
+    REQUIRE_FALSE(PartyQuestReplicaResourcePolicy::IsMutablePathWithinBudget(excessiveMutablePath));
+
+    const auto paths = BuildPaths();
+    SECTION("source path")
+    {
+        auto files = BuildSoloFileSet();
+        files[0].SourcePath = excessivePath;
+        REQUIRE(PartyQuestReplicaFilePlanner::BuildImportPlan(paths, files).Status ==
+            PartyQuestReplicaCopyPlanStatus::ResourcePathLengthExceeded);
+    }
+
+    SECTION("destination plus temporary suffix")
+    {
+        auto files = BuildSoloFileSet();
+        files[2].RelativePath = excessiveMutablePath;
+        REQUIRE(PartyQuestReplicaFilePlanner::BuildImportPlan(paths, files).Status ==
+            PartyQuestReplicaCopyPlanStatus::ResourcePathLengthExceeded);
+    }
+
+    SECTION("forged ready plan")
+    {
+        auto plan = PartyQuestReplicaFilePlanner::BuildImportPlan(paths, BuildSoloFileSet());
+        REQUIRE(plan.IsReady());
+        plan.Operations[0].DestinationPath = excessiveMutablePath;
+        REQUIRE_FALSE(PartyQuestReplicaResourcePolicy::RequiredFreeBytes(plan).has_value());
+    }
+}

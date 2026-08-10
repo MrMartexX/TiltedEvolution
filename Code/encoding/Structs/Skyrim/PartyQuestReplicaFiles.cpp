@@ -7,6 +7,21 @@
 
 namespace
 {
+bool HasBoundedPathBytes(
+    const std::filesystem::path& acPath,
+    size_t aMaxBytes) noexcept
+{
+    try
+    {
+        const auto value = acPath.lexically_normal().generic_u8string();
+        return !value.empty() && value.size() <= aMaxBytes;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
 std::string LowerExtension(const std::filesystem::path& acPath)
 {
     std::string extension = acPath.extension().string();
@@ -167,6 +182,14 @@ PartyQuestReplicaCopyPlan BuildPlan(
             plan.Operations.clear();
             return plan;
         }
+
+        if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(file.SourcePath) ||
+            !PartyQuestReplicaResourcePolicy::IsPathWithinBudget(file.RelativePath))
+        {
+            plan.Status = PartyQuestReplicaCopyPlanStatus::ResourcePathLengthExceeded;
+            plan.Operations.clear();
+            return plan;
+        }
         if (file.Size > std::numeric_limits<uint64_t>::max() - totalSize)
         {
             plan.Status = PartyQuestReplicaCopyPlanStatus::ResourceTotalSizeExceeded;
@@ -198,6 +221,13 @@ PartyQuestReplicaCopyPlan BuildPlan(
                       aCampaignWorldRevision,
                       file)
                 : BuildImportDestination(acPaths, file)).lexically_normal();
+
+        if (!PartyQuestReplicaResourcePolicy::IsMutablePathWithinBudget(destination))
+        {
+            plan.Status = PartyQuestReplicaCopyPlanStatus::ResourcePathLengthExceeded;
+            plan.Operations.clear();
+            return plan;
+        }
 
         if (!PartyQuestReplicaFilePlanner::IsContainedBy(acPaths.PlayerDirectory, destination))
         {
@@ -337,7 +367,9 @@ std::optional<uint64_t> PartyQuestReplicaResourcePolicy::RequiredFreeBytes(
     uint64_t totalSize{};
     for (const auto& operation : acPlan.Operations)
     {
-        if (operation.ExpectedSize > MaxIndividualFileBytes ||
+        if (!IsPathWithinBudget(operation.SourcePath) ||
+            !IsMutablePathWithinBudget(operation.DestinationPath) ||
+            operation.ExpectedSize > MaxIndividualFileBytes ||
             operation.ExpectedSize > std::numeric_limits<uint64_t>::max() - totalSize)
         {
             return std::nullopt;
@@ -353,6 +385,18 @@ std::optional<uint64_t> PartyQuestReplicaResourcePolicy::RequiredFreeBytes(
     if (multiplied > std::numeric_limits<uint64_t>::max() - MinimumFreeSpaceReserveBytes)
         return std::nullopt;
     return multiplied + MinimumFreeSpaceReserveBytes;
+}
+
+bool PartyQuestReplicaResourcePolicy::IsPathWithinBudget(
+    const std::filesystem::path& acPath) noexcept
+{
+    return HasBoundedPathBytes(acPath, MaxFilesystemPathBytes);
+}
+
+bool PartyQuestReplicaResourcePolicy::IsMutablePathWithinBudget(
+    const std::filesystem::path& acPath) noexcept
+{
+    return HasBoundedPathBytes(acPath, MaxMutablePathBytes);
 }
 
 bool PartyQuestReplicaResourcePolicy::HasSufficientDiskSpace(

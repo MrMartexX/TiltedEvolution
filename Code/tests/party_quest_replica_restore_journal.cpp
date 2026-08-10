@@ -349,6 +349,60 @@ TEST_CASE("Restore journal rejects oversized archives before decode", "[quest.pa
         PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded);
 }
 
+TEST_CASE("Restore journal rejects paths that leave no bounded sibling staging space", "[quest.party-state.replica-restore-journal][resource-budget][path-budget]")
+{
+    RestoreSandbox sandbox;
+    const auto paths = BuildRestorePaths(sandbox);
+    const auto checkpoint = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        paths, PartyQuestCheckpointKind::PreRepair, 806) / "saves" / "Hero.ess";
+    const auto destination = paths.SavesDirectory / "Hero.ess";
+    WriteRestoreBytes(checkpoint, "CHECKPOINT_806");
+
+    const auto plan = BuildRestorePlan(paths, checkpoint, destination, 806);
+    auto overBudgetPlan = plan;
+    overBudgetPlan.Operations[0].ReplicaDestinationPath =
+        paths.SavesDirectory /
+        std::string(PartyQuestReplicaResourcePolicy::MaxMutablePathBytes, 'x');
+    const auto rejected = PartyQuestReplicaRestoreJournal::Prepare(
+        paths, overBudgetPlan, 49);
+    REQUIRE(rejected.Status == PartyQuestReplicaRestoreJournalStatus::InvalidPath);
+    REQUIRE_FALSE(rejected.State.has_value());
+
+    // Migration rule: a journal durably written by the previous 1024-byte
+    // contract must remain decodable so recovery, rather than admission, owns it.
+    auto legacy = PartyQuestReplicaRestoreJournal::Prepare(paths, plan, 50);
+    REQUIRE(legacy.IsReady());
+    const size_t destinationPrefixBytes =
+        paths.SavesDirectory.generic_u8string().size() + 1;
+    REQUIRE(destinationPrefixBytes <
+        PartyQuestReplicaResourcePolicy::MaxMutablePathBytes);
+    const auto legacyRelative = std::filesystem::path("saves") /
+        std::string(
+            PartyQuestReplicaResourcePolicy::MaxMutablePathBytes + 1 -
+                destinationPrefixBytes,
+            'l');
+    legacy.State->Operations[0].ReplicaDestinationPath =
+        (paths.PlayerDirectory / legacyRelative).lexically_normal();
+    legacy.State->Operations[0].RollbackPath =
+        (legacy.State->TransactionDirectory / "rollback" / legacyRelative)
+            .lexically_normal();
+    REQUIRE_FALSE(PartyQuestReplicaResourcePolicy::IsMutablePathWithinBudget(
+        legacy.State->Operations[0].ReplicaDestinationPath));
+    REQUIRE(PartyQuestReplicaResourcePolicy::IsPathWithinBudget(
+        legacy.State->Operations[0].ReplicaDestinationPath));
+    REQUIRE(PartyQuestReplicaResourcePolicy::IsPathWithinBudget(
+        legacy.State->Operations[0].RollbackPath));
+
+    const auto legacyBytes =
+        PartyQuestReplicaRestoreJournalPersistence::Encode(*legacy.State);
+    REQUIRE_FALSE(legacyBytes.empty());
+    const auto decodedLegacy =
+        PartyQuestReplicaRestoreJournalPersistence::Decode(legacyBytes);
+    REQUIRE(decodedLegacy.Status ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(decodedLegacy.State == legacy.State);
+}
+
 TEST_CASE("Restore journal never silently falls back to a stale backup across the mutation barrier", "[quest.party-state.restore-journal]")
 {
     RestoreSandbox sandbox;

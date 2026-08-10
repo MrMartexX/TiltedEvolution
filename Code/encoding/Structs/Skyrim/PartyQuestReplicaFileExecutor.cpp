@@ -292,12 +292,26 @@ PartyQuestReplicaExecutionReport ValidatePlanAndSources(
 
         if (!source)
             return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidSourcePath, i, operation.SourcePath);
+        if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(*source))
+        {
+            return MakeFailure(
+                PartyQuestReplicaExecutionStatus::ResourceLimitExceeded,
+                i,
+                *source);
+        }
         if (!destination || !expectedRoot ||
             !IsInside(*playerRoot, *destination) ||
             !IsInside(*expectedRoot, *destination) ||
             !HasExpectedExtension(operation.Kind, *destination))
         {
             return MakeFailure(PartyQuestReplicaExecutionStatus::InvalidDestination, i, operation.DestinationPath);
+        }
+        if (!PartyQuestReplicaResourcePolicy::IsMutablePathWithinBudget(*destination))
+        {
+            return MakeFailure(
+                PartyQuestReplicaExecutionStatus::ResourceLimitExceeded,
+                i,
+                *destination);
         }
         if (*source == *destination ||
             !sources.emplace(*source).second ||
@@ -767,6 +781,8 @@ std::optional<PartyQuestReplicaFileSpec> PartyQuestReplicaFileExecutor::InspectS
     const std::filesystem::path& acRelativePath) noexcept
 {
     if (acSourcePath.empty() ||
+        !PartyQuestReplicaResourcePolicy::IsPathWithinBudget(acSourcePath) ||
+        !PartyQuestReplicaResourcePolicy::IsPathWithinBudget(acRelativePath) ||
         !PartyQuestReplicaFilePlanner::IsSafeRelativePath(acRelativePath) ||
         !HasExpectedExtension(aKind, acRelativePath))
     {

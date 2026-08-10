@@ -14,7 +14,8 @@ enum class PartyQuestReplicaRestorePlanStatus : uint8_t
     CheckpointVerificationFailed,
     InvalidCheckpointPath,
     InvalidDestinationPath,
-    DuplicateDestination
+    DuplicateDestination,
+    ResourcePathLengthExceeded
 };
 
 struct PartyQuestReplicaRestoreOperation

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestCoopSaveLayout.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -46,12 +47,26 @@ struct PartyQuestReplicaCopyPlan;
 struct PartyQuestReplicaResourcePolicy
 {
     static constexpr size_t MaxFiles = 128;
+    static constexpr size_t MaxFilesystemPathBytes =
+        PartyQuestDurableResourcePolicy::MaxSerializedPathBytes;
+    // Covers every locally generated .tpqtmp/.tpqrestore sibling suffix,
+    // including maximum uint64 ids and the maximum operation index.
+    static constexpr size_t MaxTemporaryPathSuffixBytes = 64;
+    static constexpr size_t MaxMutablePathBytes =
+        MaxFilesystemPathBytes - MaxTemporaryPathSuffixBytes;
+    static_assert(MaxFilesystemPathBytes > MaxTemporaryPathSuffixBytes);
     static constexpr uint64_t MaxIndividualFileBytes = 512ull * 1024ull * 1024ull;
     static constexpr uint64_t MaxTotalFileBytes = 2ull * 1024ull * 1024ull * 1024ull;
     static constexpr uint64_t RequiredFreeSpaceMultiplier = 3;
     static constexpr uint64_t MinimumFreeSpaceReserveBytes = 256ull * 1024ull * 1024ull;
     static constexpr uint64_t MaxExecutionNanoseconds =
         5ull * 60ull * 1000ull * 1000ull * 1000ull;
+
+    [[nodiscard]] static bool IsPathWithinBudget(
+        const std::filesystem::path& acPath) noexcept;
+
+    [[nodiscard]] static bool IsMutablePathWithinBudget(
+        const std::filesystem::path& acPath) noexcept;
 
     [[nodiscard]] static std::optional<uint64_t> RequiredFreeBytes(
         const PartyQuestReplicaCopyPlan& acPlan) noexcept;
@@ -78,7 +93,8 @@ enum class PartyQuestReplicaCopyPlanStatus : uint8_t
     InvalidWorldRevision,
     ResourceFileCountExceeded,
     ResourceFileSizeExceeded,
-    ResourceTotalSizeExceeded
+    ResourceTotalSizeExceeded,
+    ResourcePathLengthExceeded
 };
 
 struct PartyQuestReplicaCopyPlan

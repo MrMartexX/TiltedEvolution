@@ -205,3 +205,21 @@ TEST_CASE("Changed checkpoint bytes block restore planning before any overwrite 
                 fixture.CheckpointManifest).Status ==
         PartyQuestReplicaRestorePlanStatus::CheckpointVerificationFailed);
 }
+
+TEST_CASE("Restore planning rejects over-budget checkpoint paths before byte verification", "[quest.party-state.replica-restore][resource-budget][path-budget]")
+{
+    RestoreSandbox sandbox;
+    auto fixture = BuildReadyRestoreFixture(sandbox);
+    fixture.CheckpointManifest.Files[0].RelativePath =
+        std::filesystem::path("saves") /
+        (std::string(PartyQuestReplicaResourcePolicy::MaxFilesystemPathBytes, 'x') + ".ess");
+
+    const auto plan = PartyQuestReplicaRestorePlanner::Build(
+        fixture.Paths,
+        kRestoreCampaign,
+        kRestorePlayer,
+        fixture.CheckpointManifest);
+    REQUIRE(plan.Status ==
+        PartyQuestReplicaRestorePlanStatus::ResourcePathLengthExceeded);
+    REQUIRE(plan.Operations.empty());
+}

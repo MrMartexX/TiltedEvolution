@@ -444,6 +444,13 @@ PartyQuestCheckpointSidecarMirrorCollector::Collect(
                 }
 
                 const auto source = (externalRoot / relativePath).lexically_normal();
+                if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(source))
+                {
+                    return Fail(
+                        PartyQuestCheckpointSidecarMirrorStatus::PathLengthExceeded,
+                        requirement.CapabilityId,
+                        source);
+                }
                 if (!seenSources.emplace(source).second ||
                     !seenRelativeFiles.emplace(relativePath.lexically_normal()).second)
                 {

@@ -348,4 +348,32 @@ TEST_CASE("Sidecar mirror collection enforces immutable local resource bounds", 
             PartyQuestCheckpointSidecarMirrorStatus::PathLengthExceeded);
         REQUIRE(result.FailedCapabilityId == requirement.CapabilityId);
     }
+
+    SECTION("full mirror source path bytes")
+    {
+        const auto prefix =
+            PartyQuestCheckpointSidecarMirrorCollector::FormatCapabilityDirectory(
+                requirement.CapabilityId) + "/";
+        const auto externalRoot = sandbox.Paths.SidecarsDirectory / "external";
+        const size_t sourcePrefixBytes =
+            externalRoot.generic_u8string().size() + 1;
+        const size_t relativeBytes =
+            PartyQuestReplicaResourcePolicy::MaxFilesystemPathBytes + 1 -
+            sourcePrefixBytes;
+        REQUIRE(relativeBytes > prefix.size());
+        REQUIRE(relativeBytes <=
+            PartyQuestCheckpointSidecarPolicy::MaxRelativePathBytes);
+        capture.MirrorRelativeFiles = {
+            prefix + std::string(relativeBytes - prefix.size(), 'x')};
+
+        const auto result = PartyQuestCheckpointSidecarMirrorCollector::Collect(
+            sandbox.Paths,
+            manifest,
+            kTransactionId,
+            kWorldRevision,
+            {capture});
+        REQUIRE(result.Status ==
+            PartyQuestCheckpointSidecarMirrorStatus::PathLengthExceeded);
+        REQUIRE(result.FailedCapabilityId == requirement.CapabilityId);
+    }
 }

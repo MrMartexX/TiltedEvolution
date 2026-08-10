@@ -335,7 +335,9 @@ PartyQuestReplicaRestoreJournalResult PartyQuestReplicaRestoreJournal::Prepare(
 
         const auto playerRoot = acPaths.PlayerDirectory.lexically_normal();
         const auto rollbackRoot = (state.TransactionDirectory / "rollback").lexically_normal();
-        if (!IsInside(playerRoot, state.TransactionDirectory) ||
+        if (!PartyQuestReplicaResourcePolicy::IsMutablePathWithinBudget(
+                state.TransactionDirectory) ||
+            !IsInside(playerRoot, state.TransactionDirectory) ||
             !IsInside(acPaths.MetadataDirectory, state.TransactionDirectory))
         {
             result.Status = PartyQuestReplicaRestoreJournalStatus::InvalidPath;
@@ -346,7 +348,10 @@ PartyQuestReplicaRestoreJournalResult PartyQuestReplicaRestoreJournal::Prepare(
         for (const auto& operation : acPlan.Operations)
         {
             const auto destination = operation.ReplicaDestinationPath.lexically_normal();
-            if (!IsInside(playerRoot, destination) ||
+            if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(
+                    operation.CheckpointSourcePath) ||
+                !PartyQuestReplicaResourcePolicy::IsMutablePathWithinBudget(destination) ||
+                !IsInside(playerRoot, destination) ||
                 IsInside(acPaths.CheckpointsDirectory, destination) ||
                 IsInside(acPaths.MetadataDirectory, destination) ||
                 destination == acPaths.RuntimeApplySidecar.lexically_normal())
@@ -362,13 +367,6 @@ PartyQuestReplicaRestoreJournalResult PartyQuestReplicaRestoreJournal::Prepare(
                 return result;
             }
 
-            bool destinationExists{};
-            if (!IsRegularNonSymlink(destination, destinationExists))
-            {
-                result.Status = PartyQuestReplicaRestoreJournalStatus::DestinationUnsafe;
-                return result;
-            }
-
             PartyQuestReplicaRestoreJournalOperation journalOperation;
             journalOperation.Kind = operation.Kind;
             journalOperation.CheckpointSourcePath = operation.CheckpointSourcePath.lexically_normal();
@@ -376,6 +374,23 @@ PartyQuestReplicaRestoreJournalResult PartyQuestReplicaRestoreJournal::Prepare(
             journalOperation.RollbackPath = (rollbackRoot / relative).lexically_normal();
             journalOperation.ExpectedRestoredSize = operation.ExpectedSize;
             journalOperation.ExpectedRestoredDigest = operation.ExpectedDigest;
+
+            auto rollbackTemporary = journalOperation.RollbackPath;
+            rollbackTemporary += ".tmp";
+            if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(
+                    journalOperation.RollbackPath) ||
+                !PartyQuestReplicaResourcePolicy::IsPathWithinBudget(rollbackTemporary))
+            {
+                result.Status = PartyQuestReplicaRestoreJournalStatus::InvalidPath;
+                return result;
+            }
+
+            bool destinationExists{};
+            if (!IsRegularNonSymlink(destination, destinationExists))
+            {
+                result.Status = PartyQuestReplicaRestoreJournalStatus::DestinationUnsafe;
+                return result;
+            }
             journalOperation.DestinationExisted = destinationExists;
 
             if (destinationExists)

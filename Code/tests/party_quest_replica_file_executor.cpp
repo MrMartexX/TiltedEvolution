@@ -305,6 +305,29 @@ TEST_CASE("Executor does not trust a manually mutated ready plan destination", "
     REQUIRE_FALSE(std::filesystem::exists(sandbox.Root / "escape.ess"));
 }
 
+TEST_CASE("Replica executor rejects an over-budget forged destination before filesystem work", "[quest.party-state.replica-executor][resource-budget][path-budget]")
+{
+    TempReplicaSandbox sandbox;
+    const auto paths = BuildExecutorPaths(sandbox);
+    const auto files = BuildInspectedSoloFiles(sandbox);
+    auto plan = PartyQuestReplicaFilePlanner::BuildImportPlan(paths, files);
+    REQUIRE(plan.IsReady());
+
+    plan.Operations[0].DestinationPath =
+        paths.SavesDirectory /
+        std::string(PartyQuestReplicaResourcePolicy::MaxMutablePathBytes, 'x');
+    const auto executed = PartyQuestReplicaFileExecutor::ExecuteImport(paths, plan);
+    REQUIRE(executed.Status == PartyQuestReplicaExecutionStatus::ResourceLimitExceeded);
+    REQUIRE(executed.CompletedOperations == 0);
+
+    const std::filesystem::path excessiveSource{
+        std::string(PartyQuestReplicaResourcePolicy::MaxFilesystemPathBytes + 1, 's')};
+    REQUIRE_FALSE(PartyQuestReplicaFileExecutor::InspectSource(
+        PartyQuestReplicaFileKind::SkyrimSave,
+        excessiveSource,
+        "Hero.ess").has_value());
+}
+
 TEST_CASE("Executor revalidates resource limits and disk reserve before staging", "[quest.party-state.replica-executor][resource-budget]")
 {
     TempReplicaSandbox sandbox;

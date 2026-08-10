@@ -94,6 +94,30 @@ PartyQuestReplicaRestorePlan PartyQuestReplicaRestorePlanner::Build(
             return plan;
         }
 
+        const std::filesystem::path checkpointRoot =
+            GetCheckpointRoot(acPaths, acCheckpointManifest).lexically_normal();
+        const std::filesystem::path playerRoot = acPaths.PlayerDirectory.lexically_normal();
+        if (checkpointRoot.empty() || playerRoot.empty())
+        {
+            plan.Status = PartyQuestReplicaRestorePlanStatus::InvalidCheckpointPath;
+            return plan;
+        }
+
+        for (const PartyQuestReplicaPublishedFile& file : acCheckpointManifest.Files)
+        {
+            const std::filesystem::path source =
+                (checkpointRoot / file.RelativePath).lexically_normal();
+            const auto destination = BuildReplicaDestination(acPaths, file);
+            if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(file.RelativePath) ||
+                !PartyQuestReplicaResourcePolicy::IsPathWithinBudget(source) ||
+                (destination &&
+                    !PartyQuestReplicaResourcePolicy::IsMutablePathWithinBudget(*destination)))
+            {
+                plan.Status = PartyQuestReplicaRestorePlanStatus::ResourcePathLengthExceeded;
+                return plan;
+            }
+        }
+
         if (PartyQuestReplicaManifestStore::VerifyPublishedFiles(
                 acPaths,
                 acExpectedCampaignId,
@@ -101,15 +125,6 @@ PartyQuestReplicaRestorePlan PartyQuestReplicaRestorePlanner::Build(
                 acCheckpointManifest) != PartyQuestReplicaManifestVerificationStatus::Verified)
         {
             plan.Status = PartyQuestReplicaRestorePlanStatus::CheckpointVerificationFailed;
-            return plan;
-        }
-
-        const std::filesystem::path checkpointRoot =
-            GetCheckpointRoot(acPaths, acCheckpointManifest).lexically_normal();
-        const std::filesystem::path playerRoot = acPaths.PlayerDirectory.lexically_normal();
-        if (checkpointRoot.empty() || playerRoot.empty())
-        {
-            plan.Status = PartyQuestReplicaRestorePlanStatus::InvalidCheckpointPath;
             return plan;
         }
 
