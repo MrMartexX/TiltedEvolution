@@ -124,8 +124,12 @@ public:
     [[nodiscard]] PartyQuestRuntimeApplyBeginStatus Begin(
         const PartyQuestRuntimeApplyRequest& acRequest) noexcept;
 
-    /** Called when all deferred world/cell targets are available. */
-    bool MarkWorldReady(uint64_t aTransactionId) noexcept;
+    /**
+     * Called with a freshly rebuilt current-canonical request when all deferred
+     * world/cell targets are available. Every transaction-bound fingerprint
+     * must still match before the stale plan may acquire mutation authority.
+     */
+    bool MarkWorldReady(const PartyQuestRuntimeApplyRequest& acCurrentRequest) noexcept;
 
     /** Records that a pre-repair checkpoint exists while saving is guarded. */
     bool MarkCheckpointCreated(uint64_t aTransactionId) noexcept;

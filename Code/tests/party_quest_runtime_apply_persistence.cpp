@@ -101,7 +101,7 @@ void CommitRecoveryRequest(
 {
     const auto begin = aCoordinator.Begin(acRequest);
     if (begin == PartyQuestRuntimeApplyBeginStatus::Deferred)
-        REQUIRE(aCoordinator.MarkWorldReady(acRequest.TransactionId));
+        REQUIRE(aCoordinator.MarkWorldReady(acRequest));
     else
         REQUIRE(begin == PartyQuestRuntimeApplyBeginStatus::Started);
 
@@ -533,7 +533,7 @@ TEST_CASE("Deferred world work is replanned after restart", "[quest.party-state.
             PartyQuestRuntimeRecoveryDisposition::PreMutationRestartRequired);
     REQUIRE(afterRestart.GetActive() == nullptr);
     REQUIRE_FALSE(afterRestart.IsSaveGuardActive());
-    REQUIRE_FALSE(afterRestart.MarkWorldReady(request.TransactionId));
+    REQUIRE_FALSE(afterRestart.MarkWorldReady(request));
     REQUIRE(afterRestart.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Deferred);
 }
 

@@ -67,7 +67,8 @@ struct PartyQuestRuntimeGuardedVerificationResult
  *
  * - immediate repair: acquire physical guard before durable Begin();
  * - deferred repair: hold no guard while waiting for world targets;
- * - world ready: acquire physical guard before durable MarkWorldReady();
+ * - world ready: revalidate the full current request, then acquire the physical
+ *   guard before durable MarkWorldReady();
  * - persistence failure before publication: release only a lease acquired by
  *   that failed call;
  * - commit/safe abort: persist the state transition first, then release guard;
@@ -98,7 +99,7 @@ public:
         const PartyQuestRuntimeApplyRequest& acRequest) noexcept;
 
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkWorldReady(
-        uint64_t aTransactionId) noexcept;
+        const PartyQuestRuntimeApplyRequest& acCurrentRequest) noexcept;
 
     /**
      * Begin one process-local logical checkpoint capture epoch for the exact

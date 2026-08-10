@@ -88,10 +88,10 @@ PartyQuestRuntimeDurableBeginStatus PartyQuestRuntimeApplySession::Begin(
 }
 
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkWorldReady(
-    uint64_t aTransactionId)
+    const PartyQuestRuntimeApplyRequest& acCurrentRequest)
 {
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
-    if (!candidate.MarkWorldReady(aTransactionId))
+    if (!candidate.MarkWorldReady(acCurrentRequest))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 
     if (!Persist(candidate))

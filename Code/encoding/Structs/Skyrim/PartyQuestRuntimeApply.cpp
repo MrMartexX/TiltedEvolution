@@ -209,14 +209,19 @@ PartyQuestRuntimeApplyBeginStatus PartyQuestRuntimeApplyCoordinator::Begin(
     return PartyQuestRuntimeApplyBeginStatus::Started;
 }
 
-bool PartyQuestRuntimeApplyCoordinator::MarkWorldReady(uint64_t aTransactionId) noexcept
+bool PartyQuestRuntimeApplyCoordinator::MarkWorldReady(
+    const PartyQuestRuntimeApplyRequest& acCurrentRequest) noexcept
 {
     if (!m_active ||
-        m_active->TransactionId != aTransactionId ||
+        m_active->TransactionId != acCurrentRequest.TransactionId ||
         m_active->State != PartyQuestRuntimeApplyState::DeferredWorld)
     {
         return false;
     }
+
+    const auto currentFingerprint = ValidateAndFingerprint(acCurrentRequest);
+    if (!currentFingerprint || FingerprintActive(*m_active) != *currentFingerprint)
+        return false;
 
     m_active->State = PartyQuestRuntimeApplyState::AwaitingCheckpoint;
     m_active->SaveGuardActive = true;

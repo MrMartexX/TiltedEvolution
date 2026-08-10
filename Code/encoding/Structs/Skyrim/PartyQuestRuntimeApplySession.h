@@ -67,7 +67,8 @@ public:
     [[nodiscard]] PartyQuestRuntimeDurableBeginStatus Begin(
         const PartyQuestRuntimeApplyRequest& acRequest);
 
-    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkWorldReady(uint64_t aTransactionId);
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkWorldReady(
+        const PartyQuestRuntimeApplyRequest& acCurrentRequest);
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreated(uint64_t aTransactionId);
 
     /**

@@ -200,15 +200,16 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::Begin(
 }
 
 PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::MarkWorldReady(
-    uint64_t aTransactionId) noexcept
+    const PartyQuestRuntimeApplyRequest& acCurrentRequest) noexcept
 {
+    const uint64_t transactionId = acCurrentRequest.TransactionId;
     PartyQuestRuntimeGuardResult result;
-    result.TransactionId = aTransactionId;
+    result.TransactionId = transactionId;
 
     const auto* active = m_session.GetCoordinator().GetActive();
     if (m_checkpointCaptureEpoch.IsVerified() ||
         !active ||
-        active->TransactionId != aTransactionId ||
+        active->TransactionId != transactionId ||
         active->State != PartyQuestRuntimeApplyState::DeferredWorld ||
         active->SaveGuardActive)
     {
@@ -216,20 +217,27 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::MarkWorldReady(
         return result;
     }
 
+    PartyQuestRuntimeApplyCoordinator validation = m_session.GetCoordinator();
+    if (!validation.MarkWorldReady(acCurrentRequest))
+    {
+        result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+        return result;
+    }
+
     bool acquiredHere{};
-    const auto guardStatus = AcquireGuard(aTransactionId, acquiredHere);
+    const auto guardStatus = AcquireGuard(transactionId, acquiredHere);
     if (guardStatus != PartyQuestRuntimeGuardStatus::Ready)
     {
         result.Status = guardStatus;
         return result;
     }
 
-    const auto transition = m_session.MarkWorldReady(aTransactionId);
-    result = Transition(aTransactionId, transition);
+    const auto transition = m_session.MarkWorldReady(acCurrentRequest);
+    result = Transition(transactionId, transition);
     if (transition != PartyQuestRuntimeDurableTransitionStatus::Applied && acquiredHere)
     {
-        m_saveGuard.Release(aTransactionId);
-        result.GuardHeld = HasGuard(aTransactionId);
+        m_saveGuard.Release(transactionId);
+        result.GuardHeld = HasGuard(transactionId);
     }
     return result;
 }

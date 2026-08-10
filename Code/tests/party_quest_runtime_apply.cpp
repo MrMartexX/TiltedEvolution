@@ -122,7 +122,7 @@ void AdvanceToVerification(
 {
     const auto begin = aCoordinator.Begin(acRequest);
     if (begin == PartyQuestRuntimeApplyBeginStatus::Deferred)
-        REQUIRE(aCoordinator.MarkWorldReady(acRequest.TransactionId));
+        REQUIRE(aCoordinator.MarkWorldReady(acRequest));
     else
         REQUIRE(begin == PartyQuestRuntimeApplyBeginStatus::Started);
 
@@ -310,7 +310,13 @@ TEST_CASE("Deferred world repair does not lock saving until its targets are read
     REQUIRE_FALSE(coordinator.IsSaveGuardActive());
     REQUIRE_FALSE(coordinator.MarkCheckpointCreated(request.TransactionId));
 
-    REQUIRE(coordinator.MarkWorldReady(request.TransactionId));
+    auto advancedCanonical = request;
+    ++advancedCanonical.TargetWorldRevision;
+    REQUIRE_FALSE(coordinator.MarkWorldReady(advancedCanonical));
+    REQUIRE(coordinator.GetActive()->State == PartyQuestRuntimeApplyState::DeferredWorld);
+    REQUIRE_FALSE(coordinator.IsSaveGuardActive());
+
+    REQUIRE(coordinator.MarkWorldReady(request));
     REQUIRE(coordinator.GetActive()->State == PartyQuestRuntimeApplyState::AwaitingCheckpoint);
     REQUIRE(coordinator.IsSaveGuardActive());
     REQUIRE(coordinator.MarkCheckpointCreated(request.TransactionId));

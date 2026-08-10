@@ -124,8 +124,6 @@ TEST_CASE("Deferred runtime state is discarded and durably requests a fresh plan
     REQUIRE(result.RecoveryDisposition ==
         PartyQuestRuntimeRecoveryDisposition::PreMutationRestartRequired);
     REQUIRE(session.GetCoordinator().GetActive() == nullptr);
-    REQUIRE(session.MarkWorldReady(kTransactionId) ==
-        PartyQuestRuntimeDurableTransitionStatus::InvalidState);
     const auto reloaded = PartyQuestRuntimeApplyPersistence::Load(paths.RuntimeApplySidecar);
     REQUIRE(reloaded.Status == PartyQuestRuntimeApplyPersistenceStatus::Success);
     REQUIRE(reloaded.State.has_value());

@@ -198,7 +198,14 @@ TEST_CASE("Deferred repair holds no guard until world-ready transition", "[quest
     REQUIRE(durability.GuardActiveDuringPersist.size() == 1);
     REQUIRE_FALSE(durability.GuardActiveDuringPersist[0]);
 
-    const auto ready = guarded.MarkWorldReady(request.TransactionId);
+    auto advancedCanonical = request;
+    ++advancedCanonical.TargetWorldRevision;
+    const auto stale = guarded.MarkWorldReady(advancedCanonical);
+    REQUIRE(stale.Status == PartyQuestRuntimeGuardStatus::InvalidState);
+    REQUIRE_FALSE(saveGuard.IsActive());
+    REQUIRE(durability.GuardActiveDuringPersist.size() == 1);
+
+    const auto ready = guarded.MarkWorldReady(request);
     REQUIRE(ready.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(ready.TransitionStatus == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(saveGuard.GetTransactionId() == request.TransactionId);
@@ -217,7 +224,7 @@ TEST_CASE("World-ready persistence failure releases lease and leaves transaction
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Deferred);
 
     durability.Allow = false;
-    const auto ready = guarded.MarkWorldReady(request.TransactionId);
+    const auto ready = guarded.MarkWorldReady(request);
     REQUIRE(ready.Status == PartyQuestRuntimeGuardStatus::PersistenceFailure);
     REQUIRE_FALSE(saveGuard.IsActive());
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
