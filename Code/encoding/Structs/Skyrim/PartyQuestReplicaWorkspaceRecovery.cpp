@@ -3,7 +3,9 @@
 
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <filesystem>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,6 +17,12 @@ namespace
 using Status = PartyQuestReplicaWorkspaceRecoveryStatus;
 using Result = PartyQuestReplicaWorkspaceRecoveryResult;
 
+struct RecoveryDeadline
+{
+    uint64_t StartedAt{};
+    uint64_t ExpiresAt{};
+};
+
 Result Fail(Status aStatus, size_t aInspected, size_t aQuarantined = 0) noexcept
 {
     Result result;
@@ -22,6 +30,32 @@ Result Fail(Status aStatus, size_t aInspected, size_t aQuarantined = 0) noexcept
     result.InspectedEntries = aInspected;
     result.QuarantinedFiles = aQuarantined;
     return result;
+}
+
+bool BuildDeadline(
+    const PartyQuestReplicaWorkspaceRecoveryHooks& acHooks,
+    RecoveryDeadline& aDeadline) noexcept
+{
+    const uint64_t now = acHooks.NowTicks();
+    if (now == 0 ||
+        now > std::numeric_limits<uint64_t>::max() -
+            PartyQuestReplicaWorkspaceRecovery::MaxRecoveryNanoseconds)
+    {
+        return false;
+    }
+    aDeadline.StartedAt = now;
+    aDeadline.ExpiresAt =
+        now + PartyQuestReplicaWorkspaceRecovery::MaxRecoveryNanoseconds;
+    return true;
+}
+
+bool DeadlineExceeded(
+    const PartyQuestReplicaWorkspaceRecoveryHooks& acHooks,
+    const RecoveryDeadline& acDeadline) noexcept
+{
+    const uint64_t now = acHooks.NowTicks();
+    return now == 0 || now < acDeadline.StartedAt ||
+        now >= acDeadline.ExpiresAt;
 }
 
 bool IsMissingError(const std::error_code& acError) noexcept
@@ -143,12 +177,24 @@ std::optional<std::filesystem::path> PrepareDirectory(
 }
 } // namespace
 
+uint64_t PartyQuestReplicaWorkspaceRecoveryHooks::NowTicks() const noexcept
+{
+    if (MonotonicNow)
+        return MonotonicNow(Context);
+
+    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+    return now > 0 ? static_cast<uint64_t>(now) : 1;
+}
+
 PartyQuestReplicaWorkspaceRecoveryResult
 PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestCampaignId& acCampaignId,
     const PartyQuestPlayerProfileId& acPlayerProfileId,
-    const PartyQuestReplicaWorkspaceLease& acLease) noexcept
+    const PartyQuestReplicaWorkspaceLease& acLease,
+    PartyQuestReplicaWorkspaceRecoveryHooks aHooks) noexcept
 {
     try
     {
@@ -159,6 +205,11 @@ PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
         {
             return Fail(Status::InvalidLayout, 0);
         }
+
+        RecoveryDeadline deadline;
+        if (!BuildDeadline(aHooks, deadline))
+            return Fail(Status::DeadlineExceeded, 0);
+
         if (!acLease.Protects(
                 acPaths,
                 acCampaignId,
@@ -166,6 +217,8 @@ PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
         {
             return Fail(Status::InvalidLease, 0);
         }
+        if (DeadlineExceeded(aHooks, deadline))
+            return Fail(Status::DeadlineExceeded, 0);
 
         std::error_code ec;
         const auto canonicalPlayer = std::filesystem::weakly_canonical(
@@ -182,6 +235,8 @@ PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
 
         for (const auto& root : scanRoots)
         {
+            if (DeadlineExceeded(aHooks, deadline))
+                return Fail(Status::DeadlineExceeded, inspected);
             ec.clear();
             const auto rootStatus = std::filesystem::symlink_status(root, ec);
             if (rootStatus.type() == std::filesystem::file_type::not_found ||
@@ -206,6 +261,8 @@ PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
                     return Fail(Status::IoError, inspected);
                 if (++inspected > MaxInspectedEntries)
                     return Fail(Status::EntryLimitExceeded, inspected);
+                if (DeadlineExceeded(aHooks, deadline))
+                    return Fail(Status::DeadlineExceeded, inspected);
 
                 const auto status = iterator->symlink_status(ec);
                 if (ec)
@@ -228,6 +285,9 @@ PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
         if (candidates.empty())
             return Fail(Status::Clean, inspected);
 
+        if (DeadlineExceeded(aHooks, deadline))
+            return Fail(Status::DeadlineExceeded, inspected);
+
         const auto quarantineRoot = PrepareDirectory(
             canonicalPlayer,
             std::filesystem::path("metadata") / "orphan_copy_quarantine");
@@ -238,6 +298,8 @@ PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
         destinations.reserve(candidates.size());
         for (const auto& candidate : candidates)
         {
+            if (DeadlineExceeded(aHooks, deadline))
+                return Fail(Status::DeadlineExceeded, inspected);
             if (!IsSafeSingleLinkFile(canonicalPlayer, candidate))
                 return Fail(Status::CandidateUnsafe, inspected);
 
@@ -268,6 +330,8 @@ PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
         size_t quarantined{};
         for (size_t i = 0; i < candidates.size(); ++i)
         {
+            if (DeadlineExceeded(aHooks, deadline))
+                return Fail(Status::DeadlineExceeded, inspected, quarantined);
             if (!IsSafeSingleLinkFile(canonicalPlayer, candidates[i]))
                 return Fail(Status::CandidateUnsafe, inspected, quarantined);
             ec.clear();

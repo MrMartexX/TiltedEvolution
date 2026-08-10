@@ -81,6 +81,20 @@ void WriteOwnerFile(
         std::vector<uint8_t>(acBytes.begin(), acBytes.end()));
 }
 
+struct ExpiringWorkspaceRecoveryClock
+{
+    size_t Calls{};
+};
+
+uint64_t ExpireWorkspaceRecovery(void* apContext) noexcept
+{
+    auto& clock = *static_cast<ExpiringWorkspaceRecoveryClock*>(apContext);
+    ++clock.Calls;
+    return clock.Calls == 1
+        ? 1
+        : PartyQuestReplicaWorkspaceRecovery::MaxRecoveryNanoseconds + 1;
+}
+
 PartyQuestRuntimeRecoveryState BuildOwnerState()
 {
     PartyQuestRuntimeRecoveryState state;
@@ -336,6 +350,36 @@ TEST_CASE("Workspace recovery requires the exact live lease capability", "[quest
             unheldLease);
     REQUIRE(rejected.Status ==
         PartyQuestReplicaWorkspaceRecoveryStatus::InvalidLease);
+    REQUIRE(std::filesystem::exists(temporary));
+    REQUIRE_FALSE(std::filesystem::exists(
+        paths.MetadataDirectory / "orphan_copy_quarantine"));
+}
+
+TEST_CASE("Workspace recovery deadline fails before moving orphan bytes", "[quest.party-state.runtime-owner][workspace-recovery][deadline]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+    const auto temporary =
+        paths.SavesDirectory / "Hero.ess.tpqtmp-655-0";
+    WriteOwnerFile(temporary, "DEADLINE_PROTECTED_BYTES");
+
+    PartyQuestReplicaWorkspaceLease lease;
+    REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
+        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+
+    ExpiringWorkspaceRecoveryClock clock;
+    PartyQuestReplicaWorkspaceRecoveryHooks hooks;
+    hooks.MonotonicNow = &ExpireWorkspaceRecovery;
+    hooks.Context = &clock;
+    const auto expired =
+        PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
+            paths,
+            kOwnerCampaign,
+            kOwnerPlayer,
+            lease,
+            hooks);
+    REQUIRE(expired.Status ==
+        PartyQuestReplicaWorkspaceRecoveryStatus::DeadlineExceeded);
     REQUIRE(std::filesystem::exists(temporary));
     REQUIRE_FALSE(std::filesystem::exists(
         paths.MetadataDirectory / "orphan_copy_quarantine"));
