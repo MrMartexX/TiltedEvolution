@@ -97,6 +97,30 @@ PartyQuestProtocolCoordinator::Session* PartyQuestProtocolCoordinator::FindMutab
     return &it->second;
 }
 
+bool PartyQuestProtocolCoordinator::EvictOldestCompletedRepair(
+    Session& aSession) noexcept
+{
+    for (auto orderIt = aSession.PlanOrder.begin();
+         orderIt != aSession.PlanOrder.end();
+         ++orderIt)
+    {
+        const auto planIt = aSession.Plans.find(*orderIt);
+        if (planIt == aSession.Plans.end())
+            return false;
+        if (!planIt->second.Ack ||
+            aSession.Info.PendingPlanId == planIt->first)
+        {
+            continue;
+        }
+
+        aSession.Reports.erase(planIt->second.ReportId);
+        aSession.Plans.erase(planIt);
+        aSession.PlanOrder.erase(orderIt);
+        return true;
+    }
+    return false;
+}
+
 uint64_t PartyQuestProtocolCoordinator::AllocatePlanId() noexcept
 {
     if (m_nextPlanId == 0)
@@ -287,8 +311,11 @@ PartyQuestReportDispatch PartyQuestProtocolCoordinator::HandleReplicaReport(
         pSession->Plans.size() >=
             PartyQuestProtocolResourcePolicy::MaxReportsAndPlansPerSession)
     {
-        dispatch.Status = PartyQuestReportHandleStatus::ResourceLimitExceeded;
-        return dispatch;
+        if (!EvictOldestCompletedRepair(*pSession))
+        {
+            dispatch.Status = PartyQuestReportHandleStatus::ResourceLimitExceeded;
+            return dispatch;
+        }
     }
 
     NotifyPartyQuestRepairPlan response;
@@ -306,6 +333,7 @@ PartyQuestReportDispatch PartyQuestProtocolCoordinator::HandleReplicaReport(
     pSession->Plans.emplace(
         response.PlanId,
         PlanCacheEntry{acRequest.ReportId, response.Plan, std::nullopt, {}});
+    pSession->PlanOrder.push_back(response.PlanId);
 
     dispatch.Status = PartyQuestReportHandleStatus::Generated;
     dispatch.Response = std::move(response);

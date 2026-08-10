@@ -495,6 +495,49 @@ TEST_CASE("Protocol identity caches fail closed without losing retained conflict
     }
 }
 
+TEST_CASE("Acknowledged repair epochs renew the bounded server cache", "[quest.party-state.coordinator][resource-budget][renewal]")
+{
+    PartyQuestProtocolCoordinator coordinator;
+    REQUIRE(coordinator.ConnectClient(1));
+    PartyQuestClientSession client(1);
+    const PartyQuestCampaignId campaign{0x1111, 0x2222};
+    RequestPartyQuestReplicaReport firstReport;
+
+    for (uint64_t i = 1;
+         i <= PartyQuestProtocolResourcePolicy::MaxReportsAndPlansPerSession;
+         ++i)
+    {
+        auto report = client.BuildReplicaReport(i, false);
+        if (i == 1)
+            firstReport = report;
+        const auto dispatch = coordinator.HandleReplicaReport(1, report);
+        REQUIRE(dispatch.Status == PartyQuestReportHandleStatus::Generated);
+        REQUIRE(dispatch.Response.has_value());
+
+        auto plan = *dispatch.Response;
+        plan.CampaignId = campaign;
+        const auto repair = client.HandleRepairPlan(plan);
+        REQUIRE(repair.Status == PartyQuestClientRepairStatus::NoChanges);
+        REQUIRE(coordinator.HandleRepairAck(1, repair.Ack).Status ==
+            PartyQuestAckHandleStatus::Verified);
+    }
+
+    const auto renewed = coordinator.HandleReplicaReport(
+        1,
+        client.BuildReplicaReport(
+            PartyQuestProtocolResourcePolicy::MaxReportsAndPlansPerSession + 1,
+            false));
+    REQUIRE(renewed.Status == PartyQuestReportHandleStatus::Generated);
+    REQUIRE(renewed.Response.has_value());
+
+    RequestPartyQuestRepairAck evictedAck;
+    evictedAck.PlanId = 1;
+    REQUIRE(coordinator.HandleRepairAck(1, evictedAck).Status ==
+        PartyQuestAckHandleStatus::UnknownPlan);
+    REQUIRE(coordinator.HandleReplicaReport(1, firstReport).Status ==
+        PartyQuestReportHandleStatus::Generated);
+}
+
 TEST_CASE("Client replica survives PlayerId rebind and resets only when CampaignId changes", "[quest.party-state.coordinator.reconnect]")
 {
     const PartyQuestCampaignId campaignA{0xAAAA, 0x1111};
