@@ -139,6 +139,15 @@ TEST_CASE("Party quest protocol messages round-trip through the real factories",
     REQUIRE(decodedRepairAck->IsValid);
     REQUIRE(*decodedRepairAck == repairAck);
 
+    RequestPartyQuestRepairAck resourceLimitedAck;
+    resourceLimitedAck.PlanId = 8002;
+    resourceLimitedAck.ApplyStatus =
+        PartyQuestReplicaApplyStatus::ResourceLimitExceeded;
+    resourceLimitedAck.PostApplyReport = reportRequest.Report;
+    auto decodedResourceLimitedAck = RoundTripClientMessage(resourceLimitedAck);
+    REQUIRE(decodedResourceLimitedAck->IsValid);
+    REQUIRE(*decodedResourceLimitedAck == resourceLimitedAck);
+
     NotifyPartyQuestTransactionResult transactionResult;
     transactionResult.RequestId = transactionRequest.RequestId;
     transactionResult.Result = {PartyQuestApplyStatus::Accepted, 2, 2};

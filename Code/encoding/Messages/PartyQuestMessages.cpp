@@ -147,7 +147,7 @@ void RequestPartyQuestRepairAck::DeserializeRaw(TiltedPhoques::Buffer::Reader& a
     PlanId = Serialization::ReadVarInt(aReader);
 
     const uint64_t status = Serialization::ReadVarInt(aReader);
-    if (status > static_cast<uint8_t>(PartyQuestReplicaApplyStatus::InvalidPlan))
+    if (status > static_cast<uint8_t>(PartyQuestReplicaApplyStatus::ResourceLimitExceeded))
     {
         IsValid = false;
         return;

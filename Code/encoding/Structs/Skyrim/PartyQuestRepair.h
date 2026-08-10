@@ -106,7 +106,8 @@ enum class PartyQuestReplicaApplyStatus : uint8_t
     NoChanges,
     ClientAhead,
     StalePlan,
-    InvalidPlan
+    InvalidPlan,
+    ResourceLimitExceeded
 };
 
 /**

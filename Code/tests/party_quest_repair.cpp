@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRepair.h>
+#include <Structs/Skyrim/PartyQuestResourcePolicy.h>
 
 #include <catch2/catch.hpp>
 
@@ -223,4 +224,31 @@ TEST_CASE("Repair summary separates missing revision digest and client-only dive
     REQUIRE(summary.DigestMismatchCount == 1);
     REQUIRE(summary.ClientOnlyQuestCount == 1);
     REQUIRE(summary.RepairItemCount() == plan.Items.size());
+}
+
+TEST_CASE("Replica repair fails closed before oversized plan allocation", "[quest.party-state.repair][resource-budget]")
+{
+    PartyQuestReplica replica;
+
+    PartyQuestRepairPlan tooManyItems;
+    tooManyItems.Status = PartyQuestRepairPlanStatus::RepairRequired;
+    tooManyItems.TargetWorldRevision = 1;
+    tooManyItems.Items.resize(
+        PartyQuestResourcePolicy::MaxWireQuestEntries + 1);
+    REQUIRE(replica.Apply(tooManyItems) ==
+        PartyQuestReplicaApplyStatus::ResourceLimitExceeded);
+
+    PartyQuestRepairPlan oversizedSnapshot;
+    oversizedSnapshot.Status = PartyQuestRepairPlanStatus::RepairRequired;
+    oversizedSnapshot.TargetWorldRevision = 1;
+    PartyQuestRepairItem item;
+    item.CanonicalSnapshot = BuildRepairSnapshot(GameId(14, 1), 10);
+    item.CanonicalSnapshot.CompletedStages.resize(
+        PartyQuestResourcePolicy::MaxSnapshotCollectionEntries + 1);
+    oversizedSnapshot.Items.push_back(std::move(item));
+    REQUIRE(replica.Apply(oversizedSnapshot) ==
+        PartyQuestReplicaApplyStatus::ResourceLimitExceeded);
+
+    REQUIRE(replica.GetWorldRevision() == 0);
+    REQUIRE(replica.GetQuestCount() == 0);
 }

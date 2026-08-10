@@ -6,7 +6,7 @@
 
 namespace PartyQuestWireCodec
 {
-constexpr uint16_t ProtocolVersion = 5;
+constexpr uint16_t ProtocolVersion = 6;
 
 void SerializeQuestSnapshot(TiltedPhoques::Buffer::Writer& aWriter, const QuestSnapshot& acSnapshot) noexcept;
 [[nodiscard]] bool DeserializeQuestSnapshot(TiltedPhoques::Buffer::Reader& aReader, QuestSnapshot& aSnapshot) noexcept;

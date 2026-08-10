@@ -31,6 +31,7 @@ PartyQuestClientRepairStatus ToClientRepairStatus(PartyQuestReplicaApplyStatus a
     case PartyQuestReplicaApplyStatus::ClientAhead: return PartyQuestClientRepairStatus::ClientAhead;
     case PartyQuestReplicaApplyStatus::StalePlan: return PartyQuestClientRepairStatus::StalePlan;
     case PartyQuestReplicaApplyStatus::InvalidPlan: return PartyQuestClientRepairStatus::InvalidPlan;
+    case PartyQuestReplicaApplyStatus::ResourceLimitExceeded: return PartyQuestClientRepairStatus::ResourceLimitExceeded;
     }
 
     return PartyQuestClientRepairStatus::InvalidPlan;
@@ -461,6 +462,12 @@ PartyQuestClientCanonicalStatus PartyQuestClientSession::HandleCanonicalUpdate(
         acUpdate.CanonicalSnapshot.InitiatorPlayerId != acUpdate.InitiatorPlayerId)
     {
         return PartyQuestClientCanonicalStatus::InvalidMessage;
+    }
+
+    if (!PartyQuestResourcePolicy::IsSnapshotWithinBounds(
+            acUpdate.CanonicalSnapshot))
+    {
+        return PartyQuestClientCanonicalStatus::ResourceLimitExceeded;
     }
 
     const auto cachedIt = m_canonicalUpdates.find(acUpdate.TransactionId);

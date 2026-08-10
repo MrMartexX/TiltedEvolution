@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRepair.h>
+#include <Structs/Skyrim/PartyQuestResourcePolicy.h>
 #include <Structs/Skyrim/PartyQuestAdmission.h>
 
 #include <algorithm>
@@ -162,6 +163,21 @@ PartyQuestReplicaReport PartyQuestReplica::BuildReport() const
 
 PartyQuestReplicaApplyStatus PartyQuestReplica::Apply(const PartyQuestRepairPlan& acPlan)
 {
+    if (acPlan.Items.size() > PartyQuestResourcePolicy::MaxWireQuestEntries ||
+        acPlan.RemovedQuestIds.size() >
+            PartyQuestResourcePolicy::MaxWireQuestEntries - acPlan.Items.size())
+    {
+        return PartyQuestReplicaApplyStatus::ResourceLimitExceeded;
+    }
+    for (const auto& item : acPlan.Items)
+    {
+        if (!PartyQuestResourcePolicy::IsSnapshotWithinBounds(
+                item.CanonicalSnapshot))
+        {
+            return PartyQuestReplicaApplyStatus::ResourceLimitExceeded;
+        }
+    }
+
     if (acPlan.Status == PartyQuestRepairPlanStatus::ClientAhead)
         return PartyQuestReplicaApplyStatus::ClientAhead;
 
