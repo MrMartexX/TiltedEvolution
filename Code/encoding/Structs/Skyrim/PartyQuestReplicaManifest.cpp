@@ -654,6 +654,9 @@ PartyQuestReplicaManifestPersistenceStatus PartyQuestReplicaManifestStore::SaveA
     const std::filesystem::path& acPath,
     const PartyQuestReplicaManifest& acManifest)
 {
+    if (!PartyQuestReplicaResourcePolicy::IsMutablePathWithinBudget(acPath))
+        return PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded;
+
     const std::vector<uint8_t> encoded = Encode(acManifest);
     if (encoded.empty())
         return PartyQuestReplicaManifestPersistenceStatus::InvalidData;
@@ -708,12 +711,26 @@ PartyQuestReplicaManifestPersistenceStatus PartyQuestReplicaManifestStore::SaveA
 PartyQuestReplicaManifestPersistenceResult PartyQuestReplicaManifestStore::Load(
     const std::filesystem::path& acPath)
 {
+    auto temporaryPath = acPath;
+    temporaryPath += ".tmp";
+    auto backupPath = acPath;
+    backupPath += ".bak";
+    if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(acPath))
+    {
+        PartyQuestReplicaManifestPersistenceResult result;
+        result.Status = PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded;
+        return result;
+    }
+
     PartyQuestReplicaManifestPersistenceResult primary = DecodeFile(acPath);
     if (primary.Status == PartyQuestReplicaManifestPersistenceStatus::Success)
         return primary;
 
-    auto temporaryPath = acPath;
-    temporaryPath += ".tmp";
+    if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(temporaryPath))
+    {
+        primary.Status = PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded;
+        return primary;
+    }
     PartyQuestReplicaManifestPersistenceResult temporary = DecodeFile(temporaryPath);
     if (temporary.Status == PartyQuestReplicaManifestPersistenceStatus::Success)
     {
@@ -721,8 +738,11 @@ PartyQuestReplicaManifestPersistenceResult PartyQuestReplicaManifestStore::Load(
         return temporary;
     }
 
-    auto backupPath = acPath;
-    backupPath += ".bak";
+    if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(backupPath))
+    {
+        primary.Status = PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded;
+        return primary;
+    }
     PartyQuestReplicaManifestPersistenceResult backup = DecodeFile(backupPath);
     if (backup.Status == PartyQuestReplicaManifestPersistenceStatus::Success)
     {
@@ -761,6 +781,17 @@ PartyQuestReplicaManifestVerificationStatus PartyQuestReplicaManifestStore::Veri
         const auto root = AbsoluteNormalized(rootRaw);
         if (!root)
             return PartyQuestReplicaManifestVerificationStatus::PathEscape;
+        if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(*root))
+            return PartyQuestReplicaManifestVerificationStatus::ResourceLimitExceeded;
+
+        for (const PartyQuestReplicaPublishedFile& file : acManifest.Files)
+        {
+            const auto candidate = AbsoluteNormalized(rootRaw / file.RelativePath);
+            if (!candidate || !IsInside(*root, *candidate))
+                return PartyQuestReplicaManifestVerificationStatus::PathEscape;
+            if (!PartyQuestReplicaResourcePolicy::IsPathWithinBudget(*candidate))
+                return PartyQuestReplicaManifestVerificationStatus::ResourceLimitExceeded;
+        }
 
         std::error_code ec;
         const std::filesystem::path canonicalRoot = std::filesystem::weakly_canonical(*root, ec);

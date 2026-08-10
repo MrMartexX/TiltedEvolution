@@ -332,3 +332,46 @@ TEST_CASE("Replica manifest rejects oversized archives before decode", "[quest.p
     REQUIRE(PartyQuestReplicaManifestStore::Decode(oversized).Status ==
         PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded);
 }
+
+TEST_CASE("Replica manifest paths fail closed before filesystem work", "[quest.party-state.replica-manifest][resource-budget][path-budget]")
+{
+    ManifestSandbox sandbox;
+    PartyQuestCoopSavePaths paths;
+    PartyQuestReplicaCopyPlan plan;
+    auto manifest = BuildReadyImportManifest(sandbox, paths, plan, 450);
+
+    const std::filesystem::path excessiveMutablePath{
+        std::string(PartyQuestReplicaResourcePolicy::MaxMutablePathBytes + 1, 'm')};
+    REQUIRE(PartyQuestReplicaManifestStore::SaveAtomically(
+                excessiveMutablePath,
+                manifest) ==
+        PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded);
+
+    const std::filesystem::path legacyBaseWithoutSiblingSpace{
+        std::string(
+            PartyQuestReplicaResourcePolicy::MaxFilesystemPathBytes - 3,
+            'l')};
+    REQUIRE(PartyQuestReplicaResourcePolicy::IsPathWithinBudget(
+        legacyBaseWithoutSiblingSpace));
+    REQUIRE(PartyQuestReplicaManifestStore::Load(legacyBaseWithoutSiblingSpace).Status ==
+        PartyQuestReplicaManifestPersistenceStatus::ResourceLimitExceeded);
+
+    const size_t rootPrefixBytes = paths.PlayerDirectory.generic_u8string().size() + 1;
+    const size_t relativeBytes =
+        PartyQuestReplicaResourcePolicy::MaxFilesystemPathBytes + 1 - rootPrefixBytes;
+    const std::string relativePrefix = "saves/";
+    const std::string extension = ".ess";
+    REQUIRE(relativeBytes > relativePrefix.size() + extension.size());
+    REQUIRE(relativeBytes <= PartyQuestReplicaResourcePolicy::MaxFilesystemPathBytes);
+    manifest.Files[0].RelativePath = relativePrefix +
+        std::string(
+            relativeBytes - relativePrefix.size() - extension.size(),
+            'v') +
+        extension;
+    REQUIRE(PartyQuestReplicaManifestStore::VerifyPublishedFiles(
+                paths,
+                kManifestCampaign,
+                kManifestPlayer,
+                manifest) ==
+        PartyQuestReplicaManifestVerificationStatus::ResourceLimitExceeded);
+}

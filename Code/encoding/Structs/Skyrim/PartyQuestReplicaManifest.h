@@ -65,7 +65,8 @@ enum class PartyQuestReplicaManifestVerificationStatus : uint8_t
     InvalidIdentity,
     InvalidManifest,
     PathEscape,
-    MissingOrChangedFile
+    MissingOrChangedFile,
+    ResourceLimitExceeded
 };
 
 /**
