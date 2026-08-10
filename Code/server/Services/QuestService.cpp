@@ -327,15 +327,17 @@ bool QuestService::InitializePartyQuestCampaignIdentity(
     aInitializeCanonicalArchive = !aHadStateArchive;
     aPublishCampaignMetadata =
         loadResult.UsedBackup ||
+        loadResult.UsedTemporary ||
         loadResult.BackupRefreshRequired ||
         !loadResult.CanonicalArchiveRequired;
 
     spdlog::info(
-        "PartyQuestProtocol campaign identity loaded: campaign={:016X}{:016X} path='{}' usedBackup={} canonicalArchiveRequired={} backupRefreshRequired={}",
+        "PartyQuestProtocol campaign identity loaded: campaign={:016X}{:016X} path='{}' usedBackup={} usedTemporary={} canonicalArchiveRequired={} backupRefreshRequired={}",
         m_campaignId.High,
         m_campaignId.Low,
         m_partyQuestCampaignIdPath.string(),
         loadResult.UsedBackup,
+        loadResult.UsedTemporary,
         loadResult.CanonicalArchiveRequired,
         loadResult.BackupRefreshRequired);
     return true;

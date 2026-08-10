@@ -25,7 +25,42 @@ struct PartyQuestCampaignPersistenceResult
     std::optional<PartyQuestCampaignId> CampaignId;
     bool CanonicalArchiveRequired{};
     bool UsedBackup{};
+    bool UsedTemporary{};
     bool BackupRefreshRequired{};
+};
+
+enum class PartyQuestCampaignPersistenceBoundary : uint8_t
+{
+    TemporaryVerified,
+    PrimaryMovedToBackup,
+    PrimaryPublished,
+    BackupTemporaryVerified,
+    BackupPublished
+};
+
+enum class PartyQuestCampaignPersistenceDirective : uint8_t
+{
+    Continue,
+    FailClosed
+};
+
+/** Local-only fault observer; it carries no paths, bytes or storage authority. */
+struct PartyQuestCampaignPersistenceHooks
+{
+    using Callback = PartyQuestCampaignPersistenceDirective (*)(
+        PartyQuestCampaignPersistenceBoundary,
+        void*) noexcept;
+
+    Callback OnBoundary{};
+    void* Context{};
+
+    [[nodiscard]] PartyQuestCampaignPersistenceDirective Invoke(
+        PartyQuestCampaignPersistenceBoundary aBoundary) const noexcept
+    {
+        return OnBoundary
+            ? OnBoundary(aBoundary, Context)
+            : PartyQuestCampaignPersistenceDirective::Continue;
+    }
 };
 
 /**
@@ -46,7 +81,8 @@ public:
 
     [[nodiscard]] static PartyQuestCampaignPersistenceStatus SaveAtomically(
         const std::filesystem::path& acPath,
-        const PartyQuestCampaignId& acCampaignId);
+        const PartyQuestCampaignId& acCampaignId,
+        PartyQuestCampaignPersistenceHooks aHooks = {});
 
     [[nodiscard]] static PartyQuestCampaignPersistenceResult Load(const std::filesystem::path& acPath);
 };

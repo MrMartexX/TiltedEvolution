@@ -4,9 +4,13 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <string>
 #include <vector>
+
+const std::filesystem::path& GetTPTestsExecutablePath() noexcept;
 
 namespace
 {
@@ -75,7 +79,131 @@ void WriteArchive(const std::filesystem::path& acPath, const std::vector<uint8_t
         static_cast<std::streamsize>(acBytes.size()));
     REQUIRE(file.good());
 }
+
+bool SetCampaignPersistenceEnvironment(const char* apName, const std::string& acValue)
+{
+#ifdef _WIN32
+    return _putenv_s(apName, acValue.c_str()) == 0;
+#else
+    return setenv(apName, acValue.c_str(), 1) == 0;
+#endif
+}
+
+void ClearCampaignPersistenceEnvironment(const char* apName)
+{
+#ifdef _WIN32
+    _putenv_s(apName, "");
+#else
+    unsetenv(apName);
+#endif
+}
+
+struct CampaignPersistenceCrashBoundary
+{
+    PartyQuestCampaignPersistenceBoundary Boundary;
+};
+
+PartyQuestCampaignPersistenceDirective CrashCampaignPersistenceAtBoundary(
+    PartyQuestCampaignPersistenceBoundary aBoundary,
+    void* apContext) noexcept
+{
+    const auto& crash = *static_cast<const CampaignPersistenceCrashBoundary*>(apContext);
+    if (crash.Boundary == aBoundary)
+        std::_Exit(92);
+    return PartyQuestCampaignPersistenceDirective::Continue;
+}
+
+PartyQuestCampaignPersistenceBoundary ParseCampaignPersistenceBoundary(
+    const std::string& acBoundary)
+{
+    if (acBoundary == "TemporaryVerified")
+        return PartyQuestCampaignPersistenceBoundary::TemporaryVerified;
+    if (acBoundary == "PrimaryMovedToBackup")
+        return PartyQuestCampaignPersistenceBoundary::PrimaryMovedToBackup;
+    if (acBoundary == "PrimaryPublished")
+        return PartyQuestCampaignPersistenceBoundary::PrimaryPublished;
+    if (acBoundary == "BackupTemporaryVerified")
+        return PartyQuestCampaignPersistenceBoundary::BackupTemporaryVerified;
+    return PartyQuestCampaignPersistenceBoundary::BackupPublished;
+}
+
+void RunCampaignPersistenceCrashProcess(
+    const std::filesystem::path& acRoot,
+    const char* apBoundary)
+{
+    REQUIRE(SetCampaignPersistenceEnvironment(
+        "TP_CAMPAIGN_PERSISTENCE_CRASH_ROOT", acRoot.string()));
+    REQUIRE(SetCampaignPersistenceEnvironment(
+        "TP_CAMPAIGN_PERSISTENCE_CRASH_BOUNDARY", apBoundary));
+
+    const auto& executable = GetTPTestsExecutablePath();
+    REQUIRE_FALSE(executable.empty());
+    const std::string command =
+        "\"" + executable.string() +
+        "\" \"Campaign metadata atomic publication crash helper\" --reporter compact";
+    const int exitCode = std::system(command.c_str());
+
+    ClearCampaignPersistenceEnvironment("TP_CAMPAIGN_PERSISTENCE_CRASH_BOUNDARY");
+    ClearCampaignPersistenceEnvironment("TP_CAMPAIGN_PERSISTENCE_CRASH_ROOT");
+    REQUIRE(exitCode != 0);
+
+    const PartyQuestCampaignId campaignId{900, 1000};
+    const auto path = acRoot / "campaign.id";
+    const auto loaded = PartyQuestCampaignPersistence::Load(path);
+    REQUIRE(loaded.Status == PartyQuestCampaignPersistenceStatus::Success);
+    REQUIRE(loaded.CampaignId == campaignId);
+
+    const std::string boundary = apBoundary;
+    const bool beforePrimaryMove = boundary == "TemporaryVerified";
+    REQUIRE(loaded.CanonicalArchiveRequired != beforePrimaryMove);
+    REQUIRE(loaded.UsedTemporary == (boundary == "PrimaryMovedToBackup"));
+    REQUIRE(loaded.BackupRefreshRequired ==
+        (boundary == "PrimaryMovedToBackup" ||
+         boundary == "PrimaryPublished" ||
+         boundary == "BackupTemporaryVerified"));
+
+    REQUIRE(PartyQuestCampaignPersistence::SaveAtomically(path, campaignId) ==
+            PartyQuestCampaignPersistenceStatus::Success);
+    const auto converged = PartyQuestCampaignPersistence::Load(path);
+    REQUIRE(converged.Status == PartyQuestCampaignPersistenceStatus::Success);
+    REQUIRE(converged.CampaignId == campaignId);
+    REQUIRE(converged.CanonicalArchiveRequired);
+    REQUIRE_FALSE(converged.UsedBackup);
+    REQUIRE_FALSE(converged.UsedTemporary);
+    REQUIRE_FALSE(converged.BackupRefreshRequired);
+}
 } // namespace
+
+TEST_CASE("Campaign metadata atomic publication crash helper", "[.][quest.party-state.campaign-id][fault-helper]")
+{
+    const char* rootValue = std::getenv("TP_CAMPAIGN_PERSISTENCE_CRASH_ROOT");
+    const char* boundaryValue = std::getenv("TP_CAMPAIGN_PERSISTENCE_CRASH_BOUNDARY");
+    REQUIRE(rootValue != nullptr);
+    REQUIRE(boundaryValue != nullptr);
+
+    const std::string boundary = boundaryValue;
+    REQUIRE((boundary == "TemporaryVerified" ||
+        boundary == "PrimaryMovedToBackup" ||
+        boundary == "PrimaryPublished" ||
+        boundary == "BackupTemporaryVerified" ||
+        boundary == "BackupPublished"));
+
+    const PartyQuestCampaignId campaignId{900, 1000};
+    const auto path = std::filesystem::path(rootValue) / "campaign.id";
+    auto backupPath = path;
+    backupPath += ".bak";
+    const auto legacy = BuildLegacyV1Archive(campaignId);
+    WriteArchive(path, legacy);
+    WriteArchive(backupPath, legacy);
+
+    CampaignPersistenceCrashBoundary crash{
+        ParseCampaignPersistenceBoundary(boundary)};
+    const auto status = PartyQuestCampaignPersistence::SaveAtomically(
+        path,
+        campaignId,
+        {CrashCampaignPersistenceAtBoundary, &crash});
+    FAIL("Crash boundary returned with status " << static_cast<int>(status));
+}
 
 TEST_CASE("Campaign identity metadata round-trips deterministically", "[quest.party-state.campaign-id]")
 {
@@ -220,4 +348,41 @@ TEST_CASE("Archive-required backup prevents rollback to legacy metadata", "[ques
     REQUIRE_FALSE(conflictingLoad.CampaignId.has_value());
 
     RemoveCampaignIdentityFiles(path);
+}
+
+TEST_CASE("Campaign metadata publication windows survive abrupt process termination", "[quest.party-state.campaign-id][fault][process]")
+{
+    const auto runBoundary = [](const char* apBoundary)
+    {
+        const auto nonce = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        const auto root = std::filesystem::temp_directory_path() /
+            ("tp_party_quest_campaign_crash_" + std::to_string(nonce));
+        std::error_code ec;
+        std::filesystem::create_directories(root, ec);
+        REQUIRE_FALSE(ec);
+        RunCampaignPersistenceCrashProcess(root, apBoundary);
+        std::filesystem::remove_all(root, ec);
+        REQUIRE_FALSE(ec);
+    };
+
+    SECTION("verified temporary preserves legacy primary authority")
+    {
+        runBoundary("TemporaryVerified");
+    }
+    SECTION("primary move exposes the verified v2 temporary")
+    {
+        runBoundary("PrimaryMovedToBackup");
+    }
+    SECTION("primary publication requires backup refresh")
+    {
+        runBoundary("PrimaryPublished");
+    }
+    SECTION("verified backup temporary remains restart-convergent")
+    {
+        runBoundary("BackupTemporaryVerified");
+    }
+    SECTION("published primary and backup are immediately complete")
+    {
+        runBoundary("BackupPublished");
+    }
 }

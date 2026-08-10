@@ -110,6 +110,29 @@ bool WriteFile(const std::filesystem::path& acPath, const std::vector<uint8_t>& 
     file.flush();
     return file.good();
 }
+
+PartyQuestCampaignPersistenceStatus VerifyFile(
+    const std::filesystem::path& acPath,
+    const PartyQuestCampaignId& acCampaignId,
+    const std::vector<uint8_t>& acExpectedBytes)
+{
+    std::vector<uint8_t> bytes;
+    const auto readStatus = ReadFile(acPath, bytes);
+    if (readStatus != PartyQuestCampaignPersistenceStatus::Success)
+        return readStatus;
+
+    const auto decoded = PartyQuestCampaignPersistence::Decode(bytes);
+    if (decoded.Status != PartyQuestCampaignPersistenceStatus::Success)
+        return decoded.Status;
+    if (decoded.CampaignId != acCampaignId ||
+        !decoded.CanonicalArchiveRequired ||
+        bytes != acExpectedBytes)
+    {
+        return PartyQuestCampaignPersistenceStatus::InvalidData;
+    }
+
+    return PartyQuestCampaignPersistenceStatus::Success;
+}
 } // namespace
 
 PartyQuestCampaignId PartyQuestCampaignPersistence::GenerateCampaignId() noexcept
@@ -264,7 +287,8 @@ PartyQuestCampaignPersistenceResult PartyQuestCampaignPersistence::Decode(
 
 PartyQuestCampaignPersistenceStatus PartyQuestCampaignPersistence::SaveAtomically(
     const std::filesystem::path& acPath,
-    const PartyQuestCampaignId& acCampaignId)
+    const PartyQuestCampaignId& acCampaignId,
+    PartyQuestCampaignPersistenceHooks aHooks)
 {
     const std::vector<uint8_t> encoded = Encode(acCampaignId);
     if (encoded.empty())
@@ -291,6 +315,17 @@ PartyQuestCampaignPersistenceStatus PartyQuestCampaignPersistence::SaveAtomicall
         std::filesystem::remove(temporaryPath, ec);
         return PartyQuestCampaignPersistenceStatus::IoError;
     }
+    const auto temporaryStatus = VerifyFile(temporaryPath, acCampaignId, encoded);
+    if (temporaryStatus != PartyQuestCampaignPersistenceStatus::Success)
+    {
+        std::filesystem::remove(temporaryPath, ec);
+        return temporaryStatus;
+    }
+    if (aHooks.Invoke(PartyQuestCampaignPersistenceBoundary::TemporaryVerified) ==
+        PartyQuestCampaignPersistenceDirective::FailClosed)
+    {
+        return PartyQuestCampaignPersistenceStatus::IoError;
+    }
 
     const bool hadPrimary = std::filesystem::exists(acPath, ec) && !ec;
     if (hadPrimary)
@@ -301,6 +336,11 @@ PartyQuestCampaignPersistenceStatus PartyQuestCampaignPersistence::SaveAtomicall
         if (ec)
         {
             std::filesystem::remove(temporaryPath, ec);
+            return PartyQuestCampaignPersistenceStatus::IoError;
+        }
+        if (aHooks.Invoke(PartyQuestCampaignPersistenceBoundary::PrimaryMovedToBackup) ==
+            PartyQuestCampaignPersistenceDirective::FailClosed)
+        {
             return PartyQuestCampaignPersistenceStatus::IoError;
         }
     }
@@ -314,6 +354,11 @@ PartyQuestCampaignPersistenceStatus PartyQuestCampaignPersistence::SaveAtomicall
         std::filesystem::remove(temporaryPath, restoreError);
         return PartyQuestCampaignPersistenceStatus::IoError;
     }
+    if (aHooks.Invoke(PartyQuestCampaignPersistenceBoundary::PrimaryPublished) ==
+        PartyQuestCampaignPersistenceDirective::FailClosed)
+    {
+        return PartyQuestCampaignPersistenceStatus::IoError;
+    }
 
     auto backupTemporaryPath = backupPath;
     backupTemporaryPath += ".tmp";
@@ -322,6 +367,20 @@ PartyQuestCampaignPersistenceStatus PartyQuestCampaignPersistence::SaveAtomicall
     if (!WriteFile(backupTemporaryPath, encoded))
     {
         std::filesystem::remove(backupTemporaryPath, ec);
+        return PartyQuestCampaignPersistenceStatus::IoError;
+    }
+    const auto backupTemporaryStatus = VerifyFile(
+        backupTemporaryPath,
+        acCampaignId,
+        encoded);
+    if (backupTemporaryStatus != PartyQuestCampaignPersistenceStatus::Success)
+    {
+        std::filesystem::remove(backupTemporaryPath, ec);
+        return backupTemporaryStatus;
+    }
+    if (aHooks.Invoke(PartyQuestCampaignPersistenceBoundary::BackupTemporaryVerified) ==
+        PartyQuestCampaignPersistenceDirective::FailClosed)
+    {
         return PartyQuestCampaignPersistenceStatus::IoError;
     }
 
@@ -335,6 +394,11 @@ PartyQuestCampaignPersistenceStatus PartyQuestCampaignPersistence::SaveAtomicall
     if (ec)
     {
         std::filesystem::remove(backupTemporaryPath, ec);
+        return PartyQuestCampaignPersistenceStatus::IoError;
+    }
+    if (aHooks.Invoke(PartyQuestCampaignPersistenceBoundary::BackupPublished) ==
+        PartyQuestCampaignPersistenceDirective::FailClosed)
+    {
         return PartyQuestCampaignPersistenceStatus::IoError;
     }
 
@@ -385,6 +449,29 @@ PartyQuestCampaignPersistenceResult PartyQuestCampaignPersistence::Load(
              !backupResult.CanonicalArchiveRequired);
 
         return primaryResult;
+    }
+
+    auto temporaryPath = acPath;
+    temporaryPath += ".tmp";
+    bytes.clear();
+    const PartyQuestCampaignPersistenceStatus temporaryReadStatus = ReadFile(temporaryPath, bytes);
+    if (temporaryReadStatus == PartyQuestCampaignPersistenceStatus::Success)
+    {
+        auto temporaryResult = Decode(bytes);
+        if (temporaryResult.Status == PartyQuestCampaignPersistenceStatus::Success)
+        {
+            if (backupResult.Status == PartyQuestCampaignPersistenceStatus::Success &&
+                temporaryResult.CampaignId != backupResult.CampaignId)
+            {
+                temporaryResult.Status = PartyQuestCampaignPersistenceStatus::InvalidData;
+                temporaryResult.CampaignId.reset();
+                return temporaryResult;
+            }
+
+            temporaryResult.UsedTemporary = true;
+            temporaryResult.BackupRefreshRequired = true;
+            return temporaryResult;
+        }
     }
 
     if (backupResult.Status == PartyQuestCampaignPersistenceStatus::Success)
