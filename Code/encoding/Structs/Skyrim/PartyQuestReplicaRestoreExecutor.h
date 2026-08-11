@@ -46,10 +46,11 @@ enum class PartyQuestReplicaRestoreExecutionDirective : uint8_t
 };
 
 /**
- * Ephemeral local execution observer used by deterministic fault validation.
- * It is never serialized, receives no paths or bytes, and grants no mutation
- * authority. Returning FailClosed makes the current filesystem transaction
- * enter its normal rollback path.
+ * Ephemeral local execution hooks used by deterministic fault validation.
+ * They are never serialized and grant no path or mutation authority. The
+ * optional disk-space probe receives only the trusted player-root path chosen
+ * by the executor and can only report available bytes. Production callers leave
+ * it unset so std::filesystem::space remains authoritative.
  */
 struct PartyQuestReplicaRestoreExecutionHooks
 {
@@ -58,10 +59,15 @@ struct PartyQuestReplicaRestoreExecutionHooks
         size_t,
         void*) noexcept;
     using Clock = uint64_t (*)(void*) noexcept;
+    using DiskSpaceQuery = bool (*)(
+        const std::filesystem::path&,
+        uint64_t&,
+        void*) noexcept;
 
     Callback OnBoundary{};
     void* Context{};
     Clock MonotonicNow{};
+    DiskSpaceQuery QueryAvailableBytes{};
 
     [[nodiscard]] PartyQuestReplicaRestoreExecutionDirective Invoke(
         PartyQuestReplicaRestoreExecutionBoundary aBoundary,
