@@ -324,7 +324,9 @@ TEST_CASE("Live abort cannot clear a possibly mutated repair before checkpoint r
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
 
-    REQUIRE(session.CompleteLiveCheckpointRestore(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::CompleteLiveCheckpointRestore(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(session.GetCoordinator().GetActive() == nullptr);
     REQUIRE(capture.States.back().Active == std::nullopt);
@@ -362,13 +364,17 @@ TEST_CASE("Crash recovery barrier is not cleared in memory when persistence fail
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
 
     capture.Allow = false;
-    REQUIRE(session.CompleteCrashCheckpointRestore(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::CompleteCrashCheckpointRestore(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure);
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
     REQUIRE(session.GetCoordinator().GetRecoveryRecord() != nullptr);
 
     capture.Allow = true;
-    REQUIRE(session.CompleteCrashCheckpointRestore(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::CompleteCrashCheckpointRestore(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
     REQUIRE(session.GetCoordinator().GetRecoveryRecord() == nullptr);
