@@ -443,6 +443,37 @@ PartyQuestReplicaRestoreExecutionReport MakeReport(
     return report;
 }
 
+PartyQuestReplicaRestoreExecutionReport MakeEmptyReport(
+    PartyQuestReplicaRestoreExecutionStatus aStatus,
+    const std::filesystem::path& acJournalPath = {})
+{
+    PartyQuestReplicaRestoreJournalState emptyState;
+    auto report = MakeReport(emptyState, aStatus);
+    report.JournalPath = acJournalPath;
+    return report;
+}
+
+PartyQuestReplicaRestoreExecutionStatus TranslateWorkspaceLeaseStatus(
+    PartyQuestReplicaWorkspaceLeaseStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestReplicaWorkspaceLeaseStatus::Busy:
+        return PartyQuestReplicaRestoreExecutionStatus::WorkspaceBusy;
+    case PartyQuestReplicaWorkspaceLeaseStatus::InvalidIdentity:
+        return PartyQuestReplicaRestoreExecutionStatus::InvalidIdentity;
+    case PartyQuestReplicaWorkspaceLeaseStatus::InvalidLayout:
+        return PartyQuestReplicaRestoreExecutionStatus::InvalidPlan;
+    case PartyQuestReplicaWorkspaceLeaseStatus::InvalidNamespace:
+        return PartyQuestReplicaRestoreExecutionStatus::UnsafePath;
+    case PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted:
+    case PartyQuestReplicaWorkspaceLeaseStatus::IoError:
+    case PartyQuestReplicaWorkspaceLeaseStatus::Acquired:
+        return PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
+    }
+    return PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
+}
+
 PartyQuestReplicaRestoreExecutionStatus CheckPreMutationResourceBudget(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaRestoreJournalState& acState,
@@ -924,7 +955,6 @@ bool RemoveTransactionDirectory(
         if (ec)
             return false;
 
-        // Revalidate the complete observed set before the first deletion.
         for (const auto& file : observedFiles)
         {
             if (InspectNode(file) != NodeState::RegularFile ||
@@ -1411,29 +1441,76 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execut
 {
     try
     {
+        if (!acPlan.CampaignId.IsValid() || !acPlan.PlayerProfileId.IsValid())
+            return MakeEmptyReport(PartyQuestReplicaRestoreExecutionStatus::InvalidIdentity);
+
+        PartyQuestReplicaWorkspaceLease lease;
+        const auto leaseStatus = lease.Acquire(
+            acPaths,
+            acPlan.CampaignId,
+            acPlan.PlayerProfileId);
+        if (leaseStatus != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
+        {
+            return MakeEmptyReport(TranslateWorkspaceLeaseStatus(leaseStatus));
+        }
+
+        const auto capability = lease.CreatePublicationCapability(
+            acPaths,
+            acPlan.CampaignId,
+            acPlan.PlayerProfileId);
+        if (!capability.IsVerified())
+        {
+            return MakeEmptyReport(
+                PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure);
+        }
+
+        return ExecuteAuthorized(
+            acPaths,
+            acPlan,
+            aRestoreId,
+            capability,
+            aHooks);
+    }
+    catch (...)
+    {
+        return MakeEmptyReport(PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure);
+    }
+}
+
+PartyQuestReplicaRestoreExecutionReport
+PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestReplicaRestorePlan& acPlan,
+    uint64_t aRestoreId,
+    const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
+    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
+{
+    try
+    {
+        if (!acWorkspaceCapability.Protects(
+                acPaths,
+                acPlan.CampaignId,
+                acPlan.PlayerProfileId))
+        {
+            return MakeEmptyReport(
+                PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure);
+        }
+
         RestoreExecutionDeadline deadline;
         if (!BuildDeadline(aHooks, deadline))
         {
-            PartyQuestReplicaRestoreJournalState emptyState;
-            auto report = MakeReport(
-                emptyState,
+            return MakeEmptyReport(
                 PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
-            report.JournalPath.clear();
-            return report;
         }
 
         const auto prepared = PartyQuestReplicaRestoreJournal::Prepare(
             acPaths, acPlan, aRestoreId);
         if (!prepared.IsReady())
         {
-            PartyQuestReplicaRestoreJournalState emptyState;
-            auto report = MakeReport(
-                emptyState,
+            return MakeEmptyReport(
                 prepared.Status == PartyQuestReplicaRestoreJournalStatus::InvalidIdentity
                     ? PartyQuestReplicaRestoreExecutionStatus::InvalidIdentity
                     : PartyQuestReplicaRestoreExecutionStatus::InvalidPlan);
-            report.JournalPath.clear();
-            return report;
         }
 
         auto state = *prepared.State;
@@ -1465,12 +1542,7 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execut
     }
     catch (...)
     {
-        PartyQuestReplicaRestoreJournalState emptyState;
-        auto report = MakeReport(
-            emptyState,
-            PartyQuestReplicaRestoreExecutionStatus::InvalidPlan);
-        report.JournalPath.clear();
-        return report;
+        return MakeEmptyReport(PartyQuestReplicaRestoreExecutionStatus::InvalidPlan);
     }
 }
 
@@ -1483,6 +1555,66 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
 {
     try
     {
+        PartyQuestReplicaWorkspaceLease lease;
+        const auto leaseStatus = lease.Acquire(
+            acPaths,
+            acExpectedCampaignId,
+            acExpectedPlayerProfileId);
+        if (leaseStatus != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
+        {
+            return MakeEmptyReport(
+                TranslateWorkspaceLeaseStatus(leaseStatus),
+                acJournalPath);
+        }
+
+        const auto capability = lease.CreatePublicationCapability(
+            acPaths,
+            acExpectedCampaignId,
+            acExpectedPlayerProfileId);
+        if (!capability.IsVerified())
+        {
+            return MakeEmptyReport(
+                PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure,
+                acJournalPath);
+        }
+
+        return RecoverAuthorized(
+            acPaths,
+            acExpectedCampaignId,
+            acExpectedPlayerProfileId,
+            acJournalPath,
+            capability,
+            aHooks);
+    }
+    catch (...)
+    {
+        return MakeEmptyReport(
+            PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure,
+            acJournalPath);
+    }
+}
+
+PartyQuestReplicaRestoreExecutionReport
+PartyQuestReplicaRestoreExecutor::RecoverAuthorized(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCampaignId& acExpectedCampaignId,
+    const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
+    const std::filesystem::path& acJournalPath,
+    const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
+    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
+{
+    try
+    {
+        if (!acWorkspaceCapability.Protects(
+                acPaths,
+                acExpectedCampaignId,
+                acExpectedPlayerProfileId))
+        {
+            return MakeEmptyReport(
+                PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure,
+                acJournalPath);
+        }
+
         RestoreExecutionDeadline deadline;
         const bool hasDeadline = BuildDeadline(aHooks, deadline);
 
@@ -1502,12 +1634,9 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
         if (loaded.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success ||
             !loaded.State)
         {
-            PartyQuestReplicaRestoreJournalState emptyState;
-            auto report = MakeReport(
-                emptyState,
-                PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed);
-            report.JournalPath = acJournalPath;
-            return report;
+            return MakeEmptyReport(
+                PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed,
+                acJournalPath);
         }
 
         auto state = *loaded.State;
@@ -1614,10 +1743,6 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
                     state,
                     PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
             }
-            // Committed records that verification succeeded at an earlier
-            // instant; it is not proof that the live replica still contains
-            // those bytes. Never report an exact restore without re-reading
-            // every destination from the persisted journal.
             if (!PartyQuestReplicaRestoreJournal::VerifyRestoredTargets(state))
             {
                 return MakeReport(
@@ -1648,10 +1773,7 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
     {
     }
 
-    PartyQuestReplicaRestoreJournalState emptyState;
-    auto report = MakeReport(
-        emptyState,
-        PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed);
-    report.JournalPath = acJournalPath;
-    return report;
+    return MakeEmptyReport(
+        PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed,
+        acJournalPath);
 }
