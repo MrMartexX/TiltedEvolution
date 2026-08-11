@@ -237,14 +237,42 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
             return result;
         }
 
-        // RuntimeSessionOwner already holds the kernel workspace lease. Reuse
-        // its exact session-bound capability when present; a standalone guarded
-        // session falls back to the public executor, which acquires its own OS
-        // lease before any restore publication or live-file mutation.
-        const auto workspaceCapability =
+        // Keep one exact workspace capability alive through restore, the
+        // independent live-byte reverify and the durable barrier clear. The
+        // capability itself pins the native lease state, so a temporary lease
+        // can hand off ownership without opening a TOCTOU window.
+        auto workspaceCapability =
             PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
                 aSession,
                 acPaths);
+        if (!workspaceCapability.IsVerified())
+        {
+            PartyQuestReplicaWorkspaceLease recoveryLease;
+            const auto leaseStatus = recoveryLease.Acquire(
+                acPaths,
+                aSession.GetCampaignId(),
+                aSession.GetPlayerProfileId());
+            if (leaseStatus != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
+            {
+                result.RestoreStatus = leaseStatus ==
+                        PartyQuestReplicaWorkspaceLeaseStatus::Busy
+                    ? PartyQuestReplicaRestoreExecutionStatus::WorkspaceBusy
+                    : PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
+                result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
+                return result;
+            }
+            workspaceCapability = recoveryLease.CreatePublicationCapability(
+                acPaths,
+                aSession.GetCampaignId(),
+                aSession.GetPlayerProfileId());
+            if (!workspaceCapability.IsVerified())
+            {
+                result.RestoreStatus =
+                    PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
+                result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
+                return result;
+            }
+        }
 
         PartyQuestReplicaRestoreExecutionReport restoreReport;
         const auto loadedJournal =
@@ -258,32 +286,21 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
                 return result;
             }
 
-            restoreReport = workspaceCapability.IsVerified()
-                ? PartyQuestReplicaRestoreExecutor::RecoverAuthorized(
-                      acPaths,
-                      aSession.GetCampaignId(),
-                      aSession.GetPlayerProfileId(),
-                      journalPath,
-                      workspaceCapability)
-                : PartyQuestReplicaRestoreExecutor::Recover(
-                      acPaths,
-                      aSession.GetCampaignId(),
-                      aSession.GetPlayerProfileId(),
-                      journalPath);
+            restoreReport = PartyQuestReplicaRestoreExecutor::RecoverAuthorized(
+                acPaths,
+                aSession.GetCampaignId(),
+                aSession.GetPlayerProfileId(),
+                journalPath,
+                workspaceCapability);
         }
         else if (loadedJournal.Status ==
             PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
         {
-            restoreReport = workspaceCapability.IsVerified()
-                ? PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(
-                      acPaths,
-                      restorePlan,
-                      restoreId,
-                      workspaceCapability)
-                : PartyQuestReplicaRestoreExecutor::Execute(
-                      acPaths,
-                      restorePlan,
-                      restoreId);
+            restoreReport = PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(
+                acPaths,
+                restorePlan,
+                restoreId,
+                workspaceCapability);
         }
         else
         {
