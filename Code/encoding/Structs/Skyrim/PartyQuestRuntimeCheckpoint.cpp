@@ -143,7 +143,8 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
     PartyQuestRuntimeApplySession& aSession,
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaCopyPlan& acCheckpointPlan,
-    const PartyQuestRuntimeCheckpointCoverageAuthorization& acCoverage) noexcept
+    const PartyQuestRuntimeCheckpointCoverageAuthorization& acCoverage,
+    const PartyQuestReplicaWorkspacePublicationCapability* apPublicationCapability) noexcept
 {
     try
     {
@@ -231,10 +232,16 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
                 manifestPath);
         }
 
-        const auto snapshot = manager.EnsureRevisionCheckpoint(
-            PartyQuestCheckpointKind::PreRepair,
-            targetWorldRevision,
-            acCheckpointPlan);
+        const auto snapshot = apPublicationCapability
+            ? manager.EnsureRevisionCheckpoint(
+                  PartyQuestCheckpointKind::PreRepair,
+                  targetWorldRevision,
+                  acCheckpointPlan,
+                  *apPublicationCapability)
+            : manager.EnsureRevisionCheckpoint(
+                  PartyQuestCheckpointKind::PreRepair,
+                  targetWorldRevision,
+                  acCheckpointPlan);
 
         PartyQuestRuntimeCheckpointResult result = MakeResult(
             snapshot.Status == PartyQuestReplicaSnapshotStatus::AlreadyReady
