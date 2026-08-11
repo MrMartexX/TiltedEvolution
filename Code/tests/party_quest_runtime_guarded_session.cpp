@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
+#include <party_quest_runtime_apply_session_test_access.h>
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
@@ -94,7 +95,9 @@ void AdvanceToReadyToCommit(
     PartyQuestRuntimeApplySession& aSession,
     const PartyQuestRuntimeApplyRequest& acRequest)
 {
-    REQUIRE(aSession.MarkCheckpointCreated(acRequest.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                aSession,
+                acRequest.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(aGuarded.ArmRuntimeMutation(acRequest.TransactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
@@ -241,7 +244,9 @@ TEST_CASE("Guarded quiescence refuses naked transaction assertion and keeps save
     const auto request = BuildGuardRequest(24009);
 
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(guarded.ArmRuntimeMutation(request.TransactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
@@ -287,7 +292,9 @@ TEST_CASE("Possible runtime mutation keeps save guard when abort requires checkp
     PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
     const auto request = BuildGuardRequest(24006);
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(guarded.ArmRuntimeMutation(request.TransactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
