@@ -4,6 +4,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeApply.h>
 
 #include <functional>
+#include <optional>
 
 class PartyQuestRuntimeCheckpointCoordinator;
 class PartyQuestRuntimeGuardedSession;
@@ -48,6 +49,11 @@ struct PartyQuestRuntimeDurableVerificationResult
  * code must cross PartyQuestRuntimeCheckpointCoordinator and
  * PartyQuestRuntimeGuardedSession so a logical recovery bit cannot substitute
  * for the physical checkpoint/SaveGuard authority chain.
+ *
+ * Mutation arming also requires a process-local executable authority captured
+ * from an exact validated request with DryRunOnly=false. That authority is not
+ * durable by design: every pre-mutation restart must rebuild current runtime
+ * compatibility rather than resurrect an old dispatch capability.
  *
  * Current storage does not claim power-loss durability.
  * The session still does not call Skyrim, Papyrus, save APIs or file I/O itself.
@@ -164,6 +170,7 @@ private:
     PartyQuestPersistenceGuarantee m_persistenceGuarantee{
         PartyQuestPersistenceGuarantee::Volatile};
     PartyQuestRuntimeApplyCoordinator m_coordinator;
+    std::optional<PartyQuestRuntimeApplyIdentity> m_runtimeMutationAuthority;
 
     friend class PartyQuestRuntimeCheckpointCoordinator;
     friend class PartyQuestRuntimeGuardedSession;
