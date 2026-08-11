@@ -15,7 +15,9 @@ struct PartyQuestReplicaWorkspaceLeaseState;
  * workspace while a publication still holds this proof.
  *
  * A default-constructed or moved-from capability is intentionally unverified.
- * Only PartyQuestReplicaWorkspaceLease can create a verified capability.
+ * Only PartyQuestReplicaWorkspaceLease can create a verified capability. Copies
+ * are safe proof copies: they cannot change authority and each pins the same
+ * already-acquired native lease state until that proof is released.
  */
 class PartyQuestReplicaWorkspacePublicationCapability final
 {
@@ -24,9 +26,9 @@ public:
     ~PartyQuestReplicaWorkspacePublicationCapability() noexcept = default;
 
     PartyQuestReplicaWorkspacePublicationCapability(
-        const PartyQuestReplicaWorkspacePublicationCapability&) = delete;
+        const PartyQuestReplicaWorkspacePublicationCapability&) noexcept = default;
     PartyQuestReplicaWorkspacePublicationCapability& operator=(
-        const PartyQuestReplicaWorkspacePublicationCapability&) = delete;
+        const PartyQuestReplicaWorkspacePublicationCapability&) noexcept = default;
     PartyQuestReplicaWorkspacePublicationCapability(
         PartyQuestReplicaWorkspacePublicationCapability&&) noexcept = default;
     PartyQuestReplicaWorkspacePublicationCapability& operator=(
