@@ -270,7 +270,8 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
             return result;
         }
 
-        result.RuntimeTransition = aSession.MarkCheckpointCreated(transactionId);
+        result.RuntimeTransition =
+            aSession.MarkCheckpointCreatedInternal(transactionId);
         switch (result.RuntimeTransition)
         {
         case PartyQuestRuntimeDurableTransitionStatus::Applied:
