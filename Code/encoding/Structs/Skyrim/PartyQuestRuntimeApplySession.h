@@ -7,6 +7,7 @@
 #include <optional>
 
 class PartyQuestRuntimeCheckpointCoordinator;
+class PartyQuestRuntimeRecoveryCoordinator;
 class PartyQuestRuntimeGuardedSession;
 class PartyQuestRuntimeApplySessionTestAccess;
 
@@ -45,11 +46,11 @@ struct PartyQuestRuntimeDurableVerificationResult
  *
  * Every state-changing transition is first applied to a copy, then the complete
  * campaign/player-bound recovery state is persisted through the bound handler,
- * and only then published in memory. The low-level checkpoint-created and
- * mutation-arm transitions are intentionally caller-inaccessible in production:
- * code must cross PartyQuestRuntimeCheckpointCoordinator and
- * PartyQuestRuntimeGuardedSession so a logical recovery bit cannot substitute
- * for the physical checkpoint/SaveGuard authority chain.
+ * and only then published in memory. The low-level checkpoint-created,
+ * mutation-arm and recovery-completion transitions are intentionally
+ * caller-inaccessible in production: code must cross the corresponding
+ * checkpoint, guarded or recovery coordinator so logical durable bits cannot
+ * substitute for physical checkpoint/SaveGuard/restore authority.
  *
  * Mutation arming also requires a process-local executable authority captured
  * from an exact validated request with DryRunOnly=false. That authority is not
@@ -108,8 +109,10 @@ public:
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus AbortBeforeMutation(uint64_t aTransactionId);
 
     /**
-     * Call only after the external LastKnownGood/pre-repair checkpoint has
-     * actually been restored in the same process.
+     * Legacy compatibility surface. A transaction id is not proof that the
+     * exact PreRepair checkpoint was physically restored, so direct completion
+     * fails closed. Use PartyQuestRuntimeRecoveryCoordinator through the guarded
+     * recovery path instead.
      */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus CompleteLiveCheckpointRestore(
         uint64_t aTransactionId);
@@ -118,8 +121,10 @@ public:
         const PartyQuestRuntimeRecoveryState& acState) noexcept;
 
     /**
-     * Call only after an external checkpoint restore resolved a crash-recovery
-     * barrier. The cleared barrier is persisted before it becomes visible.
+     * Legacy compatibility surface. A transaction id is not proof that the
+     * exact crash checkpoint was physically restored, so direct completion
+     * fails closed. Use PartyQuestRuntimeRecoveryCoordinator through the guarded
+     * recovery path instead.
      */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus CompleteCrashCheckpointRestore(
         uint64_t aTransactionId);
@@ -156,6 +161,20 @@ private:
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutationInternal(
         uint64_t aTransactionId);
 
+    /**
+     * Clears a live post-mutation barrier only after the recovery coordinator
+     * has independently verified the exact restored live replica bytes.
+     */
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus CompleteLiveCheckpointRestoreInternal(
+        uint64_t aTransactionId);
+
+    /**
+     * Clears a persisted crash barrier only after the recovery coordinator has
+     * independently verified the exact restored live replica bytes.
+     */
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus CompleteCrashCheckpointRestoreInternal(
+        uint64_t aTransactionId);
+
     [[nodiscard]] bool Persist(const PartyQuestRuntimeApplyCoordinator& acCandidate) const;
     [[nodiscard]] static PartyQuestRuntimeDurableBeginStatus TranslateBeginStatus(
         PartyQuestRuntimeApplyBeginStatus aStatus) noexcept;
@@ -169,6 +188,7 @@ private:
     std::optional<PartyQuestRuntimeApplyIdentity> m_runtimeMutationAuthority;
 
     friend class PartyQuestRuntimeCheckpointCoordinator;
+    friend class PartyQuestRuntimeRecoveryCoordinator;
     friend class PartyQuestRuntimeGuardedSession;
     // Defined only in Code/tests; no production implementation/API exists.
     friend class PartyQuestRuntimeApplySessionTestAccess;
