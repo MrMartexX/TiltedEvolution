@@ -144,30 +144,33 @@ public:
     }
 
 #if defined(TP_PARTY_QUEST_LOW_LEVEL_TEST_ACCESS)
-    /** ABI-stable TPTests wrappers; production builds never expose these names. */
-    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreatedForTests(
+    /**
+     * TPTests-only source compatibility wrappers. The implementation methods
+     * keep one stable private ABI in every translation unit.
+     */
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreated(
         uint64_t aTransactionId)
     {
-        return MarkCheckpointCreated(aTransactionId);
+        return MarkCheckpointCreatedInternal(aTransactionId);
     }
 
-    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutationForTests(
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutation(
         uint64_t aTransactionId)
     {
-        return ArmRuntimeMutation(aTransactionId);
+        return ArmRuntimeMutationInternal(aTransactionId);
     }
 #endif
 
 private:
     /** Only the full checkpoint coordinator may publish this durable bit. */
-    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreated(
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreatedInternal(
         uint64_t aTransactionId);
 
     /**
      * Persists RuntimeMutationMayHaveOccurred before returning Applied. Only the
      * guarded wrapper may cross this barrier in production.
      */
-    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutation(
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutationInternal(
         uint64_t aTransactionId);
 
     [[nodiscard]] bool Persist(const PartyQuestRuntimeApplyCoordinator& acCandidate) const;
@@ -185,14 +188,3 @@ private:
     friend class PartyQuestRuntimeCheckpointCoordinator;
     friend class PartyQuestRuntimeGuardedSession;
 };
-
-// Existing state-machine tests intentionally exercise these two low-level
-// transitions. Route those source-level calls through public inline wrappers
-// without changing the access class (and therefore MSVC decorated symbol) of
-// the production implementation. The surface regression test undefines the
-// TP access macro before including this header, so it sees neither wrapper nor
-// aliases.
-#if defined(TP_PARTY_QUEST_LOW_LEVEL_TEST_ACCESS)
-#define MarkCheckpointCreated(...) MarkCheckpointCreatedForTests(__VA_ARGS__)
-#define ArmRuntimeMutation(...) ArmRuntimeMutationForTests(__VA_ARGS__)
-#endif
