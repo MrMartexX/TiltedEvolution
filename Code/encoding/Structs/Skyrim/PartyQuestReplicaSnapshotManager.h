@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+class PartyQuestReplicaWorkspacePublicationCapability;
+
 enum class PartyQuestReplicaSnapshotStatus : uint8_t
 {
     Ready,
@@ -16,7 +18,9 @@ enum class PartyQuestReplicaSnapshotStatus : uint8_t
     ManifestPersistenceFailed,
     ManifestRecoveryRequired,
     ManifestInvalid,
-    RevisionCheckpointLimitExceeded
+    RevisionCheckpointLimitExceeded,
+    WorkspaceBusy,
+    WorkspaceLeaseFailure
 };
 
 struct PartyQuestReplicaSnapshotResult
@@ -43,6 +47,12 @@ struct PartyQuestReplicaSnapshotResult
  * those exact verified bytes and finish the manifest instead of overwriting
  * them. Partial or conflicting destinations fail closed.
  *
+ * Revision-scoped publication is additionally serialized by the exact
+ * campaign/player kernel-backed workspace lease. Standalone callers acquire
+ * that lease for the duration of EnsureRevisionCheckpoint(); runtime callers
+ * that already own it may pass a pinned publication capability instead of
+ * attempting a second OS lock.
+ *
  * No Skyrim save API, quest runtime mutation, or solo-save deletion is called.
  */
 class PartyQuestReplicaSnapshotManager final
@@ -63,11 +73,25 @@ public:
         uint64_t aCampaignWorldRevision,
         const PartyQuestReplicaCopyPlan& acPlan) const noexcept;
 
-    /** Production-oriented immutable revision checkpoint publication. */
+    /**
+     * Standalone immutable revision publication. Acquires the exact workspace
+     * lease before admission and holds it through manifest verification.
+     */
     [[nodiscard]] PartyQuestReplicaSnapshotResult EnsureRevisionCheckpoint(
         PartyQuestCheckpointKind aKind,
         uint64_t aCampaignWorldRevision,
         const PartyQuestReplicaCopyPlan& acPlan) const noexcept;
+
+    /**
+     * Owner-bound immutable revision publication. The supplied capability must
+     * protect this exact campaign/player layout and pins the native lease state
+     * for the full publication call.
+     */
+    [[nodiscard]] PartyQuestReplicaSnapshotResult EnsureRevisionCheckpoint(
+        PartyQuestCheckpointKind aKind,
+        uint64_t aCampaignWorldRevision,
+        const PartyQuestReplicaCopyPlan& acPlan,
+        const PartyQuestReplicaWorkspacePublicationCapability& acPublicationCapability) const noexcept;
 
     [[nodiscard]] PartyQuestReplicaSnapshotResult ValidateImportedReplica() const noexcept;
 
@@ -84,7 +108,8 @@ private:
         bool aRevisionScoped,
         PartyQuestCheckpointKind aKind,
         uint64_t aCampaignWorldRevision,
-        const PartyQuestReplicaCopyPlan& acPlan) const noexcept;
+        const PartyQuestReplicaCopyPlan& acPlan,
+        const PartyQuestReplicaWorkspacePublicationCapability* apPublicationCapability) const noexcept;
 
     [[nodiscard]] PartyQuestReplicaSnapshotResult Validate(
         bool aCheckpoint,
