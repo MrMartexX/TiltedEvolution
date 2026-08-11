@@ -1,8 +1,13 @@
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 #include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 
+#include <charconv>
+#include <limits>
 #include <mutex>
 #include <optional>
+#include <set>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <utility>
 #include <vector>
@@ -36,50 +41,341 @@ enum class RevisionCheckpointAdmission : uint8_t
     InvalidNamespace
 };
 
-RevisionCheckpointAdmission AdmitNewRevisionCheckpoint(
-    const PartyQuestCoopSavePaths& acPaths,
-    PartyQuestCheckpointKind aKind,
-    uint64_t aCampaignWorldRevision) noexcept
+std::optional<std::filesystem::path> AbsoluteNormalized(
+    const std::filesystem::path& acPath) noexcept
 {
     try
     {
-        const auto target = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
+        if (acPath.empty())
+            return std::nullopt;
+        std::error_code ec;
+        const auto absolute = std::filesystem::absolute(acPath, ec);
+        if (ec || absolute.empty())
+            return std::nullopt;
+        return absolute.lexically_normal();
+    }
+    catch (...)
+    {
+        return std::nullopt;
+    }
+}
+
+bool HasRevisionPrefix(const std::string& acName) noexcept
+{
+    constexpr std::string_view prefix = "Revision_";
+    return acName.size() >= prefix.size() &&
+        std::string_view(acName).substr(0, prefix.size()) == prefix;
+}
+
+std::optional<uint64_t> ParseRevisionDirectoryName(
+    const std::filesystem::path& acPath) noexcept
+{
+    try
+    {
+        constexpr std::string_view prefix = "Revision_";
+        const std::string name = acPath.filename().generic_string();
+        if (name.size() != prefix.size() + 16 || !HasRevisionPrefix(name))
+            return std::nullopt;
+
+        uint64_t revision{};
+        const char* first = name.data() + prefix.size();
+        const char* last = name.data() + name.size();
+        const auto parsed = std::from_chars(first, last, revision, 16);
+        if (parsed.ec != std::errc{} ||
+            parsed.ptr != last ||
+            revision == 0 ||
+            PartyQuestCoopSaveLayout::FormatWorldRevision(revision) != name)
+        {
+            return std::nullopt;
+        }
+        return revision;
+    }
+    catch (...)
+    {
+        return std::nullopt;
+    }
+}
+
+bool IsKnownLegacyCheckpointEntry(
+    const std::filesystem::path& acPath,
+    const std::filesystem::file_status& acStatus) noexcept
+{
+    try
+    {
+        const std::string name = acPath.filename().generic_string();
+        if (name == "saves" || name == "sidecars")
+            return std::filesystem::is_directory(acStatus);
+        if (name == "manifest.bin" ||
+            name == "manifest.bin.tmp" ||
+            name == "manifest.bin.bak")
+        {
+            return std::filesystem::is_regular_file(acStatus);
+        }
+        return false;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+RevisionCheckpointAdmission AddRetainedBytes(
+    uint64_t aBytes,
+    uint64_t& aRetainedBytes) noexcept
+{
+    if (!PartyQuestDurableResourcePolicy::CanRetainRevisionCheckpointBytes(
+            aRetainedBytes,
+            aBytes))
+    {
+        return RevisionCheckpointAdmission::LimitExceeded;
+    }
+    aRetainedBytes += aBytes;
+    return RevisionCheckpointAdmission::Allowed;
+}
+
+RevisionCheckpointAdmission ScanRevisionDirectory(
+    const std::filesystem::path& acRevisionRoot,
+    bool aTargetRevision,
+    const std::set<std::filesystem::path>& acExpectedTargetFiles,
+    size_t& aInspectedEntries,
+    uint64_t& aRetainedBytes) noexcept
+{
+    try
+    {
+        const auto revisionRoot = AbsoluteNormalized(acRevisionRoot);
+        if (!revisionRoot ||
+            !PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(*revisionRoot))
+        {
+            return RevisionCheckpointAdmission::InvalidNamespace;
+        }
+
+        std::error_code ec;
+        const auto canonicalRoot = std::filesystem::weakly_canonical(*revisionRoot, ec);
+        if (ec || canonicalRoot.empty() || canonicalRoot != *revisionRoot)
+            return RevisionCheckpointAdmission::InvalidNamespace;
+
+        std::filesystem::recursive_directory_iterator iterator(*revisionRoot, ec);
+        const std::filesystem::recursive_directory_iterator end;
+        if (ec)
+            return RevisionCheckpointAdmission::InvalidNamespace;
+
+        for (; iterator != end; iterator.increment(ec))
+        {
+            if (ec)
+                return RevisionCheckpointAdmission::InvalidNamespace;
+            if (++aInspectedEntries >
+                PartyQuestDurableResourcePolicy::MaxRevisionCheckpointInspectedEntriesPerKind)
+            {
+                return RevisionCheckpointAdmission::LimitExceeded;
+            }
+
+            const auto path = AbsoluteNormalized(iterator->path());
+            if (!path ||
+                !PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(*path) ||
+                !PartyQuestReplicaFilePlanner::IsContainedBy(*revisionRoot, *path))
+            {
+                return RevisionCheckpointAdmission::InvalidNamespace;
+            }
+
+            const auto status = iterator->symlink_status(ec);
+            if (ec || std::filesystem::is_symlink(status))
+                return RevisionCheckpointAdmission::InvalidNamespace;
+            if (std::filesystem::is_directory(status))
+                continue;
+            if (!std::filesystem::is_regular_file(status))
+                return RevisionCheckpointAdmission::InvalidNamespace;
+
+            const uintmax_t observedSize = std::filesystem::file_size(*path, ec);
+            if (ec || observedSize > std::numeric_limits<uint64_t>::max())
+                return RevisionCheckpointAdmission::InvalidNamespace;
+
+            // Existing expected final destinations in the target revision are
+            // replaced by the immutable plan's expected sizes below. Excluding
+            // them here avoids double-charging exact partial/complete-orphan
+            // crash evidence while every unrelated/stale byte remains charged.
+            if (aTargetRevision && acExpectedTargetFiles.contains(*path))
+                continue;
+
+            const auto added = AddRetainedBytes(
+                static_cast<uint64_t>(observedSize),
+                aRetainedBytes);
+            if (added != RevisionCheckpointAdmission::Allowed)
+                return added;
+        }
+        return ec
+            ? RevisionCheckpointAdmission::InvalidNamespace
+            : RevisionCheckpointAdmission::Allowed;
+    }
+    catch (...)
+    {
+        return RevisionCheckpointAdmission::InvalidNamespace;
+    }
+}
+
+RevisionCheckpointAdmission AdmitNewRevisionCheckpoint(
+    const PartyQuestCoopSavePaths& acPaths,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
+    const PartyQuestReplicaCopyPlan& acPlan,
+    const PartyQuestReplicaManifest& acExpectedManifest) noexcept
+{
+    try
+    {
+        const auto kindRootRaw = PartyQuestCoopSaveLayout::GetCheckpointDirectory(
+            acPaths,
+            aKind);
+        const auto targetRaw = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
             acPaths,
             aKind,
             aCampaignWorldRevision);
-        std::error_code ec;
-        const auto targetStatus = std::filesystem::symlink_status(target, ec);
-        if (!ec && targetStatus.type() != std::filesystem::file_type::not_found)
-            return RevisionCheckpointAdmission::Allowed;
-        if (ec && !IsMissingError(ec))
+        const auto kindRoot = AbsoluteNormalized(kindRootRaw);
+        const auto target = AbsoluteNormalized(targetRaw);
+        if (!kindRoot || !target ||
+            !PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(*kindRoot) ||
+            !PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(*target) ||
+            !PartyQuestReplicaFilePlanner::IsContainedBy(*kindRoot, *target))
+        {
             return RevisionCheckpointAdmission::InvalidNamespace;
+        }
 
-        const auto kindRoot = PartyQuestCoopSaveLayout::GetCheckpointDirectory(acPaths, aKind);
-        ec.clear();
-        const auto rootStatus = std::filesystem::symlink_status(kindRoot, ec);
-        if (rootStatus.type() == std::filesystem::file_type::not_found || IsMissingError(ec))
+        uint64_t plannedFileBytes{};
+        std::set<std::filesystem::path> expectedTargetFiles;
+        for (const auto& operation : acPlan.Operations)
+        {
+            if (operation.ExpectedSize >
+                    PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes ||
+                operation.ExpectedSize >
+                    PartyQuestReplicaResourcePolicy::MaxTotalFileBytes - plannedFileBytes)
+            {
+                return RevisionCheckpointAdmission::LimitExceeded;
+            }
+
+            const auto destination = AbsoluteNormalized(operation.DestinationPath);
+            if (!destination ||
+                !PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(*destination) ||
+                !PartyQuestReplicaFilePlanner::IsContainedBy(*target, *destination) ||
+                !expectedTargetFiles.emplace(*destination).second)
+            {
+                return RevisionCheckpointAdmission::InvalidNamespace;
+            }
+            plannedFileBytes += operation.ExpectedSize;
+        }
+
+        const auto encodedManifest = PartyQuestReplicaManifestStore::Encode(
+            acExpectedManifest);
+        if (encodedManifest.empty() ||
+            encodedManifest.size() >
+                PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes)
+        {
+            return RevisionCheckpointAdmission::LimitExceeded;
+        }
+        const uint64_t manifestBytes = static_cast<uint64_t>(encodedManifest.size());
+        if (plannedFileBytes > std::numeric_limits<uint64_t>::max() - manifestBytes)
+            return RevisionCheckpointAdmission::LimitExceeded;
+        const uint64_t plannedTargetBytes = plannedFileBytes + manifestBytes;
+        if (!PartyQuestDurableResourcePolicy::CanRetainRevisionCheckpointBytes(
+                0,
+                plannedTargetBytes))
+        {
+            return RevisionCheckpointAdmission::LimitExceeded;
+        }
+
+        std::error_code ec;
+        const auto rootStatus = std::filesystem::symlink_status(*kindRoot, ec);
+        if (rootStatus.type() == std::filesystem::file_type::not_found ||
+            IsMissingError(ec))
+        {
             return RevisionCheckpointAdmission::Allowed;
+        }
         if (ec || std::filesystem::is_symlink(rootStatus) ||
             !std::filesystem::is_directory(rootStatus))
         {
             return RevisionCheckpointAdmission::InvalidNamespace;
         }
 
-        uint64_t entries{};
-        std::filesystem::directory_iterator iterator(kindRoot, ec);
+        ec.clear();
+        const auto canonicalKindRoot = std::filesystem::weakly_canonical(*kindRoot, ec);
+        if (ec || canonicalKindRoot.empty() || canonicalKindRoot != *kindRoot)
+            return RevisionCheckpointAdmission::InvalidNamespace;
+
+        uint64_t revisionCount{};
+        bool targetPresent{};
+        size_t inspectedEntries{};
+        uint64_t retainedBytes{};
+        std::filesystem::directory_iterator iterator(*kindRoot, ec);
         const std::filesystem::directory_iterator end;
         if (ec)
             return RevisionCheckpointAdmission::InvalidNamespace;
+
         for (; iterator != end; iterator.increment(ec))
         {
             if (ec)
                 return RevisionCheckpointAdmission::InvalidNamespace;
-            if (++entries >= PartyQuestDurableResourcePolicy::MaxRevisionCheckpointsPerKind)
+            if (++inspectedEntries >
+                PartyQuestDurableResourcePolicy::MaxRevisionCheckpointInspectedEntriesPerKind)
+            {
                 return RevisionCheckpointAdmission::LimitExceeded;
+            }
+
+            const auto entryPath = AbsoluteNormalized(iterator->path());
+            if (!entryPath ||
+                !PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(*entryPath) ||
+                !PartyQuestReplicaFilePlanner::IsContainedBy(*kindRoot, *entryPath))
+            {
+                return RevisionCheckpointAdmission::InvalidNamespace;
+            }
+
+            const auto status = iterator->symlink_status(ec);
+            if (ec || std::filesystem::is_symlink(status))
+                return RevisionCheckpointAdmission::InvalidNamespace;
+
+            const std::string name = entryPath->filename().generic_string();
+            const auto revision = ParseRevisionDirectoryName(*entryPath);
+            if (!revision)
+            {
+                if (HasRevisionPrefix(name) ||
+                    !IsKnownLegacyCheckpointEntry(*entryPath, status))
+                {
+                    return RevisionCheckpointAdmission::InvalidNamespace;
+                }
+                continue;
+            }
+            if (!std::filesystem::is_directory(status))
+                return RevisionCheckpointAdmission::InvalidNamespace;
+
+            ++revisionCount;
+            if (revisionCount >
+                PartyQuestDurableResourcePolicy::MaxRevisionCheckpointsPerKind)
+            {
+                return RevisionCheckpointAdmission::LimitExceeded;
+            }
+
+            const bool isTarget = *revision == aCampaignWorldRevision;
+            targetPresent = targetPresent || isTarget;
+            const auto scanned = ScanRevisionDirectory(
+                *entryPath,
+                isTarget,
+                expectedTargetFiles,
+                inspectedEntries,
+                retainedBytes);
+            if (scanned != RevisionCheckpointAdmission::Allowed)
+                return scanned;
         }
-        return ec
-            ? RevisionCheckpointAdmission::InvalidNamespace
-            : RevisionCheckpointAdmission::Allowed;
+        if (ec)
+            return RevisionCheckpointAdmission::InvalidNamespace;
+
+        if (!targetPresent &&
+            revisionCount >=
+                PartyQuestDurableResourcePolicy::MaxRevisionCheckpointsPerKind)
+        {
+            return RevisionCheckpointAdmission::LimitExceeded;
+        }
+
+        return PartyQuestDurableResourcePolicy::CanRetainRevisionCheckpointBytes(
+                   retainedBytes,
+                   plannedTargetBytes)
+            ? RevisionCheckpointAdmission::Allowed
+            : RevisionCheckpointAdmission::LimitExceeded;
     }
     catch (...)
     {
@@ -518,7 +814,9 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
             const auto admission = AdmitNewRevisionCheckpoint(
                 m_paths,
                 aKind,
-                aCampaignWorldRevision);
+                aCampaignWorldRevision,
+                acPlan,
+                *expectedManifest);
             if (admission == RevisionCheckpointAdmission::LimitExceeded)
                 return Failure(PartyQuestReplicaSnapshotStatus::RevisionCheckpointLimitExceeded);
             if (admission != RevisionCheckpointAdmission::Allowed)
