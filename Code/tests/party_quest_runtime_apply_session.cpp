@@ -10,6 +10,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 
+#include <party_quest_runtime_apply_session_test_access.h>
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
@@ -147,10 +148,14 @@ TEST_CASE("Process-crash runtime session persists every critical transition befo
     REQUIRE(capture.States.back().PlayerProfileId == kSessionPlayer);
     REQUIRE(capture.States.back().Active->State == PartyQuestRuntimeApplyState::AwaitingCheckpoint);
 
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(capture.States.back().Active->State == PartyQuestRuntimeApplyState::ReadyToApply);
 
-    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::ArmRuntimeMutation(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(capture.States.back().Active->State == PartyQuestRuntimeApplyState::WaitingForPapyrus);
     REQUIRE(capture.States.back().Active->RuntimeMutationMayHaveOccurred);
     REQUIRE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
@@ -198,10 +203,14 @@ TEST_CASE("Mutation arm persistence failure leaves runtime mutation explicitly u
     const auto request = BuildSessionRequest(3001, GameId(33, 0x1000));
 
     REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
 
     capture.Allow = false;
-    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::ArmRuntimeMutation(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure);
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::ReadyToApply);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
@@ -220,9 +229,13 @@ TEST_CASE("Dry-run-only runtime request cannot arm mutation", "[quest.party-stat
     REQUIRE(request.Plan.MutationAuthorization.IsVerified());
 
     REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
-    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::ArmRuntimeMutation(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::InvalidState);
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
@@ -237,8 +250,12 @@ TEST_CASE("Quiescence persistence failure consumes proof and requires fresh obse
     const auto request = BuildSessionRequest(3501, GameId(33, 0x1500));
 
     REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
-    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::ArmRuntimeMutation(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
 
     PartyQuestPapyrusQuiescenceTracker tracker;
     REQUIRE(tracker.Begin(request.TransactionId));
@@ -268,8 +285,12 @@ TEST_CASE("Commit persistence failure keeps verified repair guarded and uncommit
     const auto request = BuildSessionRequest(4001, GameId(34, 0x1000));
 
     REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
-    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::ArmRuntimeMutation(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(MarkSessionPapyrusQuiescent(session, request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE_FALSE(session.SubmitResnapshot(request.TransactionId, request.CanonicalSnapshot).PersistenceFailed);
@@ -291,8 +312,12 @@ TEST_CASE("Live abort cannot clear a possibly mutated repair before checkpoint r
     const auto request = BuildSessionRequest(5001, GameId(35, 0x1000));
 
     REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
-    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::ArmRuntimeMutation(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
 
     REQUIRE(session.AbortBeforeMutation(request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired);
@@ -312,7 +337,9 @@ TEST_CASE("Pre-mutation abort is persisted and needs no checkpoint rollback", "[
     const auto request = BuildSessionRequest(6001, GameId(36, 0x1000));
 
     REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(session.AbortBeforeMutation(request.TransactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(session.GetCoordinator().GetActive() == nullptr);
     REQUIRE(capture.States.back().Active == std::nullopt);
@@ -380,9 +407,13 @@ TEST_CASE("Volatile persistence cannot arm runtime mutation", "[quest.party-stat
     const auto request = BuildSessionRequest(3002, GameId(33, 0x1001));
 
     REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
-    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::ArmRuntimeMutation(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::ReadyToApply);
