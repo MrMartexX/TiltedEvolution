@@ -1,11 +1,15 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestReplicaRestoreJournal.h>
+#include <Structs/Skyrim/PartyQuestReplicaWorkspaceLease.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+
+class PartyQuestRuntimeRecoveryCoordinator;
+class PartyQuestReplicaRestoreExecutorTestAccess;
 
 enum class PartyQuestReplicaRestoreExecutionStatus : uint8_t
 {
@@ -29,7 +33,9 @@ enum class PartyQuestReplicaRestoreExecutionStatus : uint8_t
     RollbackFailed,
     ResourceLimitExceeded,
     InsufficientDiskSpace,
-    OperationDeadlineExceeded
+    OperationDeadlineExceeded,
+    WorkspaceBusy,
+    WorkspaceLeaseFailure
 };
 
 enum class PartyQuestReplicaRestoreExecutionBoundary : uint8_t
@@ -137,17 +143,26 @@ struct PartyQuestReplicaRestoreExecutionReport
  * load, TESQuest or Papyrus APIs and it is confined to the current player's
  * CoopCampaigns replica tree.
  *
+ * Every public Execute/Recover call acquires an exact kernel-backed workspace
+ * lease before it may publish a restore journal, staging file, rollback file or
+ * live replica replacement. RuntimeSessionOwner already holds that lease for a
+ * hydrated session, so the runtime recovery coordinator uses the private
+ * capability-bearing entry points instead of recursively acquiring the same OS
+ * lock. The capability is exact-root/campaign/player bound and pins the native
+ * lease for the whole synchronous execution.
+ *
  * Safety ordering for a fresh restore is:
  *
- *  1. persist Prepared journal;
- *  2. create and verify rollback copies of every existing live destination;
- *  3. persist BackupsReady;
- *  4. stage and verify all checkpoint bytes without changing live files;
- *  5. re-verify that live destinations still match the Prepared observations;
- *  6. persist MutationStarted;
- *  7. replace live files using same-directory staged renames;
- *  8. verify all restored targets and persist Restored;
- *  9. persist Committed.
+ *  1. prove the exact workspace lease/capability;
+ *  2. persist Prepared journal;
+ *  3. create and verify rollback copies of every existing live destination;
+ *  4. persist BackupsReady;
+ *  5. stage and verify all checkpoint bytes without changing live files;
+ *  6. re-verify that live destinations still match the Prepared observations;
+ *  7. persist MutationStarted;
+ *  8. replace live files using same-directory staged renames;
+ *  9. verify all restored targets and persist Restored;
+ * 10. persist Committed.
  *
  * A crash observed at MutationStarted is never resumed forward blindly. Recover
  * first restores the pre-mutation bytes (or removes destinations that originally
@@ -182,4 +197,24 @@ public:
         const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
         const std::filesystem::path& acJournalPath,
         PartyQuestReplicaRestoreExecutionHooks aHooks = {}) noexcept;
+
+private:
+    [[nodiscard]] static PartyQuestReplicaRestoreExecutionReport ExecuteAuthorized(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestReplicaRestorePlan& acPlan,
+        uint64_t aRestoreId,
+        const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
+        PartyQuestReplicaRestoreExecutionHooks aHooks = {}) noexcept;
+
+    [[nodiscard]] static PartyQuestReplicaRestoreExecutionReport RecoverAuthorized(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestCampaignId& acExpectedCampaignId,
+        const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
+        const std::filesystem::path& acJournalPath,
+        const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
+        PartyQuestReplicaRestoreExecutionHooks aHooks = {}) noexcept;
+
+    friend class PartyQuestRuntimeRecoveryCoordinator;
+    // Defined only in Code/tests for exact capability rejection tests.
+    friend class PartyQuestReplicaRestoreExecutorTestAccess;
 };
