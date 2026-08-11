@@ -6,6 +6,9 @@
 #include <cstdint>
 #include <filesystem>
 
+class PartyQuestRuntimeGuardedSession;
+class PartyQuestRuntimeRecoveryCoordinatorTestAccess;
+
 enum class PartyQuestRuntimeRecoveryStatus : uint8_t
 {
     Restored,
@@ -81,8 +84,12 @@ struct PartyQuestRuntimeRecoveryResult
  * condition such as a terminal Papyrus monitor outcome. Both use the same exact
  * PreRepair revision and deterministic RestoreId contract.
  *
- * SaveGuardBusy/SaveGuardReleaseFailed are reserved for the guarded wrapper;
- * this filesystem coordinator itself never manipulates the save lease.
+ * The filesystem coordinator does not itself manipulate SaveGuard. Its entry
+ * points are therefore private and callable in production only by
+ * PartyQuestRuntimeGuardedSession, which proves/acquires the exact physical
+ * process guard before entering this layer and releases it only after resolved
+ * recovery. Direct use would let logical SaveGuardActive substitute for the
+ * physical save lease and is intentionally not a production API.
  *
  * A recovered rollback is deliberately not success: the old replica bytes are
  * safe again, but the requested checkpoint still has to be restored by a later
@@ -90,7 +97,7 @@ struct PartyQuestRuntimeRecoveryResult
  */
 class PartyQuestRuntimeRecoveryCoordinator final
 {
-public:
+private:
     [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveCrashRecovery(
         PartyQuestRuntimeApplySession& aSession,
         const PartyQuestCoopSavePaths& acPaths) noexcept;
@@ -98,4 +105,9 @@ public:
     [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveLiveRecovery(
         PartyQuestRuntimeApplySession& aSession,
         const PartyQuestCoopSavePaths& acPaths) noexcept;
+
+    friend class PartyQuestRuntimeGuardedSession;
+    // Defined only in Code/tests; isolated filesystem recovery tests use it
+    // without expanding the production authority surface.
+    friend class PartyQuestRuntimeRecoveryCoordinatorTestAccess;
 };
