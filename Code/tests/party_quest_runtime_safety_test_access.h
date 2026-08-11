@@ -29,13 +29,29 @@ public:
             aDryRunOnly);
     }
 
+    /**
+     * Low-level lifecycle tests model a future executable adapter explicitly.
+     * Production BuildApplyPlan() remains DryRunOnly=true and cannot call this.
+     */
     static void AuthorizePlan(
         PartyQuestApplyPlan& aPlan,
         const QuestSnapshot& acSnapshot) noexcept
     {
+        aPlan.DryRunOnly = false;
         aPlan.MutationAuthorization = MakeMutationAuthorization(
             acSnapshot,
             aPlan.Actions,
-            aPlan.DryRunOnly);
+            false);
+    }
+
+    static void AuthorizeDryRunPlan(
+        PartyQuestApplyPlan& aPlan,
+        const QuestSnapshot& acSnapshot) noexcept
+    {
+        aPlan.DryRunOnly = true;
+        aPlan.MutationAuthorization = MakeMutationAuthorization(
+            acSnapshot,
+            aPlan.Actions,
+            true);
     }
 };
