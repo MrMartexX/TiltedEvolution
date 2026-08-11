@@ -22,6 +22,22 @@ struct PartyQuestDurableResourcePolicy
     static constexpr uint64_t MaxCommittedRuntimeRecords = 65536;
     static constexpr uint64_t MaxCanonicalJournalRecords = 65536;
     static constexpr uint64_t MaxRevisionCheckpointsPerKind = 128;
+    // Count and bytes are independent local authorities. Without the byte cap,
+    // 128 individually valid maximum-sized replica publications could retain an
+    // impractically large checkpoint namespace. The scan bound keeps admission
+    // itself finite even when the on-disk namespace has been externally altered.
+    static constexpr uint64_t MaxRevisionCheckpointRetainedBytesPerKind =
+        8ull * 1024ull * 1024ull * 1024ull;
+    static constexpr size_t MaxRevisionCheckpointInspectedEntriesPerKind = 100000;
+
+    [[nodiscard]] static bool CanRetainRevisionCheckpointBytes(
+        uint64_t aRetainedBytes,
+        uint64_t aPlannedBytes) noexcept
+    {
+        return aRetainedBytes <= MaxRevisionCheckpointRetainedBytesPerKind &&
+            aPlannedBytes <=
+                MaxRevisionCheckpointRetainedBytesPerKind - aRetainedBytes;
+    }
 
     [[nodiscard]] static bool IsFilesystemPathWithinBudget(
         const std::filesystem::path& acPath) noexcept
