@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
+#include <party_quest_runtime_apply_session_test_access.h>
 #include <party_quest_runtime_safety_test_access.h>
 #include <party_quest_pre_repair_checkpoint_test_access.h>
 
@@ -72,7 +73,9 @@ TEST_CASE("Checkpoint capture epoch is unique and blocks mutation until checkpoi
     REQUIRE(duplicate.Status == PartyQuestCheckpointCaptureEpochStatus::AlreadyActive);
     REQUIRE_FALSE(duplicate.Epoch.IsVerified());
 
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
