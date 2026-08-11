@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
+#include <Structs/Skyrim/PartyQuestRuntimeWorkspacePublicationAuthority.h>
 
 #include <iomanip>
 #include <sstream>
@@ -217,6 +218,11 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             return result;
         }
 
+        const auto workspaceCapability =
+            PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
+                aSession,
+                acPaths);
+
         PartyQuestReplicaRestoreExecutionReport restoreReport;
         const auto loadedJournal =
             PartyQuestReplicaRestoreJournalPersistence::Load(journalPath);
@@ -229,19 +235,32 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
                 return result;
             }
 
-            restoreReport = PartyQuestReplicaRestoreExecutor::Recover(
-                acPaths,
-                aSession.GetCampaignId(),
-                aSession.GetPlayerProfileId(),
-                journalPath);
+            restoreReport = workspaceCapability.IsVerified()
+                ? PartyQuestReplicaRestoreExecutor::RecoverAuthorized(
+                      acPaths,
+                      aSession.GetCampaignId(),
+                      aSession.GetPlayerProfileId(),
+                      journalPath,
+                      workspaceCapability)
+                : PartyQuestReplicaRestoreExecutor::Recover(
+                      acPaths,
+                      aSession.GetCampaignId(),
+                      aSession.GetPlayerProfileId(),
+                      journalPath);
         }
         else if (loadedJournal.Status ==
             PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
         {
-            restoreReport = PartyQuestReplicaRestoreExecutor::Execute(
-                acPaths,
-                restorePlan,
-                restoreId);
+            restoreReport = workspaceCapability.IsVerified()
+                ? PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(
+                      acPaths,
+                      restorePlan,
+                      restoreId,
+                      workspaceCapability)
+                : PartyQuestReplicaRestoreExecutor::Execute(
+                      acPaths,
+                      restorePlan,
+                      restoreId);
         }
         else
         {
@@ -271,10 +290,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             return result;
         }
 
-        // A Committed restore journal records that the filesystem transaction
-        // finished at some earlier instant; it is not proof that another actor
-        // has not changed the live replica since then. Independently verify the
-        // exact checkpoint bytes immediately before clearing the quest barrier.
         if (!VerifyLiveDestinations(restorePlan))
         {
             result.RestoreStatus =
