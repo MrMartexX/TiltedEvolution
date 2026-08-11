@@ -218,10 +218,42 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             return result;
         }
 
-        const auto workspaceCapability =
+        // Keep the exact workspace capability alive until the live bytes have
+        // been independently reverified and the durable crash barrier is
+        // cleared. A RuntimeSessionOwner capability is reused; otherwise a
+        // temporary OS lease hands its pinned native state to this capability.
+        auto workspaceCapability =
             PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
                 aSession,
                 acPaths);
+        if (!workspaceCapability.IsVerified())
+        {
+            PartyQuestReplicaWorkspaceLease recoveryLease;
+            const auto leaseStatus = recoveryLease.Acquire(
+                acPaths,
+                aSession.GetCampaignId(),
+                aSession.GetPlayerProfileId());
+            if (leaseStatus != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
+            {
+                result.RestoreStatus = leaseStatus ==
+                        PartyQuestReplicaWorkspaceLeaseStatus::Busy
+                    ? PartyQuestReplicaRestoreExecutionStatus::WorkspaceBusy
+                    : PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
+                result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
+                return result;
+            }
+            workspaceCapability = recoveryLease.CreatePublicationCapability(
+                acPaths,
+                aSession.GetCampaignId(),
+                aSession.GetPlayerProfileId());
+            if (!workspaceCapability.IsVerified())
+            {
+                result.RestoreStatus =
+                    PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
+                result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
+                return result;
+            }
+        }
 
         PartyQuestReplicaRestoreExecutionReport restoreReport;
         const auto loadedJournal =
@@ -235,32 +267,21 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
                 return result;
             }
 
-            restoreReport = workspaceCapability.IsVerified()
-                ? PartyQuestReplicaRestoreExecutor::RecoverAuthorized(
-                      acPaths,
-                      aSession.GetCampaignId(),
-                      aSession.GetPlayerProfileId(),
-                      journalPath,
-                      workspaceCapability)
-                : PartyQuestReplicaRestoreExecutor::Recover(
-                      acPaths,
-                      aSession.GetCampaignId(),
-                      aSession.GetPlayerProfileId(),
-                      journalPath);
+            restoreReport = PartyQuestReplicaRestoreExecutor::RecoverAuthorized(
+                acPaths,
+                aSession.GetCampaignId(),
+                aSession.GetPlayerProfileId(),
+                journalPath,
+                workspaceCapability);
         }
         else if (loadedJournal.Status ==
             PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
         {
-            restoreReport = workspaceCapability.IsVerified()
-                ? PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(
-                      acPaths,
-                      restorePlan,
-                      restoreId,
-                      workspaceCapability)
-                : PartyQuestReplicaRestoreExecutor::Execute(
-                      acPaths,
-                      restorePlan,
-                      restoreId);
+            restoreReport = PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(
+                acPaths,
+                restorePlan,
+                restoreId,
+                workspaceCapability);
         }
         else
         {
