@@ -2,6 +2,8 @@
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 
+#include <party_quest_runtime_apply_session_test_access.h>
+
 #include <catch2/catch.hpp>
 
 namespace
@@ -98,13 +100,17 @@ TEST_CASE("Production BuildApplyPlan cannot arm runtime mutation while DryRunOnl
     // Low-level test access models the durable checkpoint bit only. Even with
     // that bit present, the real production dry-run plan must not mint the
     // process-local executable authority required by ArmRuntimeMutation().
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::ReadyToApply);
 
-    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::ArmRuntimeMutation(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::InvalidState);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::ReadyToApply);
