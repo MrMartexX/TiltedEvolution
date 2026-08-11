@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeCheckpoint.h>
+#include <Structs/Skyrim/PartyQuestRuntimeWorkspacePublicationAuthority.h>
 
 #include <array>
 #include <cstring>
@@ -230,6 +231,16 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
                 PartyQuestRuntimeCheckpointStatus::InvalidCheckpointPlan,
                 pActive,
                 manifestPath);
+        }
+
+        PartyQuestReplicaWorkspacePublicationCapability ownerCapability;
+        if (!apPublicationCapability)
+        {
+            ownerCapability = PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
+                aSession,
+                acPaths);
+            if (ownerCapability.IsVerified())
+                apPublicationCapability = &ownerCapability;
         }
 
         const auto snapshot = apPublicationCapability
