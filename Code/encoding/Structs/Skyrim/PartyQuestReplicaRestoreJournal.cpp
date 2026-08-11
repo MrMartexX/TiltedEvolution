@@ -733,8 +733,13 @@ PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
 {
     try
     {
+        if (acPath.empty())
+            return PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
+        if (!PartyQuestDurableResourcePolicy::IsMutableFilesystemPathWithinBudget(acPath))
+            return PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded;
+
         const auto bytes = Encode(acState);
-        if (bytes.empty() || acPath.empty())
+        if (bytes.empty())
             return PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
 
         std::error_code ec;
@@ -802,7 +807,7 @@ PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
         {
             std::error_code restoreEc;
             const bool primaryMissing = !std::filesystem::exists(acPath, restoreEc);
-            if (( !restoreEc || IsMissingError(restoreEc)) && primaryMissing)
+            if ((!restoreEc || IsMissingError(restoreEc)) && primaryMissing)
             {
                 restoreEc.clear();
                 if (std::filesystem::exists(backup, restoreEc) && !restoreEc)
@@ -830,12 +835,26 @@ PartyQuestReplicaRestoreJournalPersistenceResult
 PartyQuestReplicaRestoreJournalPersistence::Load(
     const std::filesystem::path& acPath)
 {
-    PartyQuestReplicaRestoreJournalPersistenceResult primary = DecodeFile(acPath);
+    PartyQuestReplicaRestoreJournalPersistenceResult primary;
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(acPath))
+    {
+        primary.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded;
+        return primary;
+    }
+
+    primary = DecodeFile(acPath);
     if (primary.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
         return primary;
 
     std::filesystem::path temporary = acPath;
     temporary += ".tmp";
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(temporary))
+    {
+        primary.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded;
+        primary.State.reset();
+        return primary;
+    }
+
     auto temp = DecodeFile(temporary);
     if (temp.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success &&
         temp.State)
@@ -868,6 +887,13 @@ PartyQuestReplicaRestoreJournalPersistence::Load(
 
     std::filesystem::path backup = acPath;
     backup += ".bak";
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(backup))
+    {
+        primary.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded;
+        primary.State.reset();
+        return primary;
+    }
+
     const auto staleBackup = DecodeFile(backup);
     if (staleBackup.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
     {
