@@ -75,10 +75,12 @@ struct PartyQuestRuntimeRecoveryResult
  *  4. prove an exact kernel-backed workspace lease/capability;
  *  5. resume the transaction-id-bound durable restore journal when it exists,
  *     otherwise start a new crash-resumable restore;
- *  6. independently reverify the live replica against the exact restore plan;
+ *  6. while still holding that exact workspace capability, independently
+ *     reverify the live replica against the exact restore plan;
  *  7. clear the runtime barrier only when checkpoint bytes are proven present
  *     in the live co-op replica at that instant;
- *  8. persist that cleared runtime state before exposing recovery as resolved.
+ *  8. persist that cleared runtime state before releasing workspace authority
+ *     or exposing recovery as resolved.
  *
  * ResolveCrashRecovery() consumes a persisted crash barrier. ResolveLiveRecovery()
  * consumes the still-active post-mutation transaction after a live fail-closed
@@ -89,10 +91,11 @@ struct PartyQuestRuntimeRecoveryResult
  * neither substitutes for the other. PartyQuestRuntimeGuardedSession proves or
  * acquires the physical process SaveGuard before entering this layer. For the
  * filesystem restore, a RuntimeSessionOwner-bound session reuses its exact
- * session-bound workspace publication capability; a standalone guarded session
- * falls back to the public restore executor, which acquires its own exact OS
- * workspace lease. This avoids recursive acquisition while still making every
- * journal/staging/live-replica mutation lease-bound.
+ * session-bound workspace publication capability. A standalone guarded session
+ * acquires an exact temporary OS workspace lease and hands its pinned native
+ * lease state to a capability that remains alive through restore, live-byte
+ * re-verification and durable barrier clear. This prevents both recursive owner
+ * lock acquisition and a post-restore/pre-clear workspace TOCTOU window.
  *
  * The coordinator entry points remain private because direct use could let a
  * logical SaveGuardActive field substitute for the physical process save lease.
