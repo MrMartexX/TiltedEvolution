@@ -72,24 +72,32 @@ struct PartyQuestRuntimeRecoveryResult
  *  1. require the exact campaign/player-bound runtime recovery record;
  *  2. load and verify the exact PreRepair revision manifest and bytes;
  *  3. build a confined restore plan;
- *  4. resume the transaction-id-bound durable restore journal when it exists,
+ *  4. prove an exact kernel-backed workspace lease/capability;
+ *  5. resume the transaction-id-bound durable restore journal when it exists,
  *     otherwise start a new crash-resumable restore;
- *  5. independently reverify the live replica against the exact restore plan;
- *  6. clear the runtime barrier only when checkpoint bytes are proven present
+ *  6. independently reverify the live replica against the exact restore plan;
+ *  7. clear the runtime barrier only when checkpoint bytes are proven present
  *     in the live co-op replica at that instant;
- *  7. persist that cleared runtime state before exposing recovery as resolved.
+ *  8. persist that cleared runtime state before exposing recovery as resolved.
  *
  * ResolveCrashRecovery() consumes a persisted crash barrier. ResolveLiveRecovery()
  * consumes the still-active post-mutation transaction after a live fail-closed
  * condition such as a terminal Papyrus monitor outcome. Both use the same exact
  * PreRepair revision and deterministic RestoreId contract.
  *
- * The filesystem coordinator does not itself manipulate SaveGuard. Its entry
- * points are therefore private and callable in production only by
- * PartyQuestRuntimeGuardedSession, which proves/acquires the exact physical
- * process guard before entering this layer and releases it only after resolved
- * recovery. Direct use would let logical SaveGuardActive substitute for the
- * physical save lease and is intentionally not a production API.
+ * SaveGuard and the replica workspace lease protect different boundaries and
+ * neither substitutes for the other. PartyQuestRuntimeGuardedSession proves or
+ * acquires the physical process SaveGuard before entering this layer. For the
+ * filesystem restore, a RuntimeSessionOwner-bound session reuses its exact
+ * session-bound workspace publication capability; a standalone guarded session
+ * falls back to the public restore executor, which acquires its own exact OS
+ * workspace lease. This avoids recursive acquisition while still making every
+ * journal/staging/live-replica mutation lease-bound.
+ *
+ * The coordinator entry points remain private because direct use could let a
+ * logical SaveGuardActive field substitute for the physical process save lease.
+ * Production access is only through PartyQuestRuntimeGuardedSession. A named
+ * test friend exists solely for isolated filesystem recovery tests.
  *
  * A recovered rollback is deliberately not success: the old replica bytes are
  * safe again, but the requested checkpoint still has to be restored by a later
