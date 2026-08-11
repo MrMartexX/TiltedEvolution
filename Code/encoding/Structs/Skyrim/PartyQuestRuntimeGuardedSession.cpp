@@ -411,7 +411,9 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::ArmRuntimeMutation
         result.GuardHeld = HasGuard(aTransactionId);
         return result;
     }
-    return Transition(aTransactionId, m_session.ArmRuntimeMutation(aTransactionId));
+    return Transition(
+        aTransactionId,
+        m_session.ArmRuntimeMutationInternal(aTransactionId));
 }
 
 PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::MarkPapyrusQuiescent(
