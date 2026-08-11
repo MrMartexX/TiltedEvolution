@@ -275,6 +275,16 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::AbortBef
 }
 
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::CompleteLiveCheckpointRestore(
+    uint64_t)
+{
+    // A transaction id alone is not proof that the exact PreRepair bytes were
+    // restored. Only PartyQuestRuntimeRecoveryCoordinator may cross the real
+    // recovery-completion barrier after independent filesystem verification.
+    return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+}
+
+PartyQuestRuntimeDurableTransitionStatus
+PartyQuestRuntimeApplySession::CompleteLiveCheckpointRestoreInternal(
     uint64_t aTransactionId)
 {
     const PartyQuestRuntimeApplyEntry* pActive = m_coordinator.GetActive();
@@ -309,6 +319,16 @@ PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplySession::RestoreRecov
 }
 
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::CompleteCrashCheckpointRestore(
+    uint64_t)
+{
+    // A transaction id alone is not proof that the exact crash-recovery bytes
+    // were restored. Only PartyQuestRuntimeRecoveryCoordinator may clear the
+    // persisted recovery barrier after independent filesystem verification.
+    return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+}
+
+PartyQuestRuntimeDurableTransitionStatus
+PartyQuestRuntimeApplySession::CompleteCrashCheckpointRestoreInternal(
     uint64_t aTransactionId)
 {
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
