@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleFence.h>
 
+#include <party_quest_runtime_apply_session_test_access.h>
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
@@ -208,7 +209,9 @@ TEST_CASE("Every lifecycle event requires exact recovery after the mutation barr
     const auto request = BuildLifecycleRequest(32004);
 
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
-    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                request.TransactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(guarded.ArmRuntimeMutation(request.TransactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
