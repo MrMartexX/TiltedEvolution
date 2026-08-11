@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
+#include <Structs/Skyrim/PartyQuestRuntimeWorkspacePublicationAuthority.h>
 
 namespace
 {
@@ -154,6 +155,24 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::Bind(
         m_session = std::move(session);
         m_guardedSession = std::move(guardedSession);
 
+        auto publicationCapability = m_workspaceLease.CreatePublicationCapability(
+            acPaths,
+            acCampaignId,
+            acPlayerProfileId);
+        if (!publicationCapability.IsVerified() ||
+            !PartyQuestRuntimeWorkspacePublicationAuthority::Bind(
+                *m_session,
+                acPaths,
+                std::move(publicationCapability)))
+        {
+            result.Status =
+                PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure;
+            result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
+            result.GuardHeld = processGuard.IsActive();
+            Clear();
+            return result;
+        }
+
         const auto reconciled = m_guardedSession->ReconcileLoadedState();
         result.ReconcileStatus = reconciled.Status;
         result.GuardHeld = reconciled.GuardHeld;
@@ -203,6 +222,8 @@ PartyQuestRuntimeSessionOwner::PrepareAndRelease(
 
 void PartyQuestRuntimeSessionOwner::Clear() noexcept
 {
+    if (m_session)
+        PartyQuestRuntimeWorkspacePublicationAuthority::Unbind(*m_session);
     m_guardedSession.reset();
     m_session.reset();
     m_paths.reset();
