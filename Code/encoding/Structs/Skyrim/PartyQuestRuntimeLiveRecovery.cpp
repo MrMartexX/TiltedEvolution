@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
+#include <Structs/Skyrim/PartyQuestRuntimeWorkspacePublicationAuthority.h>
 
 #include <iomanip>
 #include <sstream>
@@ -236,6 +237,15 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
             return result;
         }
 
+        // RuntimeSessionOwner already holds the kernel workspace lease. Reuse
+        // its exact session-bound capability when present; a standalone guarded
+        // session falls back to the public executor, which acquires its own OS
+        // lease before any restore publication or live-file mutation.
+        const auto workspaceCapability =
+            PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
+                aSession,
+                acPaths);
+
         PartyQuestReplicaRestoreExecutionReport restoreReport;
         const auto loadedJournal =
             PartyQuestReplicaRestoreJournalPersistence::Load(journalPath);
@@ -248,19 +258,32 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
                 return result;
             }
 
-            restoreReport = PartyQuestReplicaRestoreExecutor::Recover(
-                acPaths,
-                aSession.GetCampaignId(),
-                aSession.GetPlayerProfileId(),
-                journalPath);
+            restoreReport = workspaceCapability.IsVerified()
+                ? PartyQuestReplicaRestoreExecutor::RecoverAuthorized(
+                      acPaths,
+                      aSession.GetCampaignId(),
+                      aSession.GetPlayerProfileId(),
+                      journalPath,
+                      workspaceCapability)
+                : PartyQuestReplicaRestoreExecutor::Recover(
+                      acPaths,
+                      aSession.GetCampaignId(),
+                      aSession.GetPlayerProfileId(),
+                      journalPath);
         }
         else if (loadedJournal.Status ==
             PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
         {
-            restoreReport = PartyQuestReplicaRestoreExecutor::Execute(
-                acPaths,
-                restorePlan,
-                restoreId);
+            restoreReport = workspaceCapability.IsVerified()
+                ? PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(
+                      acPaths,
+                      restorePlan,
+                      restoreId,
+                      workspaceCapability)
+                : PartyQuestReplicaRestoreExecutor::Execute(
+                      acPaths,
+                      restorePlan,
+                      restoreId);
         }
         else
         {
@@ -290,9 +313,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
             return result;
         }
 
-        // A committed filesystem journal is not proof that the live co-op
-        // replica still contains the restored checkpoint bytes. Re-read every
-        // destination immediately before clearing the live runtime barrier.
         if (!VerifyLiveRecoveryDestinations(restorePlan))
         {
             result.RestoreStatus =
