@@ -2,6 +2,8 @@
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 
+#include <party_quest_runtime_recovery_coordinator_test_access.h>
+
 #include <catch2/catch.hpp>
 
 #include <chrono>
@@ -126,7 +128,7 @@ TEST_CASE("Committed restore journal cannot clear runtime barrier after live rep
     REQUIRE(session.RestoreRecoveryState(BuildIntegrityRecoveryState(kWorldRevision)) ==
         PartyQuestRuntimeRecoveryDisposition::CheckpointRestoreRequired);
 
-    const auto first = PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
+    const auto first = PartyQuestRuntimeRecoveryCoordinatorTestAccess::ResolveCrashRecovery(
         session,
         *paths);
     REQUIRE(first.Status == PartyQuestRuntimeRecoveryStatus::RuntimeStatePersistenceFailed);
@@ -139,7 +141,7 @@ TEST_CASE("Committed restore journal cannot clear runtime barrier after live rep
     WriteIntegrityBytes(liveSave, "CHANGED_AFTER_RESTORE_COMMIT");
     allowPersistence = true;
 
-    const auto retry = PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
+    const auto retry = PartyQuestRuntimeRecoveryCoordinatorTestAccess::ResolveCrashRecovery(
         session,
         *paths);
     REQUIRE(retry.Status == PartyQuestRuntimeRecoveryStatus::RestoreFailed);
