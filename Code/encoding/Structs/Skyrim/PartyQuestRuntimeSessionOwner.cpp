@@ -18,6 +18,11 @@ PartyQuestRuntimeSessionOwnerBindResult MakeEarlyFailure(
 }
 } // namespace
 
+PartyQuestRuntimeSessionOwner::~PartyQuestRuntimeSessionOwner() noexcept
+{
+    Clear();
+}
+
 PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::Bind(
     const PartyQuestCampaignId& acCampaignId,
     const PartyQuestPlayerProfileId& acPlayerProfileId,
