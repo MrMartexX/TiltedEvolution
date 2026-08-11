@@ -1,6 +1,30 @@
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
 
+#include <optional>
 #include <utility>
+
+namespace
+{
+std::optional<PartyQuestRuntimeApplyIdentity> BuildRuntimeMutationAuthority(
+    const PartyQuestRuntimeApplyRequest& acRequest) noexcept
+{
+    if (acRequest.Plan.DryRunOnly)
+        return std::nullopt;
+    return PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(acRequest);
+}
+
+bool MatchesRuntimeMutationAuthority(
+    const PartyQuestRuntimeApplyIdentity& acAuthority,
+    const PartyQuestRuntimeApplyEntry& acActive) noexcept
+{
+    return acAuthority.QuestId == acActive.QuestId &&
+        acAuthority.TargetWorldRevision == acActive.TargetWorldRevision &&
+        acAuthority.CanonicalDigest == acActive.CanonicalDigest &&
+        acAuthority.SidecarManifestFingerprint == acActive.SidecarManifestFingerprint &&
+        acAuthority.Actions == acActive.Actions &&
+        acAuthority.ExpectedVerification == acActive.ExpectedVerification;
+}
+} // namespace
 
 PartyQuestRuntimeApplySession::PartyQuestRuntimeApplySession(
     PartyQuestCampaignId aCampaignId,
@@ -81,10 +105,12 @@ PartyQuestRuntimeDurableBeginStatus PartyQuestRuntimeApplySession::Begin(
         return TranslateBeginStatus(status);
     }
 
+    const auto runtimeMutationAuthority = BuildRuntimeMutationAuthority(acRequest);
     if (!Persist(candidate))
         return PartyQuestRuntimeDurableBeginStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
+    m_runtimeMutationAuthority = runtimeMutationAuthority;
     return TranslateBeginStatus(status);
 }
 
@@ -95,10 +121,13 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkWorl
     if (!candidate.MarkWorldReady(acCurrentRequest))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 
+    const auto runtimeMutationAuthority =
+        BuildRuntimeMutationAuthority(acCurrentRequest);
     if (!Persist(candidate))
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
+    m_runtimeMutationAuthority = runtimeMutationAuthority;
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
@@ -126,6 +155,15 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::ArmRunti
         return PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability;
     }
 
+    const auto* active = m_coordinator.GetActive();
+    if (!active ||
+        !m_runtimeMutationAuthority ||
+        active->TransactionId != aTransactionId ||
+        !MatchesRuntimeMutationAuthority(*m_runtimeMutationAuthority, *active))
+    {
+        return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+    }
+
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
     if (!candidate.MarkApplyDispatched(aTransactionId))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
@@ -136,6 +174,7 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::ArmRunti
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
+    m_runtimeMutationAuthority.reset();
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
@@ -213,6 +252,7 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::Commit(
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
+    m_runtimeMutationAuthority.reset();
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
@@ -230,6 +270,7 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::AbortBef
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
+    m_runtimeMutationAuthority.reset();
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
@@ -253,12 +294,14 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::Complete
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
+    m_runtimeMutationAuthority.reset();
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
 PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplySession::RestoreRecoveryState(
     const PartyQuestRuntimeRecoveryState& acState) noexcept
 {
+    m_runtimeMutationAuthority.reset();
     return m_coordinator.RestoreRecoveryState(
         acState,
         m_campaignId,
@@ -276,5 +319,6 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::Complete
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
+    m_runtimeMutationAuthority.reset();
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
