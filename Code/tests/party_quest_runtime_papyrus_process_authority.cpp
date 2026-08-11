@@ -2,6 +2,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
 #include <party_quest_papyrus_runtime_observer_test_access.h>
+#include <party_quest_runtime_apply_session_test_access.h>
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
@@ -106,7 +107,9 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
     const auto request = BuildProcessGuardRequest(transactionId);
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(processGuard.GetTransactionId() == transactionId);
-    REQUIRE(session.MarkCheckpointCreated(transactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                transactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
@@ -233,7 +236,9 @@ TEST_CASE("Stable verification cannot be committed after its deadline", "[quest.
     const auto request = BuildProcessGuardRequest(transactionId);
 
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
-    REQUIRE(session.MarkCheckpointCreated(transactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                transactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
