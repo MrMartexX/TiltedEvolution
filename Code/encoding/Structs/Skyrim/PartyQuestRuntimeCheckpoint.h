@@ -106,6 +106,11 @@ struct PartyQuestRuntimeCheckpointResult
  * PartyQuestRuntimePreRepairCheckpointAssembler after the controlled core save
  * and all required external sidecar capabilities have been validated.
  *
+ * A bound runtime owner supplies a pinned workspace-publication capability so
+ * the snapshot manager reuses the already-held kernel lease instead of trying
+ * to acquire the same lock again. Diagnostic/standalone callers may omit the
+ * capability; the snapshot manager then acquires its own exclusive lease.
+ *
  * If checkpoint publication succeeds but runtime-state persistence fails, a
  * retry with the same verified plan may adopt the immutable checkpoint and
  * attempt only the runtime-state transition.
@@ -121,5 +126,6 @@ public:
         PartyQuestRuntimeApplySession& aSession,
         const PartyQuestCoopSavePaths& acPaths,
         const PartyQuestReplicaCopyPlan& acCheckpointPlan,
-        const PartyQuestRuntimeCheckpointCoverageAuthorization& acCoverage) noexcept;
+        const PartyQuestRuntimeCheckpointCoverageAuthorization& acCoverage,
+        const PartyQuestReplicaWorkspacePublicationCapability* apPublicationCapability = nullptr) noexcept;
 };
