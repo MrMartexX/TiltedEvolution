@@ -5,6 +5,10 @@
 
 #include <functional>
 
+class PartyQuestRuntimeCheckpointCoordinator;
+class PartyQuestRuntimeGuardedSession;
+class PartyQuestRuntimeApplySessionTestAccess;
+
 enum class PartyQuestRuntimeDurableBeginStatus : uint8_t
 {
     Started,
@@ -40,13 +44,14 @@ struct PartyQuestRuntimeDurableVerificationResult
  *
  * Every state-changing transition is first applied to a copy, then the complete
  * campaign/player-bound recovery state is persisted through the bound handler,
- * and only then published in memory. ArmRuntimeMutation additionally requires
- * an explicitly declared guarantee meeting the PoC process-crash contract.
- * Current storage does not claim power-loss durability.
+ * and only then published in memory. The low-level checkpoint-created and
+ * mutation-arm transitions are intentionally caller-inaccessible: production
+ * code must cross PartyQuestRuntimeCheckpointCoordinator and
+ * PartyQuestRuntimeGuardedSession so a logical recovery bit cannot substitute
+ * for the physical checkpoint/SaveGuard authority chain.
  *
+ * Current storage does not claim power-loss durability.
  * The session still does not call Skyrim, Papyrus, save APIs or file I/O itself.
- * Production runtime integration must couple it to PartyQuestRuntimeGuardedSession
- * so the physical process SaveGuard participates in every critical transition.
  */
 class PartyQuestRuntimeApplySession final
 {
@@ -70,13 +75,6 @@ public:
 
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkWorldReady(
         const PartyQuestRuntimeApplyRequest& acCurrentRequest);
-    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreated(uint64_t aTransactionId);
-
-    /**
-     * Persists the crash-recovery marker before returning Applied. Only after
-     * Applied may the caller dispatch the real runtime mutation.
-     */
-    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutation(uint64_t aTransactionId);
 
     /** Durable transition using capability-backed trusted runtime observations. */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkPapyrusQuiescent(
@@ -141,6 +139,17 @@ public:
     }
 
 private:
+    /** Only the full checkpoint coordinator may publish this durable bit. */
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreated(
+        uint64_t aTransactionId);
+
+    /**
+     * Persists RuntimeMutationMayHaveOccurred before returning Applied. Only the
+     * guarded wrapper may cross this barrier in production.
+     */
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutation(
+        uint64_t aTransactionId);
+
     [[nodiscard]] bool Persist(const PartyQuestRuntimeApplyCoordinator& acCandidate) const;
     [[nodiscard]] static PartyQuestRuntimeDurableBeginStatus TranslateBeginStatus(
         PartyQuestRuntimeApplyBeginStatus aStatus) noexcept;
@@ -151,4 +160,9 @@ private:
     PartyQuestPersistenceGuarantee m_persistenceGuarantee{
         PartyQuestPersistenceGuarantee::Volatile};
     PartyQuestRuntimeApplyCoordinator m_coordinator;
+
+    friend class PartyQuestRuntimeCheckpointCoordinator;
+    friend class PartyQuestRuntimeGuardedSession;
+    // Defined only in Code/tests; no production implementation/API exists.
+    friend class PartyQuestRuntimeApplySessionTestAccess;
 };
