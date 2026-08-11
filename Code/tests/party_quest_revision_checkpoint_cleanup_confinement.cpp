@@ -199,10 +199,9 @@ TEST_CASE("Partial revision cleanup rejects a symlinked revision destination roo
     REQUIRE_FALSE(std::filesystem::exists(
         external / plan.Operations[1].DestinationPath.filename()));
 
-    // ExecuteRevisionCheckpoint sees the exact first destination through the
-    // symlink and returns DestinationExists. VerifyRevisionCheckpoint then sees
-    // an exact partial set. Recovery must independently reject the redirected
-    // revision root instead of deleting the matching external file.
+    // Retention admission now walks the existing revision tree before any copy
+    // or cleanup attempt. A redirected subtree therefore fails even earlier as
+    // an invalid checkpoint namespace, while the external evidence is preserved.
     PartyQuestReplicaSnapshotManager manager(
         *paths,
         kCleanupCampaign,
@@ -211,7 +210,7 @@ TEST_CASE("Partial revision cleanup rejects a symlinked revision destination roo
         PartyQuestCheckpointKind::PreRepair,
         911,
         plan);
-    REQUIRE(result.Status == PartyQuestReplicaSnapshotStatus::FileVerificationFailed);
+    REQUIRE(result.Status == PartyQuestReplicaSnapshotStatus::ManifestInvalid);
 
     const auto externalAfter = PartyQuestReplicaFileExecutor::ObserveRegularFile(
         externalPublished);
