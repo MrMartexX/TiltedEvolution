@@ -131,7 +131,7 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkWorl
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
-PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkCheckpointCreated(
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkCheckpointCreatedInternal(
     uint64_t aTransactionId)
 {
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
@@ -145,7 +145,7 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkChec
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
-PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::ArmRuntimeMutation(
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::ArmRuntimeMutationInternal(
     uint64_t aTransactionId)
 {
     if (!PartyQuestPersistenceDurabilityPolicy::Meets(
