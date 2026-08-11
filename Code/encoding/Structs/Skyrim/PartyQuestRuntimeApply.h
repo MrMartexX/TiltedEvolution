@@ -156,14 +156,6 @@ public:
     /** Records that a pre-repair checkpoint exists while saving is guarded. */
     bool MarkCheckpointCreated(uint64_t aTransactionId) noexcept;
 
-#if defined(TP_PARTY_QUEST_LOW_LEVEL_TEST_ACCESS)
-    /** Test alias used when Session.h redirects legacy low-level test calls. */
-    bool MarkCheckpointCreatedForTests(uint64_t aTransactionId) noexcept
-    {
-        return MarkCheckpointCreated(aTransactionId);
-    }
-#endif
-
     /** Records dispatch of the future runtime mutation; does not execute it. */
     bool MarkApplyDispatched(uint64_t aTransactionId) noexcept;
 
