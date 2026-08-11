@@ -284,7 +284,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         }
 
         result.RuntimeTransition =
-            aSession.CompleteCrashCheckpointRestore(transactionId);
+            aSession.CompleteCrashCheckpointRestoreInternal(transactionId);
         switch (result.RuntimeTransition)
         {
         case PartyQuestRuntimeDurableTransitionStatus::Applied:
