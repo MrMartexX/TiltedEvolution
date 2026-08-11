@@ -4,6 +4,55 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
+
+struct PartyQuestReplicaWorkspaceLeaseState;
+
+/**
+ * Process-local proof that the exact campaign/player workspace is protected by
+ * a live kernel-backed lease. The capability shares ownership of the native
+ * lease state, so releasing the originating lease object cannot unlock the
+ * workspace while a publication still holds this proof.
+ *
+ * A default-constructed or moved-from capability is intentionally unverified.
+ * Only PartyQuestReplicaWorkspaceLease can create a verified capability.
+ */
+class PartyQuestReplicaWorkspacePublicationCapability final
+{
+public:
+    PartyQuestReplicaWorkspacePublicationCapability() noexcept = default;
+    ~PartyQuestReplicaWorkspacePublicationCapability() noexcept = default;
+
+    PartyQuestReplicaWorkspacePublicationCapability(
+        const PartyQuestReplicaWorkspacePublicationCapability&) = delete;
+    PartyQuestReplicaWorkspacePublicationCapability& operator=(
+        const PartyQuestReplicaWorkspacePublicationCapability&) = delete;
+    PartyQuestReplicaWorkspacePublicationCapability(
+        PartyQuestReplicaWorkspacePublicationCapability&&) noexcept = default;
+    PartyQuestReplicaWorkspacePublicationCapability& operator=(
+        PartyQuestReplicaWorkspacePublicationCapability&&) noexcept = default;
+
+    [[nodiscard]] bool IsVerified() const noexcept
+    {
+        return static_cast<bool>(m_state);
+    }
+
+    [[nodiscard]] bool Protects(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acPlayerProfileId) const noexcept;
+
+private:
+    explicit PartyQuestReplicaWorkspacePublicationCapability(
+        std::shared_ptr<const PartyQuestReplicaWorkspaceLeaseState> aState) noexcept
+        : m_state(std::move(aState))
+    {
+    }
+
+    std::shared_ptr<const PartyQuestReplicaWorkspaceLeaseState> m_state;
+
+    friend class PartyQuestReplicaWorkspaceLease;
+};
 
 enum class PartyQuestReplicaWorkspaceLeaseStatus : uint8_t
 {
@@ -22,6 +71,11 @@ enum class PartyQuestReplicaWorkspaceLeaseStatus : uint8_t
  * The persistent lock file is never deleted during release. Ownership is the
  * live OS handle/descriptor, so process exit releases it without PID or age
  * heuristics and without replacing a locked inode behind another process.
+ *
+ * CreatePublicationCapability() may pin that exact native lease state for a
+ * bounded filesystem publication. A second Acquire(), even in this process,
+ * remains exclusive and must still reach the OS lock rather than borrowing the
+ * capability path.
  */
 class PartyQuestReplicaWorkspaceLease final
 {
@@ -41,20 +95,21 @@ public:
 
     void Release() noexcept;
 
-    [[nodiscard]] bool IsHeld() const noexcept { return m_nativeHandle != kInvalidHandle; }
+    [[nodiscard]] bool IsHeld() const noexcept;
     /** Process-local capability check; this grants no remote path authority. */
     [[nodiscard]] bool Protects(
         const PartyQuestCoopSavePaths& acPaths,
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestPlayerProfileId& acPlayerProfileId) const noexcept;
-    [[nodiscard]] const std::filesystem::path& GetLockPath() const noexcept { return m_lockPath; }
+
+    [[nodiscard]] PartyQuestReplicaWorkspacePublicationCapability
+    CreatePublicationCapability(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acPlayerProfileId) const noexcept;
+
+    [[nodiscard]] const std::filesystem::path& GetLockPath() const noexcept;
 
 private:
-    static constexpr intptr_t kInvalidHandle = -1;
-
-    intptr_t m_nativeHandle{kInvalidHandle};
-    std::filesystem::path m_lockPath;
-    std::filesystem::path m_playerDirectory;
-    PartyQuestCampaignId m_campaignId;
-    PartyQuestPlayerProfileId m_playerProfileId;
+    std::shared_ptr<PartyQuestReplicaWorkspaceLeaseState> m_state;
 };
