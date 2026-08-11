@@ -71,6 +71,11 @@ struct PartyQuestRuntimeSessionOwnerBindResult
  * only destroys ownership after the requested lifecycle transition is proven
  * safe. Post-mutation/recovery-blocked state therefore remains owned and locked.
  *
+ * Destruction still performs resource teardown for compatibility with existing
+ * RAII callers. In addition to releasing the native workspace lease, it removes
+ * the process-local publication-authority binding before the session object is
+ * destroyed so no stale capability can pin the kernel lock past owner lifetime.
+ *
  * This is a bootstrap/lifetime primitive only. It does not hook Skyrim load/new
  * game/main menu, network disconnect, party leave or shutdown entrypoints.
  */
@@ -78,7 +83,7 @@ class PartyQuestRuntimeSessionOwner final
 {
 public:
     PartyQuestRuntimeSessionOwner() noexcept = default;
-    ~PartyQuestRuntimeSessionOwner() = default;
+    ~PartyQuestRuntimeSessionOwner() noexcept;
 
     PartyQuestRuntimeSessionOwner(const PartyQuestRuntimeSessionOwner&) = delete;
     PartyQuestRuntimeSessionOwner& operator=(const PartyQuestRuntimeSessionOwner&) = delete;
