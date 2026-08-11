@@ -73,7 +73,9 @@ PartyQuestPlayerProfilePersistenceStatus ReadFile(
     std::ifstream file(acPath, std::ios::binary | std::ios::ate);
     if (!file.is_open())
     {
-        return std::filesystem::exists(acPath)
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(acPath, ec);
+        return ec || exists
             ? PartyQuestPlayerProfilePersistenceStatus::IoError
             : PartyQuestPlayerProfilePersistenceStatus::FileNotFound;
     }
@@ -249,6 +251,9 @@ PartyQuestPlayerProfilePersistenceStatus PartyQuestPlayerProfilePersistence::Sav
     const std::filesystem::path& acPath,
     const PartyQuestPlayerProfileId& acProfileId)
 {
+    if (!PartyQuestDurableResourcePolicy::IsMutableFilesystemPathWithinBudget(acPath))
+        return PartyQuestPlayerProfilePersistenceStatus::InvalidData;
+
     const std::vector<uint8_t> encoded = Encode(acProfileId);
     if (encoded.empty())
         return PartyQuestPlayerProfilePersistenceStatus::InvalidData;
@@ -304,10 +309,15 @@ PartyQuestPlayerProfilePersistenceStatus PartyQuestPlayerProfilePersistence::Sav
 PartyQuestPlayerProfilePersistenceResult PartyQuestPlayerProfilePersistence::Load(
     const std::filesystem::path& acPath)
 {
+    PartyQuestPlayerProfilePersistenceResult primaryResult;
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(acPath))
+    {
+        primaryResult.Status = PartyQuestPlayerProfilePersistenceStatus::InvalidData;
+        return primaryResult;
+    }
+
     std::vector<uint8_t> bytes;
     const PartyQuestPlayerProfilePersistenceStatus primaryReadStatus = ReadFile(acPath, bytes);
-
-    PartyQuestPlayerProfilePersistenceResult primaryResult;
     primaryResult.Status = primaryReadStatus;
     if (primaryReadStatus == PartyQuestPlayerProfilePersistenceStatus::Success)
     {
@@ -318,6 +328,13 @@ PartyQuestPlayerProfilePersistenceResult PartyQuestPlayerProfilePersistence::Loa
 
     auto backupPath = acPath;
     backupPath += ".bak";
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(backupPath))
+    {
+        primaryResult.Status = PartyQuestPlayerProfilePersistenceStatus::InvalidData;
+        primaryResult.ProfileId.reset();
+        return primaryResult;
+    }
+
     bytes.clear();
     const PartyQuestPlayerProfilePersistenceStatus backupReadStatus = ReadFile(backupPath, bytes);
     if (backupReadStatus == PartyQuestPlayerProfilePersistenceStatus::Success)
