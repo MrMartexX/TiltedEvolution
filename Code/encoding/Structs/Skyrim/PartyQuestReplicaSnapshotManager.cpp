@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 #include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
+#include <Structs/Skyrim/PartyQuestReplicaWorkspaceLease.h>
 
 #include <charconv>
 #include <limits>
@@ -658,7 +659,13 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::EnsureImported
     uint64_t aCampaignWorldRevision,
     const PartyQuestReplicaCopyPlan& acPlan) const noexcept
 {
-    return Ensure(false, false, PartyQuestCheckpointKind::PreJoin, aCampaignWorldRevision, acPlan);
+    return Ensure(
+        false,
+        false,
+        PartyQuestCheckpointKind::PreJoin,
+        aCampaignWorldRevision,
+        acPlan,
+        nullptr);
 }
 
 PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::EnsureCheckpoint(
@@ -666,7 +673,13 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::EnsureCheckpoi
     uint64_t aCampaignWorldRevision,
     const PartyQuestReplicaCopyPlan& acPlan) const noexcept
 {
-    return Ensure(true, false, aKind, aCampaignWorldRevision, acPlan);
+    return Ensure(
+        true,
+        false,
+        aKind,
+        aCampaignWorldRevision,
+        acPlan,
+        nullptr);
 }
 
 PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::EnsureRevisionCheckpoint(
@@ -674,7 +687,59 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::EnsureRevision
     uint64_t aCampaignWorldRevision,
     const PartyQuestReplicaCopyPlan& acPlan) const noexcept
 {
-    return Ensure(true, true, aKind, aCampaignWorldRevision, acPlan);
+    std::unique_lock<std::mutex> publicationLock(
+        GetRevisionCheckpointPublicationMutex());
+
+    PartyQuestReplicaWorkspaceLease workspaceLease;
+    const auto leaseStatus = workspaceLease.Acquire(
+        m_paths,
+        m_campaignId,
+        m_playerProfileId);
+    if (leaseStatus == PartyQuestReplicaWorkspaceLeaseStatus::Busy)
+        return Failure(PartyQuestReplicaSnapshotStatus::WorkspaceBusy);
+    if (leaseStatus != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
+        return Failure(PartyQuestReplicaSnapshotStatus::WorkspaceLeaseFailure);
+
+    auto publicationCapability = workspaceLease.CreatePublicationCapability(
+        m_paths,
+        m_campaignId,
+        m_playerProfileId);
+    if (!publicationCapability.IsVerified())
+        return Failure(PartyQuestReplicaSnapshotStatus::WorkspaceLeaseFailure);
+
+    return Ensure(
+        true,
+        true,
+        aKind,
+        aCampaignWorldRevision,
+        acPlan,
+        &publicationCapability);
+}
+
+PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::EnsureRevisionCheckpoint(
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
+    const PartyQuestReplicaCopyPlan& acPlan,
+    const PartyQuestReplicaWorkspacePublicationCapability& acPublicationCapability) const noexcept
+{
+    std::unique_lock<std::mutex> publicationLock(
+        GetRevisionCheckpointPublicationMutex());
+
+    if (!acPublicationCapability.Protects(
+            m_paths,
+            m_campaignId,
+            m_playerProfileId))
+    {
+        return Failure(PartyQuestReplicaSnapshotStatus::WorkspaceLeaseFailure);
+    }
+
+    return Ensure(
+        true,
+        true,
+        aKind,
+        aCampaignWorldRevision,
+        acPlan,
+        &acPublicationCapability);
 }
 
 PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::ValidateImportedReplica() const noexcept
@@ -700,7 +765,8 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
     bool aRevisionScoped,
     PartyQuestCheckpointKind aKind,
     uint64_t aCampaignWorldRevision,
-    const PartyQuestReplicaCopyPlan& acPlan) const noexcept
+    const PartyQuestReplicaCopyPlan& acPlan,
+    const PartyQuestReplicaWorkspacePublicationCapability* apPublicationCapability) const noexcept
 {
     try
     {
@@ -711,12 +777,14 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
         {
             return Failure(PartyQuestReplicaSnapshotStatus::InvalidPlan);
         }
-
-        std::unique_lock<std::mutex> revisionPublicationLock;
-        if (aCheckpoint && aRevisionScoped)
+        if (aCheckpoint && aRevisionScoped &&
+            (!apPublicationCapability ||
+             !apPublicationCapability->Protects(
+                 m_paths,
+                 m_campaignId,
+                 m_playerProfileId)))
         {
-            revisionPublicationLock = std::unique_lock<std::mutex>(
-                GetRevisionCheckpointPublicationMutex());
+            return Failure(PartyQuestReplicaSnapshotStatus::WorkspaceLeaseFailure);
         }
 
         std::optional<PartyQuestReplicaManifest> expectedManifest;
