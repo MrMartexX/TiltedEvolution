@@ -188,7 +188,9 @@ PartyQuestRuntimeApplyPersistenceStatus ReadFile(
     std::ifstream file(acPath, std::ios::binary | std::ios::ate);
     if (!file.is_open())
     {
-        return std::filesystem::exists(acPath)
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(acPath, ec);
+        return ec || exists
             ? PartyQuestRuntimeApplyPersistenceStatus::IoError
             : PartyQuestRuntimeApplyPersistenceStatus::FileNotFound;
     }
@@ -535,6 +537,9 @@ PartyQuestRuntimeApplyPersistenceStatus PartyQuestRuntimeApplyPersistence::SaveA
     const PartyQuestRuntimeRecoveryState& acState,
     PartyQuestRuntimeApplyPersistenceHooks aHooks)
 {
+    if (!PartyQuestDurableResourcePolicy::IsMutableFilesystemPathWithinBudget(acPath))
+        return PartyQuestRuntimeApplyPersistenceStatus::ResourceLimitExceeded;
+
     const std::vector<uint8_t> encoded = Encode(acState);
     if (encoded.empty())
         return PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
@@ -615,8 +620,15 @@ PartyQuestRuntimeApplyPersistenceStatus PartyQuestRuntimeApplyPersistence::SaveA
 PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Load(
     const std::filesystem::path& acPath)
 {
+    PartyQuestRuntimeApplyPersistenceResult primaryResult;
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(acPath))
+    {
+        primaryResult.Status = PartyQuestRuntimeApplyPersistenceStatus::ResourceLimitExceeded;
+        return primaryResult;
+    }
+
     // Primary is authoritative whenever it is intact.
-    PartyQuestRuntimeApplyPersistenceResult primaryResult = DecodeFile(acPath);
+    primaryResult = DecodeFile(acPath);
     if (primaryResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
         return primaryResult;
 
@@ -626,6 +638,13 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Load(
     // rolling back to the older backup.
     auto temporaryPath = acPath;
     temporaryPath += ".tmp";
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(temporaryPath))
+    {
+        primaryResult.Status = PartyQuestRuntimeApplyPersistenceStatus::ResourceLimitExceeded;
+        primaryResult.State.reset();
+        return primaryResult;
+    }
+
     PartyQuestRuntimeApplyPersistenceResult temporaryResult = DecodeFile(temporaryPath);
     if (temporaryResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
     {
@@ -639,6 +658,13 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Load(
     // side effects. Expose the backup for explicit checkpoint recovery only.
     auto backupPath = acPath;
     backupPath += ".bak";
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(backupPath))
+    {
+        primaryResult.Status = PartyQuestRuntimeApplyPersistenceStatus::ResourceLimitExceeded;
+        primaryResult.State.reset();
+        return primaryResult;
+    }
+
     PartyQuestRuntimeApplyPersistenceResult backupResult = DecodeFile(backupPath);
     if (backupResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
     {
