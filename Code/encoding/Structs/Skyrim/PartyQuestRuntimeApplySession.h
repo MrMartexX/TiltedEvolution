@@ -7,7 +7,6 @@
 
 class PartyQuestRuntimeCheckpointCoordinator;
 class PartyQuestRuntimeGuardedSession;
-class PartyQuestRuntimeApplySessionTestAccess;
 
 enum class PartyQuestRuntimeDurableBeginStatus : uint8_t
 {
@@ -45,7 +44,7 @@ struct PartyQuestRuntimeDurableVerificationResult
  * Every state-changing transition is first applied to a copy, then the complete
  * campaign/player-bound recovery state is persisted through the bound handler,
  * and only then published in memory. The low-level checkpoint-created and
- * mutation-arm transitions are intentionally caller-inaccessible: production
+ * mutation-arm transitions are intentionally caller-inaccessible in production:
  * code must cross PartyQuestRuntimeCheckpointCoordinator and
  * PartyQuestRuntimeGuardedSession so a logical recovery bit cannot substitute
  * for the physical checkpoint/SaveGuard authority chain.
@@ -138,7 +137,11 @@ public:
         return m_persistenceGuarantee;
     }
 
+#if defined(TP_PARTY_QUEST_LOW_LEVEL_TEST_ACCESS)
+public:
+#else
 private:
+#endif
     /** Only the full checkpoint coordinator may publish this durable bit. */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreated(
         uint64_t aTransactionId);
@@ -150,6 +153,7 @@ private:
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutation(
         uint64_t aTransactionId);
 
+private:
     [[nodiscard]] bool Persist(const PartyQuestRuntimeApplyCoordinator& acCandidate) const;
     [[nodiscard]] static PartyQuestRuntimeDurableBeginStatus TranslateBeginStatus(
         PartyQuestRuntimeApplyBeginStatus aStatus) noexcept;
@@ -163,6 +167,4 @@ private:
 
     friend class PartyQuestRuntimeCheckpointCoordinator;
     friend class PartyQuestRuntimeGuardedSession;
-    // Defined only in Code/tests; no production implementation/API exists.
-    friend class PartyQuestRuntimeApplySessionTestAccess;
 };
