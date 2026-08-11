@@ -183,3 +183,33 @@ TEST_CASE("Runtime owner reuses its exact workspace lease for PreRepair publicat
     REQUIRE_FALSE(owner.IsBound());
     REQUIRE_FALSE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
 }
+
+TEST_CASE("Runtime owner destruction releases its pinned workspace publication authority", "[quest.party-state.runtime-owner][workspace-lease][lifetime]")
+{
+    OwnerCheckpointSandbox sandbox;
+    const auto paths = BuildOwnerCheckpointPaths(sandbox);
+    REQUIRE_FALSE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
+
+    {
+        PartyQuestRuntimeSessionOwner owner;
+        const auto bound = owner.Bind(
+            kOwnerCheckpointCampaign,
+            kOwnerCheckpointPlayer,
+            paths);
+        REQUIRE(bound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+        REQUIRE(owner.IsBound());
+        // Deliberately rely on RAII destruction instead of PrepareAndRelease().
+        // The session-bound capability must not pin the kernel lock afterwards.
+    }
+
+    PartyQuestRuntimeSessionOwner replacement;
+    const auto rebound = replacement.Bind(
+        kOwnerCheckpointCampaign,
+        kOwnerCheckpointPlayer,
+        paths);
+    REQUIRE(rebound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(replacement.IsBound());
+    REQUIRE(replacement.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
+    REQUIRE_FALSE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
+}
