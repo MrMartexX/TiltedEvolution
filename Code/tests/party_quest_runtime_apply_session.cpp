@@ -10,6 +10,8 @@
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 
+#include <party_quest_runtime_safety_test_access.h>
+
 #include <catch2/catch.hpp>
 
 #include <utility>
@@ -78,6 +80,12 @@ PartyQuestRuntimeApplyRequest BuildSessionRequest(uint64_t aTransactionId, GameI
         snapshot,
         BuildSessionAuthorization(aQuestId));
     REQUIRE(request.Plan.Safety.IsRuntimeSafe());
+
+    // Low-level lifecycle tests explicitly model a future executable adapter.
+    // Production BuildApplyPlan() remains DryRunOnly=true.
+    PartyQuestRuntimeSafetyTestAccess::AuthorizePlan(request.Plan, snapshot);
+    REQUIRE_FALSE(request.Plan.DryRunOnly);
+    REQUIRE(request.Plan.MutationAuthorization.IsVerified());
     return request;
 }
 
@@ -198,6 +206,28 @@ TEST_CASE("Mutation arm persistence failure leaves runtime mutation explicitly u
     REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::ReadyToApply);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
     REQUIRE(session.GetCoordinator().IsSaveGuardActive());
+}
+
+TEST_CASE("Dry-run-only runtime request cannot arm mutation", "[quest.party-state.runtime-apply.session][mutation-authority]")
+{
+    DurableCapture capture;
+    auto session = BuildSession(capture);
+    auto request = BuildSessionRequest(3003, GameId(33, 0x1002));
+    PartyQuestRuntimeSafetyTestAccess::AuthorizeDryRunPlan(
+        request.Plan,
+        request.CanonicalSnapshot);
+    REQUIRE(request.Plan.DryRunOnly);
+    REQUIRE(request.Plan.MutationAuthorization.IsVerified());
+
+    REQUIRE(session.Begin(request) == PartyQuestRuntimeDurableBeginStatus::Started);
+    REQUIRE(session.MarkCheckpointCreated(request.TransactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(session.ArmRuntimeMutation(request.TransactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::InvalidState);
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::ReadyToApply);
+    REQUIRE_FALSE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
 }
 
 TEST_CASE("Quiescence persistence failure consumes proof and requires fresh observation", "[quest.party-state.runtime-apply.session][quiescence]")
