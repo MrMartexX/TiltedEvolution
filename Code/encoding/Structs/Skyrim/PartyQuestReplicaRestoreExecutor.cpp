@@ -443,6 +443,43 @@ PartyQuestReplicaRestoreExecutionReport MakeReport(
     return report;
 }
 
+PartyQuestReplicaRestoreExecutionStatus CheckPreMutationResourceBudget(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestReplicaRestoreJournalState& acState,
+    PartyQuestReplicaRestoreExecutionHooks aHooks) noexcept
+{
+    const auto requiredFreeBytes =
+        PartyQuestReplicaRestoreResourcePolicy::RequiredFreeBytes(acState);
+    if (!requiredFreeBytes)
+        return PartyQuestReplicaRestoreExecutionStatus::ResourceLimitExceeded;
+
+    uint64_t availableBytes{};
+    if (aHooks.QueryAvailableBytes)
+    {
+        if (!aHooks.QueryAvailableBytes(
+                acPaths.PlayerDirectory,
+                availableBytes,
+                aHooks.Context))
+        {
+            return PartyQuestReplicaRestoreExecutionStatus::UnsafePath;
+        }
+    }
+    else
+    {
+        std::error_code spaceError;
+        const auto diskSpace = std::filesystem::space(
+            acPaths.PlayerDirectory,
+            spaceError);
+        if (spaceError)
+            return PartyQuestReplicaRestoreExecutionStatus::UnsafePath;
+        availableBytes = diskSpace.available;
+    }
+
+    return availableBytes < *requiredFreeBytes
+        ? PartyQuestReplicaRestoreExecutionStatus::InsufficientDiskSpace
+        : PartyQuestReplicaRestoreExecutionStatus::Success;
+}
+
 RestoreFailure CopyVerified(
     const std::filesystem::path& acConfinementRoot,
     const std::filesystem::path& acSource,
@@ -1410,24 +1447,10 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Execut
         if (transactionState != NodeState::Missing)
             return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::RestoreIdConflict);
 
-        const auto requiredFreeBytes =
-            PartyQuestReplicaRestoreResourcePolicy::RequiredFreeBytes(state);
-        if (!requiredFreeBytes)
-        {
-            return MakeReport(
-                state,
-                PartyQuestReplicaRestoreExecutionStatus::ResourceLimitExceeded);
-        }
-        std::error_code spaceError;
-        const auto diskSpace = std::filesystem::space(acPaths.PlayerDirectory, spaceError);
-        if (spaceError)
-            return MakeReport(state, PartyQuestReplicaRestoreExecutionStatus::UnsafePath);
-        if (diskSpace.available < *requiredFreeBytes)
-        {
-            return MakeReport(
-                state,
-                PartyQuestReplicaRestoreExecutionStatus::InsufficientDiskSpace);
-        }
+        const auto resourceStatus =
+            CheckPreMutationResourceBudget(acPaths, state, aHooks);
+        if (resourceStatus != PartyQuestReplicaRestoreExecutionStatus::Success)
+            return MakeReport(state, resourceStatus);
 
         if (PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(journalPath, state) !=
             PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
@@ -1508,13 +1531,19 @@ PartyQuestReplicaRestoreExecutionReport PartyQuestReplicaRestoreExecutor::Recove
         switch (PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(state))
         {
         case PartyQuestReplicaRestoreRecoveryDisposition::ResumeBeforeMutation:
+        {
             if (!hasDeadline)
             {
                 return MakeReport(
                     state,
                     PartyQuestReplicaRestoreExecutionStatus::OperationDeadlineExceeded);
             }
+            const auto resourceStatus =
+                CheckPreMutationResourceBudget(acPaths, state, aHooks);
+            if (resourceStatus != PartyQuestReplicaRestoreExecutionStatus::Success)
+                return MakeReport(state, resourceStatus);
             return ContinueBeforeMutation(acPaths, state, aHooks, deadline);
+        }
 
         case PartyQuestReplicaRestoreRecoveryDisposition::RollbackRequired:
             return RollbackAndReport(
