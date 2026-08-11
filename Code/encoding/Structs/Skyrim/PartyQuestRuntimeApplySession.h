@@ -144,10 +144,21 @@ public:
     }
 
 #if defined(TP_PARTY_QUEST_LOW_LEVEL_TEST_ACCESS)
-public:
-#else
-private:
+    /** ABI-stable TPTests wrappers; production builds never expose these names. */
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreatedForTests(
+        uint64_t aTransactionId)
+    {
+        return MarkCheckpointCreated(aTransactionId);
+    }
+
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutationForTests(
+        uint64_t aTransactionId)
+    {
+        return ArmRuntimeMutation(aTransactionId);
+    }
 #endif
+
+private:
     /** Only the full checkpoint coordinator may publish this durable bit. */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreated(
         uint64_t aTransactionId);
@@ -159,7 +170,6 @@ private:
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutation(
         uint64_t aTransactionId);
 
-private:
     [[nodiscard]] bool Persist(const PartyQuestRuntimeApplyCoordinator& acCandidate) const;
     [[nodiscard]] static PartyQuestRuntimeDurableBeginStatus TranslateBeginStatus(
         PartyQuestRuntimeApplyBeginStatus aStatus) noexcept;
@@ -175,3 +185,14 @@ private:
     friend class PartyQuestRuntimeCheckpointCoordinator;
     friend class PartyQuestRuntimeGuardedSession;
 };
+
+// Existing state-machine tests intentionally exercise these two low-level
+// transitions. Route those source-level calls through public inline wrappers
+// without changing the access class (and therefore MSVC decorated symbol) of
+// the production implementation. The surface regression test undefines the
+// TP access macro before including this header, so it sees neither wrapper nor
+// aliases.
+#if defined(TP_PARTY_QUEST_LOW_LEVEL_TEST_ACCESS)
+#define MarkCheckpointCreated(...) MarkCheckpointCreatedForTests(__VA_ARGS__)
+#define ArmRuntimeMutation(...) ArmRuntimeMutationForTests(__VA_ARGS__)
+#endif
