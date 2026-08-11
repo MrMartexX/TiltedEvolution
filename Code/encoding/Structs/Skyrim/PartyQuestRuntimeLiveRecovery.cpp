@@ -302,7 +302,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
         }
 
         result.RuntimeTransition =
-            aSession.CompleteLiveCheckpointRestore(transactionId);
+            aSession.CompleteLiveCheckpointRestoreInternal(transactionId);
         switch (result.RuntimeTransition)
         {
         case PartyQuestRuntimeDurableTransitionStatus::Applied:
