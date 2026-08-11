@@ -105,7 +105,7 @@ public:
         return true;
     }
 
-    bool Skip(size_t aSize) noexcept
+    bool Skip(size_t aSize)
     {
         if (Remaining() < aSize)
             return false;
@@ -450,7 +450,13 @@ PartyQuestPersistenceStatus ReadFile(const std::filesystem::path& acPath, std::v
 {
     std::ifstream file(acPath, std::ios::binary | std::ios::ate);
     if (!file.is_open())
-        return std::filesystem::exists(acPath) ? PartyQuestPersistenceStatus::IoError : PartyQuestPersistenceStatus::FileNotFound;
+    {
+        std::error_code ec;
+        const bool exists = std::filesystem::exists(acPath, ec);
+        return ec || exists
+            ? PartyQuestPersistenceStatus::IoError
+            : PartyQuestPersistenceStatus::FileNotFound;
+    }
 
     const std::streampos end = file.tellg();
     if (end < 0)
@@ -718,6 +724,9 @@ PartyQuestPersistenceStatus PartyQuestStatePersistence::SaveAtomically(
     const PartyQuestState& acState,
     PartyQuestStatePersistenceHooks aHooks)
 {
+    if (!PartyQuestDurableResourcePolicy::IsMutableFilesystemPathWithinBudget(acPath))
+        return PartyQuestPersistenceStatus::InvalidData;
+
     const auto encoded = Encode(acCampaignId, acState);
     if (encoded.empty())
         return PartyQuestPersistenceStatus::InvalidData;
@@ -804,10 +813,15 @@ PartyQuestPersistenceStatus PartyQuestStatePersistence::SaveAtomically(
 
 PartyQuestPersistenceResult PartyQuestStatePersistence::Load(const std::filesystem::path& acPath)
 {
+    PartyQuestPersistenceResult primaryResult;
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(acPath))
+    {
+        primaryResult.Status = PartyQuestPersistenceStatus::InvalidData;
+        return primaryResult;
+    }
+
     std::vector<uint8_t> bytes;
     const PartyQuestPersistenceStatus primaryReadStatus = ReadFile(acPath, bytes);
-
-    PartyQuestPersistenceResult primaryResult;
     primaryResult.Status = primaryReadStatus;
     if (primaryReadStatus == PartyQuestPersistenceStatus::Success)
     {
@@ -818,6 +832,14 @@ PartyQuestPersistenceResult PartyQuestStatePersistence::Load(const std::filesyst
 
     auto temporaryPath = acPath;
     temporaryPath += ".tmp";
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(temporaryPath))
+    {
+        primaryResult.Status = PartyQuestPersistenceStatus::InvalidData;
+        primaryResult.CampaignId.reset();
+        primaryResult.State.reset();
+        return primaryResult;
+    }
+
     bytes.clear();
     const PartyQuestPersistenceStatus temporaryReadStatus = ReadFile(temporaryPath, bytes);
     if (temporaryReadStatus == PartyQuestPersistenceStatus::Success)
@@ -832,6 +854,14 @@ PartyQuestPersistenceResult PartyQuestStatePersistence::Load(const std::filesyst
 
     auto backupPath = acPath;
     backupPath += ".bak";
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(backupPath))
+    {
+        primaryResult.Status = PartyQuestPersistenceStatus::InvalidData;
+        primaryResult.CampaignId.reset();
+        primaryResult.State.reset();
+        return primaryResult;
+    }
+
     bytes.clear();
     const PartyQuestPersistenceStatus backupReadStatus = ReadFile(backupPath, bytes);
     if (backupReadStatus == PartyQuestPersistenceStatus::Success)
