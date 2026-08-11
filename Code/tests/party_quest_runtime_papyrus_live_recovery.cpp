@@ -3,6 +3,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
 #include <party_quest_papyrus_runtime_observer_test_access.h>
+#include <party_quest_runtime_apply_session_test_access.h>
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
@@ -189,7 +190,9 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
     const auto request = BuildLiveRecoveryRequest(transactionId, worldRevision);
 
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
-    REQUIRE(session.MarkCheckpointCreated(transactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                transactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
@@ -256,7 +259,9 @@ TEST_CASE("Only terminal authoritative monitor failures request live recovery", 
     const auto request = BuildLiveRecoveryRequest(transactionId, worldRevision);
 
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
-    REQUIRE(session.MarkCheckpointCreated(transactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                transactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
