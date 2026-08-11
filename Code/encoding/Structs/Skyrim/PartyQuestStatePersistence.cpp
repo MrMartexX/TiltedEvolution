@@ -105,7 +105,7 @@ public:
         return true;
     }
 
-    bool Skip(size_t aSize)
+    bool Skip(size_t aSize) noexcept
     {
         if (Remaining() < aSize)
             return false;
