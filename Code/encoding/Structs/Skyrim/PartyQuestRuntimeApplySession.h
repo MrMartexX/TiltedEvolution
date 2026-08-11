@@ -8,6 +8,7 @@
 
 class PartyQuestRuntimeCheckpointCoordinator;
 class PartyQuestRuntimeGuardedSession;
+class PartyQuestRuntimeApplySessionTestAccess;
 
 enum class PartyQuestRuntimeDurableBeginStatus : uint8_t
 {
@@ -143,24 +144,6 @@ public:
         return m_persistenceGuarantee;
     }
 
-#if defined(TP_PARTY_QUEST_LOW_LEVEL_TEST_ACCESS)
-    /**
-     * TPTests-only source compatibility wrappers. The implementation methods
-     * keep one stable private ABI in every translation unit.
-     */
-    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreated(
-        uint64_t aTransactionId)
-    {
-        return MarkCheckpointCreatedInternal(aTransactionId);
-    }
-
-    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutation(
-        uint64_t aTransactionId)
-    {
-        return ArmRuntimeMutationInternal(aTransactionId);
-    }
-#endif
-
 private:
     /** Only the full checkpoint coordinator may publish this durable bit. */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreatedInternal(
@@ -187,4 +170,6 @@ private:
 
     friend class PartyQuestRuntimeCheckpointCoordinator;
     friend class PartyQuestRuntimeGuardedSession;
+    // Defined only in Code/tests; no production implementation/API exists.
+    friend class PartyQuestRuntimeApplySessionTestAccess;
 };
