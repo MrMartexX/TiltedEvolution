@@ -2,6 +2,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
 #include <party_quest_papyrus_runtime_observer_test_access.h>
+#include <party_quest_runtime_apply_session_test_access.h>
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
@@ -82,7 +83,9 @@ void AdvanceToBoundedVerification(
 {
     const uint64_t transactionId = acRequest.TransactionId;
     REQUIRE(aGuarded.Begin(acRequest).Status == PartyQuestRuntimeGuardStatus::Ready);
-    REQUIRE(aSession.MarkCheckpointCreated(transactionId) ==
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                aSession,
+                transactionId) ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(aGuarded.ArmRuntimeMutation(transactionId).Status ==
         PartyQuestRuntimeGuardStatus::Ready);
