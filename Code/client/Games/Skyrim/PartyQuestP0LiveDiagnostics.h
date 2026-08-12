@@ -42,6 +42,16 @@ public:
     static void RecordTransportState(const char* acState) noexcept;
     static void RecordGamePresence(bool aInGame) noexcept;
 
+    static void RecordEngineSave(
+        const char* acPhase,
+        const char* acFileName,
+        uint64_t aTransactionId,
+        int32_t aDeviceId,
+        uint32_t aOutputStats,
+        bool aPermitted,
+        bool aResultKnown,
+        bool aResult) noexcept;
+
     static void RecordModMappingBegin(
         size_t aServerModCount,
         uint64_t aGenerationBefore,
