@@ -18,6 +18,7 @@
 #include <Services/ImguiService.h>
 #include <Services/DiscordService.h>
 
+#include <PartyQuestSkyrimRuntimeThread.h>
 #include <ScriptExtender.h>
 #include <NvidiaUtil.h>
 
@@ -77,6 +78,13 @@ bool TiltedOnlineApp::EndMain()
 
 void TiltedOnlineApp::Update()
 {
+    // Bind canonical Skyrim mutation to the same frame-update thread that drains
+    // RunnerService and drives World::Update. A direct network-thread executor
+    // call will therefore fail closed; queued work must perform the complete
+    // guarded Dispatch after it reaches this thread rather than carrying a
+    // prevalidated capability across the queue boundary.
+    PartyQuestSkyrimRuntimeThread::ObserveCurrentUpdateThread();
+
     // Reverting a change that used to be here to disable bUseFaceGenPreprocessedHeads==true (which is 
     // the default) handling. Extensive testing over months by multiple parties showed that enabling 
     // the flag introduces no issues WITH PROPERLY GENERATED CHARACTERS (in-game character generation 
