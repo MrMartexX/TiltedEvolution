@@ -43,9 +43,9 @@ bool IsNarrowStagePlan(const PartyQuestRuntimeApplyRequest& acRequest) noexcept
         HasOnlyStageMutationSurface(acRequest.CanonicalSnapshot);
 }
 
-bool ContainsStage(const TESQuest& acQuest, uint16_t aStage) noexcept
+bool ContainsStage(TESQuest& aQuest, uint16_t aStage) noexcept
 {
-    for (TESQuest::Stage* pStage : acQuest.stages)
+    for (TESQuest::Stage* pStage : aQuest.stages)
     {
         if (pStage && pStage->stageIndex == aStage)
             return true;
