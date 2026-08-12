@@ -25,7 +25,9 @@
 #include <Events/PreUpdateEvent.h>
 #include <Events/UpdateEvent.h>
 
-#include <ModCompat/BehaviorVar.h>  
+#include <ModCompat/BehaviorVar.h>
+#include <PartyQuestP0LiveDiagnostics.h>
+#include <PlayerCharacter.h>
 
 World::World()
     : m_runner(m_dispatcher)
@@ -67,6 +69,20 @@ void World::Update() noexcept
     m_lastFrameTime = cNow;
 
     const auto cDeltaSeconds = std::chrono::duration_cast<std::chrono::duration<double>>(cDelta).count();
+
+    // This is deliberately labelled as presence rather than an engine lifecycle
+    // hook. It gives live timing evidence without pretending to be the required
+    // pre-LoadGame/NewGame/MainMenu mutation barrier.
+    static bool s_presenceInitialized = false;
+    static bool s_lastInGame = false;
+    PlayerCharacter* pPlayer = PlayerCharacter::Get();
+    const bool inGame = pPlayer && pPlayer->GetNiNode();
+    if (!s_presenceInitialized || inGame != s_lastInGame)
+    {
+        s_presenceInitialized = true;
+        s_lastInGame = inGame;
+        PartyQuestP0LiveDiagnostics::RecordGamePresence(inGame);
+    }
 
     m_dispatcher.trigger(PreUpdateEvent(cDeltaSeconds));
 
