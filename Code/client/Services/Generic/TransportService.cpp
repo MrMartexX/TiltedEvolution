@@ -22,6 +22,7 @@
 #include <Messages/NotifySettingsChange.h>
 #include <Packet.hpp>
 
+#include <PartyQuestP0LiveDiagnostics.h>
 #include <ScriptExtender.h>
 #include <Services/DiscordService.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
@@ -163,6 +164,7 @@ void TransportService::OnConnected()
     request.PlayerTime.Month = pGameTime->GameMonth->f;
     request.PlayerTime.Day = pGameTime->GameDay->f;
 
+    PartyQuestP0LiveDiagnostics::RecordTransportState("socket-connected-auth-request");
     Send(request);
 }
 
@@ -174,12 +176,18 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
     // arbitrary DisconnectedEvent consumers. The runtime session owner can then
     // take its own full lifecycle lease around PrepareAndRelease() without a
     // nested exclusive acquisition deadlock.
+    auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t generationBefore = generationFence.GetGeneration();
+    uint64_t generationAfter = generationBefore;
     {
-        auto generationInvalidation =
-            PartyQuestRuntimeGenerationFence::GetProcessFence().BeginInvalidation();
+        auto generationInvalidation = generationFence.BeginInvalidation();
+        generationAfter = generationInvalidation.GetGeneration();
         m_connected = false;
+        PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+            "transport-disconnect", "disconnected-state-published", generationBefore, generationAfter);
     }
 
+    PartyQuestP0LiveDiagnostics::RecordTransportState("disconnected");
     spdlog::warn("Disconnected from server {}", aReason);
 
     m_dispatcher.trigger(DisconnectedEvent());
@@ -197,6 +205,7 @@ void TransportService::HandleUpdate(const UpdateEvent& acEvent) noexcept
 void TransportService::HandleConnected(const ConnectedEvent& acEvent) noexcept
 {
     m_localPlayerId = acEvent.PlayerId;
+    PartyQuestP0LiveDiagnostics::RecordTransportState("connected-event");
 }
 
 void TransportService::HandleDisconnected(const DisconnectedEvent& acEvent) noexcept
@@ -210,6 +219,7 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     if (acMessage.Type == AR::kAccepted)
     {
         m_connected = true;
+        PartyQuestP0LiveDiagnostics::RecordTransportState("authentication-accepted-pre-mapping");
 
         m_world.SetServerSettings(acMessage.Settings);
 
