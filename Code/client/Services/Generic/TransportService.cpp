@@ -24,6 +24,7 @@
 
 #include <ScriptExtender.h>
 #include <Services/DiscordService.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 
 // #include <imgui_internal.h>
 
@@ -167,6 +168,12 @@ void TransportService::OnConnected()
 
 void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
+    // Disconnect is a runtime lifecycle boundary for canonical quest mutation.
+    // Drain any synchronous executor first and keep new dispatches out until all
+    // DisconnectedEvent consumers have observed the transition.
+    auto generationInvalidation =
+        PartyQuestRuntimeGenerationFence::GetProcessFence().BeginInvalidation();
+
     m_connected = false;
 
     spdlog::warn("Disconnected from server {}", aReason);
@@ -202,6 +209,10 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
 
         m_world.SetServerSettings(acMessage.Settings);
 
+        // UserMods is delivered before ConnectedEvent. ModSystem::HandleMods owns
+        // the process generation invalidation barrier across the complete
+        // server<->local FormID mapping rebuild, so reconnects cannot reuse a
+        // previous runtime witness even when the visible mod list is unchanged.
         m_dispatcher.trigger(acMessage.UserMods);
         m_dispatcher.trigger(acMessage.Settings);
         m_dispatcher.trigger(ConnectedEvent(acMessage.PlayerId));
