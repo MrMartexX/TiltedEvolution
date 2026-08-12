@@ -7,6 +7,7 @@
 #include <Forms/BGSBaseAlias.h>
 #include <Forms/TESQuest.h>
 #include <TESObjectREFR.h>
+#include <PartyQuestP0LiveDiagnostics.h>
 
 #include <Structs/Skyrim/PartyQuestAdmission.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSafety.h>
@@ -231,6 +232,11 @@ void QuestSnapshotCollector::Log(TESQuest* apQuest, const QuestSnapshot& acSnaps
     const PartyQuestSyncClassification classification = ClassifyPartyQuestSync(syncFacts);
     const PartyQuestAdmissionDecision admission = PartyQuestAdmissionPolicy::Evaluate(acSnapshot.QuestId, syncFacts);
     const PartyQuestApplyPlan applyPlan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(admission, acSnapshot);
+
+    // Mirror the same already-computed, read-only observation into the structured
+    // P0 evidence stream. This call cannot grant or execute mutation authority.
+    PartyQuestP0LiveDiagnostics::RecordQuestObservation(
+        apQuest, acSnapshot, World::Get().GetModSystem(), acReason);
 
     spdlog::info(
         "QuestSnapshot[{}]: form={:08X} gameId={:016X} editorId='{}' status={} stage={} digest={:016X} completedStages={} objectives={} refAliases={} locAliases={} createdRefs={} syncClass={} syncReason={} questType={} runtimeSafety={} runtimeReason={} applyActions=0x{:X} dryRunOnly={}",
