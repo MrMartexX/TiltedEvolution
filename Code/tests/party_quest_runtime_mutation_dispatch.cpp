@@ -5,6 +5,8 @@
 
 #include <catch2/catch.hpp>
 
+#include <type_traits>
+
 namespace
 {
 const PartyQuestCampaignId kDispatchCampaign{
@@ -104,6 +106,11 @@ void PrepareCheckpoint(
     REQUIRE(active->CheckpointCreated);
     REQUIRE_FALSE(active->RuntimeMutationMayHaveOccurred);
 }
+
+static_assert(!std::is_copy_constructible_v<
+    PartyQuestRuntimeGenerationFence::ExecutionLease>);
+static_assert(!std::is_copy_assignable_v<
+    PartyQuestRuntimeGenerationFence::ExecutionLease>);
 } // namespace
 
 TEST_CASE("Runtime mutation dispatch revalidates compatibility immediately around durable arm",
@@ -113,6 +120,7 @@ TEST_CASE("Runtime mutation dispatch revalidates compatibility immediately aroun
     const auto facts = BuildFacts(requirement);
     const auto request = BuildRequest(26001, requirement);
     PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGenerationFence generationFence;
     auto session = BuildSession();
     PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
     PrepareCheckpoint(guarded, session, request);
@@ -123,6 +131,7 @@ TEST_CASE("Runtime mutation dispatch revalidates compatibility immediately aroun
         guarded,
         request,
         requirement,
+        generationFence,
         [&](const GameId& acQuestId) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
         {
             REQUIRE(acQuestId == requirement.QuestId);
@@ -156,6 +165,7 @@ TEST_CASE("Stale compatibility before arm cannot publish mutation barrier or inv
     ++staleFacts.WinningOverrideFingerprint;
     const auto request = BuildRequest(26002, requirement);
     PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGenerationFence generationFence;
     auto session = BuildSession();
     PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
     PrepareCheckpoint(guarded, session, request);
@@ -165,6 +175,7 @@ TEST_CASE("Stale compatibility before arm cannot publish mutation barrier or inv
         guarded,
         request,
         requirement,
+        generationFence,
         [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
         {
             return staleFacts;
@@ -195,6 +206,7 @@ TEST_CASE("Compatibility change during durable arm fails closed behind recovery 
     ++changedFacts.ScriptFingerprint;
     const auto request = BuildRequest(26003, requirement);
     PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGenerationFence generationFence;
     auto session = BuildSession();
     PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
     PrepareCheckpoint(guarded, session, request);
@@ -205,6 +217,7 @@ TEST_CASE("Compatibility change during durable arm fails closed behind recovery 
         guarded,
         request,
         requirement,
+        generationFence,
         [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
         {
             ++observations;
@@ -238,6 +251,7 @@ TEST_CASE("Dispatch compatibility must match exact authority already bound to tr
     ++differentRequirement.NativeAdapterFingerprint;
     const auto differentFacts = BuildFacts(differentRequirement);
     PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGenerationFence generationFence;
     auto session = BuildSession();
     PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
     PrepareCheckpoint(guarded, session, request);
@@ -247,6 +261,7 @@ TEST_CASE("Dispatch compatibility must match exact authority already bound to tr
         guarded,
         request,
         differentRequirement,
+        generationFence,
         [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
         {
             return differentFacts;
@@ -273,6 +288,7 @@ TEST_CASE("Physical guard loss after final observation blocks mutation callback"
     const auto facts = BuildFacts(requirement);
     const auto request = BuildRequest(26005, requirement);
     PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGenerationFence generationFence;
     auto session = BuildSession();
     PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
     PrepareCheckpoint(guarded, session, request);
@@ -283,6 +299,7 @@ TEST_CASE("Physical guard loss after final observation blocks mutation callback"
         guarded,
         request,
         requirement,
+        generationFence,
         [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
         {
             ++observations;
@@ -302,4 +319,165 @@ TEST_CASE("Physical guard loss after final observation blocks mutation callback"
     REQUIRE(observations == 2);
     REQUIRE(executions == 0);
     REQUIRE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
+}
+
+TEST_CASE("Runtime generation change during first observation blocks before durable arm",
+    "[quest.party-state.runtime-dispatch][runtime-generation]")
+{
+    const auto requirement = BuildRequirement(GameId(95, 0x8600));
+    const auto facts = BuildFacts(requirement);
+    const auto request = BuildRequest(26006, requirement);
+    PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGenerationFence generationFence;
+    auto session = BuildSession();
+    PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
+    PrepareCheckpoint(guarded, session, request);
+
+    size_t executions{};
+    const auto generationBefore = generationFence.GetGeneration();
+    const auto result = PartyQuestRuntimeMutationDispatchGate::Dispatch(
+        guarded,
+        request,
+        requirement,
+        generationFence,
+        [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
+        {
+            REQUIRE(generationFence.Invalidate() != generationBefore);
+            return facts;
+        },
+        [&](const PartyQuestRuntimeApplyRequest&)
+        {
+            ++executions;
+            return true;
+        });
+
+    REQUIRE(result.Status ==
+        PartyQuestRuntimeMutationDispatchStatus::RuntimeGenerationChanged);
+    REQUIRE_FALSE(result.MutationBarrierArmed);
+    REQUIRE_FALSE(result.MutationInvoked);
+    REQUIRE(executions == 0);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::ReadyToApply);
+    REQUIRE_FALSE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
+}
+
+TEST_CASE("Runtime generation change during durable arm stays behind recovery barrier",
+    "[quest.party-state.runtime-dispatch][runtime-generation]")
+{
+    const auto requirement = BuildRequirement(GameId(95, 0x8700));
+    const auto facts = BuildFacts(requirement);
+    const auto request = BuildRequest(26007, requirement);
+    PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGenerationFence generationFence;
+    size_t persistenceCalls{};
+    PartyQuestRuntimeApplySession session(
+        kDispatchCampaign,
+        kDispatchPlayer,
+        [&](const PartyQuestRuntimeRecoveryState& acState)
+        {
+            ++persistenceCalls;
+            if (acState.Active && acState.Active->RuntimeMutationMayHaveOccurred)
+                (void)generationFence.Invalidate();
+            return true;
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
+    PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
+    PrepareCheckpoint(guarded, session, request);
+
+    size_t observations{};
+    size_t executions{};
+    const auto result = PartyQuestRuntimeMutationDispatchGate::Dispatch(
+        guarded,
+        request,
+        requirement,
+        generationFence,
+        [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
+        {
+            ++observations;
+            return facts;
+        },
+        [&](const PartyQuestRuntimeApplyRequest&)
+        {
+            ++executions;
+            return true;
+        });
+
+    REQUIRE(result.Status ==
+        PartyQuestRuntimeMutationDispatchStatus::RuntimeGenerationChanged);
+    REQUIRE(result.MutationBarrierArmed);
+    REQUIRE_FALSE(result.MutationInvoked);
+    REQUIRE(observations == 1);
+    REQUIRE(executions == 0);
+    REQUIRE(persistenceCalls >= 3);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::WaitingForPapyrus);
+    REQUIRE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
+    REQUIRE(guarded.AbortBeforeMutation(request.TransactionId).Status ==
+        PartyQuestRuntimeGuardStatus::CheckpointRestoreRequired);
+}
+
+TEST_CASE("Runtime generation change during final observation blocks executor behind recovery barrier",
+    "[quest.party-state.runtime-dispatch][runtime-generation]")
+{
+    const auto requirement = BuildRequirement(GameId(95, 0x8800));
+    const auto facts = BuildFacts(requirement);
+    const auto request = BuildRequest(26008, requirement);
+    PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGenerationFence generationFence;
+    auto session = BuildSession();
+    PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
+    PrepareCheckpoint(guarded, session, request);
+
+    size_t observations{};
+    size_t executions{};
+    const auto result = PartyQuestRuntimeMutationDispatchGate::Dispatch(
+        guarded,
+        request,
+        requirement,
+        generationFence,
+        [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
+        {
+            ++observations;
+            if (observations == 2)
+                (void)generationFence.Invalidate();
+            return facts;
+        },
+        [&](const PartyQuestRuntimeApplyRequest&)
+        {
+            ++executions;
+            return true;
+        });
+
+    REQUIRE(result.Status ==
+        PartyQuestRuntimeMutationDispatchStatus::RuntimeGenerationChanged);
+    REQUIRE(result.MutationBarrierArmed);
+    REQUIRE_FALSE(result.MutationInvoked);
+    REQUIRE(observations == 2);
+    REQUIRE(executions == 0);
+    REQUIRE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
+    REQUIRE(guarded.AbortBeforeMutation(request.TransactionId).Status ==
+        PartyQuestRuntimeGuardStatus::CheckpointRestoreRequired);
+}
+
+TEST_CASE("Runtime generation fence rejects stale execution lease acquisition",
+    "[quest.party-state.runtime-dispatch][runtime-generation]")
+{
+    PartyQuestRuntimeGenerationFence generationFence;
+    const auto firstGeneration = generationFence.GetGeneration();
+    REQUIRE(firstGeneration != 0);
+
+    auto exactLease = generationFence.TryAcquire(firstGeneration);
+    REQUIRE(exactLease.has_value());
+    REQUIRE(exactLease->IsValid());
+    REQUIRE(exactLease->GetGeneration() == firstGeneration);
+    exactLease.reset();
+
+    const auto nextGeneration = generationFence.Invalidate();
+    REQUIRE(nextGeneration != 0);
+    REQUIRE(nextGeneration != firstGeneration);
+    REQUIRE_FALSE(generationFence.TryAcquire(firstGeneration).has_value());
+
+    auto currentLease = generationFence.TryAcquire(nextGeneration);
+    REQUIRE(currentLease.has_value());
+    REQUIRE(currentLease->IsValid());
 }
