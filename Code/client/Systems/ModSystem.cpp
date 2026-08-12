@@ -7,6 +7,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 
 #include <Games/TES.h>
+#include <PartyQuestP0LiveDiagnostics.h>
 
 ModSystem::ModSystem(entt::dispatcher& aDispatcher) noexcept
 {
@@ -79,12 +80,20 @@ uint32_t ModSystem::GetGameId(const GameId& acGameId) const noexcept
 
 void ModSystem::HandleMods(const Mods& acMods) noexcept
 {
+    auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t generationBefore = generationFence.GetGeneration();
+
     // The server<->local FormID map is part of runtime mutation identity. Advance
     // the process generation and keep the exclusive invalidation lease for the
     // complete rebuild so no canonical dispatch can observe a half-published
     // load-order mapping.
-    auto generationInvalidation =
-        PartyQuestRuntimeGenerationFence::GetProcessFence().BeginInvalidation();
+    auto generationInvalidation = generationFence.BeginInvalidation();
+    const uint64_t generationAfter = generationInvalidation.GetGeneration();
+
+    PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+        "mod-mapping-rebuild", "exclusive-lease-acquired", generationBefore, generationAfter);
+    PartyQuestP0LiveDiagnostics::RecordModMappingBegin(
+        acMods.ModList.size(), generationBefore, generationAfter);
 
     m_serverToGame.clear();
     m_liteToServer.clear();
@@ -92,25 +101,38 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
     m_standardToServer[0xFF] = std::numeric_limits<uint32_t>::max();
 
     const auto pModManager = ModManager::Get();
+    size_t resolvedCount = 0;
+    size_t missingCount = 0;
 
     for (const auto& mod : acMods.ModList)
     {
         if (Mod* pMod = pModManager->GetByName(mod.Filename.c_str()))
         {
+            const uint32_t localModId = pMod->GetId();
+            PartyQuestP0LiveDiagnostics::RecordModMappingEntry(
+                mod.Id, mod.Filename.c_str(), mod.IsLite, true, localModId, mod.IsLite);
+            ++resolvedCount;
+
             if (mod.IsLite)
             {
-                m_serverToGame.emplace(mod.Id, GameMod{static_cast<uint16_t>(pMod->GetId() & 0xFFFu), true});
-                m_liteToServer.emplace(pMod->GetId(), mod.Id);
+                m_serverToGame.emplace(mod.Id, GameMod{static_cast<uint16_t>(localModId & 0xFFFu), true});
+                m_liteToServer.emplace(localModId, mod.Id);
             }
             else
             {
-                m_serverToGame.emplace(mod.Id, GameMod{static_cast<uint16_t>(pMod->GetId() & 0xFFu), false});
-                m_standardToServer[pMod->GetId() & 0xFF] = mod.Id;
+                m_serverToGame.emplace(mod.Id, GameMod{static_cast<uint16_t>(localModId & 0xFFu), false});
+                m_standardToServer[localModId & 0xFF] = mod.Id;
             }
         }
         else
         {
+            PartyQuestP0LiveDiagnostics::RecordModMappingEntry(
+                mod.Id, mod.Filename.c_str(), mod.IsLite, false, 0, mod.IsLite);
+            ++missingCount;
             spdlog::error("Failed to find mod {}, is lite? {}, id: {:X}", mod.Filename.c_str(), mod.IsLite, mod.Id);
         }
     }
+
+    PartyQuestP0LiveDiagnostics::RecordModMappingEnd(
+        acMods.ModList.size(), resolvedCount, missingCount, generationAfter);
 }
