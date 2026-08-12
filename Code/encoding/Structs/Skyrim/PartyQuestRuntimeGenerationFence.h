@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <optional>
 #include <shared_mutex>
+#include <utility>
 
 class PartyQuestRuntimeGenerationFence final
 {
