@@ -109,8 +109,9 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
         if (Mod* pMod = pModManager->GetByName(mod.Filename.c_str()))
         {
             const uint32_t localModId = pMod->GetId();
+            const bool localIsLite = pMod->IsLite();
             PartyQuestP0LiveDiagnostics::RecordModMappingEntry(
-                mod.Id, mod.Filename.c_str(), mod.IsLite, true, localModId, mod.IsLite);
+                mod.Id, mod.Filename.c_str(), mod.IsLite, true, localModId, localIsLite);
             ++resolvedCount;
 
             if (mod.IsLite)
@@ -127,7 +128,7 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
         else
         {
             PartyQuestP0LiveDiagnostics::RecordModMappingEntry(
-                mod.Id, mod.Filename.c_str(), mod.IsLite, false, 0, mod.IsLite);
+                mod.Id, mod.Filename.c_str(), mod.IsLite, false, 0, false);
             ++missingCount;
             spdlog::error("Failed to find mod {}, is lite? {}, id: {:X}", mod.Filename.c_str(), mod.IsLite, mod.Id);
         }
