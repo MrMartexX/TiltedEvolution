@@ -20,10 +20,27 @@ public:
             PartyQuestVerificationComponent::QuestSnapshot) noexcept
     {
         constexpr uint64_t kTestCompatibilityFingerprint = 0xD15EA5E5AFE00001ull;
+        return MakeMutationAuthorizationWithCompatibilityFingerprint(
+            acSnapshot,
+            aActions,
+            kTestCompatibilityFingerprint,
+            aDryRunOnly,
+            aAdapterMutationComponents);
+    }
+
+    [[nodiscard]] static PartyQuestRuntimeMutationAuthorization
+    MakeMutationAuthorizationWithCompatibilityFingerprint(
+        const QuestSnapshot& acSnapshot,
+        PartyQuestApplyAction aActions,
+        uint64_t aCompatibilityFingerprint,
+        bool aDryRunOnly = true,
+        PartyQuestVerificationComponent aAdapterMutationComponents =
+            PartyQuestVerificationComponent::QuestSnapshot) noexcept
+    {
         return PartyQuestRuntimeMutationAuthorization(
             acSnapshot.QuestId,
             acSnapshot.ComputeDigest(),
-            kTestCompatibilityFingerprint,
+            aCompatibilityFingerprint,
             aAdapterMutationComponents,
             aActions,
             aDryRunOnly);
@@ -42,6 +59,20 @@ public:
             acSnapshot,
             aPlan.Actions,
             false);
+    }
+
+    static void AuthorizePlanWithCompatibilityFingerprint(
+        PartyQuestApplyPlan& aPlan,
+        const QuestSnapshot& acSnapshot,
+        uint64_t aCompatibilityFingerprint) noexcept
+    {
+        aPlan.DryRunOnly = false;
+        aPlan.MutationAuthorization =
+            MakeMutationAuthorizationWithCompatibilityFingerprint(
+                acSnapshot,
+                aPlan.Actions,
+                aCompatibilityFingerprint,
+                false);
     }
 
     static void AuthorizeDryRunPlan(
