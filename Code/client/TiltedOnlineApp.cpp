@@ -83,7 +83,7 @@ void TiltedOnlineApp::Update()
     // call will therefore fail closed; queued work must perform the complete
     // guarded Dispatch after it reaches this thread rather than carrying a
     // prevalidated capability across the queue boundary.
-    PartyQuestSkyrimRuntimeThread::ObserveCurrentUpdateThread();
+    (void)PartyQuestSkyrimRuntimeThread::ObserveCurrentUpdateThread();
 
     // Reverting a change that used to be here to disable bUseFaceGenPreprocessedHeads==true (which is 
     // the default) handling. Extensive testing over months by multiple parties showed that enabling 
