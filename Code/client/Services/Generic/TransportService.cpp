@@ -173,7 +173,7 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
     // DisconnectedEvent consumers: the runtime session owner is responsible for
     // taking its own full lifecycle lease around PrepareAndRelease(), and nested
     // exclusive acquisition of the same shared_mutex would otherwise deadlock.
-    PartyQuestRuntimeGenerationFence::GetProcessFence().Invalidate();
+    (void)PartyQuestRuntimeGenerationFence::GetProcessFence().Invalidate();
 
     m_connected = false;
 
@@ -263,7 +263,6 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     {
         ErrorInfo += "\"error\": \"wrong_password\"";
         break;
-    }
     case AR::kServerFull:
     {
         ErrorInfo += "\"error\": \"server_full\"";
