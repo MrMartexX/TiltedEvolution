@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeWorkspacePublicationAuthority.h>
 
 namespace
@@ -20,6 +21,10 @@ PartyQuestRuntimeSessionOwnerBindResult MakeEarlyFailure(
 
 PartyQuestRuntimeSessionOwner::~PartyQuestRuntimeSessionOwner() noexcept
 {
+    // Teardown is itself a runtime-context transition. Hold the exclusive
+    // generation barrier until all guarded/session/workspace authority is gone.
+    auto generationInvalidation =
+        PartyQuestRuntimeGenerationFence::GetProcessFence().BeginInvalidation();
     Clear();
 }
 
@@ -209,6 +214,12 @@ PartyQuestRuntimeLifecycleFenceResult
 PartyQuestRuntimeSessionOwner::PrepareAndRelease(
     PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 {
+    // Advance and pin the process generation before touching the guarded runtime
+    // owner. An in-flight executor lease drains first; no new dispatch can begin
+    // until the lifecycle decision and any allowed teardown are complete.
+    auto generationInvalidation =
+        PartyQuestRuntimeGenerationFence::GetProcessFence().BeginInvalidation();
+
     if (!IsBound())
     {
         PartyQuestRuntimeLifecycleFenceResult result;
