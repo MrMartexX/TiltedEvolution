@@ -168,11 +168,12 @@ void TransportService::OnConnected()
 
 void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
-    // Disconnect is a runtime lifecycle boundary for canonical quest mutation.
-    // Drain any synchronous executor first and keep new dispatches out until all
-    // DisconnectedEvent consumers have observed the transition.
-    auto generationInvalidation =
-        PartyQuestRuntimeGenerationFence::GetProcessFence().BeginInvalidation();
+    // Disconnect invalidates every compatibility/load-order witness before the
+    // event fanout. Do not retain the exclusive lease while calling arbitrary
+    // DisconnectedEvent consumers: the runtime session owner is responsible for
+    // taking its own full lifecycle lease around PrepareAndRelease(), and nested
+    // exclusive acquisition of the same shared_mutex would otherwise deadlock.
+    PartyQuestRuntimeGenerationFence::GetProcessFence().Invalidate();
 
     m_connected = false;
 
