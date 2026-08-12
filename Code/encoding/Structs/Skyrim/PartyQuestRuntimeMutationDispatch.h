@@ -63,6 +63,22 @@ public:
         const GameId&)>;
     using MutationExecutor = std::function<bool(const PartyQuestRuntimeApplyRequest&)>;
 
+    /**
+     * Production entrypoint. It always uses the shared process generation fence
+     * that lifecycle/load-order integration invalidates.
+     */
+    [[nodiscard]] static PartyQuestRuntimeMutationDispatchResult Dispatch(
+        PartyQuestRuntimeGuardedSession& aGuardedSession,
+        const PartyQuestRuntimeApplyRequest& acCurrentRequest,
+        const PartyQuestRuntimeCompatibilityRequirement& acRequirement,
+        const CompatibilityObserver& acObserver,
+        const MutationExecutor& acExecutor);
+
+    /**
+     * Explicit-fence seam for deterministic unit tests. Production integration
+     * should use the overload above so it cannot accidentally create an
+     * unrelated generation domain.
+     */
     [[nodiscard]] static PartyQuestRuntimeMutationDispatchResult Dispatch(
         PartyQuestRuntimeGuardedSession& aGuardedSession,
         const PartyQuestRuntimeApplyRequest& acCurrentRequest,
