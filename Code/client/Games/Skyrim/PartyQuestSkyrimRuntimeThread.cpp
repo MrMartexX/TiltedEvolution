@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 
 #include <PartyQuestSkyrimRuntimeThread.h>
+#include <PartyQuestP0LiveDiagnostics.h>
 
 #include <atomic>
 
@@ -22,10 +23,19 @@ bool PartyQuestSkyrimRuntimeThread::ObserveCurrentUpdateThread() noexcept
             std::memory_order_acq_rel,
             std::memory_order_acquire))
     {
+        PartyQuestP0LiveDiagnostics::RecordRuntimeThreadObservation(
+            true, currentThreadId, currentThreadId);
         return true;
     }
 
-    return expected == currentThreadId;
+    const bool accepted = expected == currentThreadId;
+    if (!accepted)
+    {
+        PartyQuestP0LiveDiagnostics::RecordRuntimeThreadObservation(
+            false, expected, currentThreadId);
+    }
+
+    return accepted;
 }
 
 bool PartyQuestSkyrimRuntimeThread::IsCurrentUpdateThread() noexcept
