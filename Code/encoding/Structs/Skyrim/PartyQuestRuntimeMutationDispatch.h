@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 
 #include <functional>
@@ -17,7 +18,8 @@ enum class PartyQuestRuntimeMutationDispatchStatus : uint8_t
     CompatibilityAuthorityMismatch,
     ArmFailed,
     DispatchContextLost,
-    ExecutorRejected
+    ExecutorRejected,
+    RuntimeGenerationChanged
 };
 
 struct PartyQuestRuntimeMutationDispatchResult
@@ -45,9 +47,13 @@ struct PartyQuestRuntimeMutationDispatchResult
  * executor must be invoked synchronously through this gate.
  *
  * The compatibility observer is sampled twice: once before arming, then again
- * after the durable arm immediately before the executor callback. If runtime
- * compatibility changes while the durable state is being persisted, the
- * callback is not invoked and the armed recovery barrier remains fail-closed.
+ * after the durable arm immediately before the executor callback. Both samples
+ * must be contained in the same process-local runtime generation. The final
+ * structural/physical guard check and executor callback run while an execution
+ * lease pins that generation, so a concurrent lifecycle/resolver invalidation
+ * cannot silently cross the observation-to-dispatch boundary.
+ *
+ * The generation is deliberately process-local and is never durable authority.
  * No reusable dispatch token escapes this call.
  */
 class PartyQuestRuntimeMutationDispatchGate final
@@ -61,6 +67,7 @@ public:
         PartyQuestRuntimeGuardedSession& aGuardedSession,
         const PartyQuestRuntimeApplyRequest& acCurrentRequest,
         const PartyQuestRuntimeCompatibilityRequirement& acRequirement,
+        PartyQuestRuntimeGenerationFence& aGenerationFence,
         const CompatibilityObserver& acObserver,
         const MutationExecutor& acExecutor);
 };
