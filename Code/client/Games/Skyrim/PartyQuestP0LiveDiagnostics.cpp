@@ -12,8 +12,11 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSafety.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
+#include <chrono>
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
@@ -137,12 +140,16 @@ void WriteEvent(const char* acEvent, const std::string& acFields = {}) noexcept
     {
         const uint64_t sequence = s_sequence.fetch_add(1, std::memory_order_relaxed) + 1;
         const uint32_t threadId = GetCurrentThreadId();
+        const uint64_t unixMs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
 
         std::scoped_lock lock(s_mutex);
         if (!s_stream)
             return;
 
         s_stream << "{\"seq\":" << sequence
+                 << ",\"unix_ms\":" << unixMs
                  << ",\"event\":\"" << EscapeJson(acEvent) << "\""
                  << ",\"thread_id\":" << threadId;
         if (!acFields.empty())
@@ -294,7 +301,8 @@ void PartyQuestP0LiveDiagnostics::Initialize() noexcept
 
         std::ostringstream startup;
         startup << "\"generation\":"
-                << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
+                << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration()
+                << ",\"build_commit\":\"" << EscapeJson(BUILD_COMMIT) << "\"";
 
         if (const auto executableVersion = GetExecutableVersion())
             startup << ",\"executable_version\":" << VersionJson(*executableVersion);
@@ -339,7 +347,8 @@ void PartyQuestP0LiveDiagnostics::Initialize() noexcept
             "\"load_game_engine_hook\":{\"available\":false,\"reason\":\"verified-pre-transition-hook-not-wired\"},"
             "\"new_game_engine_hook\":{\"available\":false,\"reason\":\"verified-pre-transition-hook-not-wired\"},"
             "\"main_menu_engine_hook\":{\"available\":false,\"reason\":\"verified-pre-transition-hook-not-wired\"},"
-            "\"profile_switch_engine_hook\":{\"available\":false,\"reason\":\"verified-pre-transition-hook-not-wired\"}");
+            "\"profile_switch_engine_hook\":{\"available\":false,\"reason\":\"verified-pre-transition-hook-not-wired\"},"
+            "\"save_engine_hook\":{\"instrumented\":true,\"runtime_installation_verified_only_by_observed_event\":true}");
     }
     catch (...)
     {
@@ -393,6 +402,31 @@ void PartyQuestP0LiveDiagnostics::RecordGamePresence(bool aInGame) noexcept
            << ",\"semantic\":\"overlay-player-presence-only-not-engine-lifecycle-authority\""
            << ",\"generation\":" << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
     WriteEvent("game_presence", fields.str());
+}
+
+void PartyQuestP0LiveDiagnostics::RecordEngineSave(
+    const char* acPhase,
+    const char* acFileName,
+    uint64_t aTransactionId,
+    int32_t aDeviceId,
+    uint32_t aOutputStats,
+    bool aPermitted,
+    bool aResultKnown,
+    bool aResult) noexcept
+{
+    std::ostringstream fields;
+    fields << "\"phase\":\"" << EscapeJson(acPhase) << "\""
+           << ",\"save_name\":\"" << EscapeJson(acFileName ? acFileName : "") << "\""
+           << ",\"transaction_id\":" << aTransactionId
+           << ",\"device_id\":" << aDeviceId
+           << ",\"output_stats\":" << aOutputStats
+           << ",\"permitted\":" << (aPermitted ? "true" : "false")
+           << ",\"generation\":" << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
+    if (aResultKnown)
+        fields << ",\"result\":" << (aResult ? "true" : "false");
+    else
+        fields << ",\"result\":{\"available\":false,\"reason\":\"original-engine-call-not-returned-yet\"}";
+    WriteEvent("skyrim_save_pipeline", fields.str());
 }
 
 void PartyQuestP0LiveDiagnostics::RecordModMappingBegin(
