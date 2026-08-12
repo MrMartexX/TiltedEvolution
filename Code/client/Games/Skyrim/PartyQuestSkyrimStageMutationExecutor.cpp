@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 
 #include <PartyQuestSkyrimStageMutationExecutor.h>
+#include <PartyQuestSkyrimRuntimeThread.h>
 
 #include <Forms/TESQuest.h>
 #include <Services/QuestSnapshotCollector.h>
@@ -59,8 +60,11 @@ bool PartyQuestSkyrimStageMutationExecutor::Execute(
     const PartyQuestRuntimeApplyRequest& acRequest,
     ModSystem& aModSystem) noexcept
 {
-    if (!IsNarrowStagePlan(acRequest))
+    if (!PartyQuestSkyrimRuntimeThread::IsCurrentUpdateThread() ||
+        !IsNarrowStagePlan(acRequest))
+    {
         return false;
+    }
 
     const uint32_t formId = aModSystem.GetGameId(acRequest.CanonicalSnapshot.QuestId);
     if (formId == 0)
