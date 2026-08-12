@@ -4,6 +4,7 @@
 
 #include <Structs/Mods.h>
 #include <Structs/GameId.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 
 #include <Games/TES.h>
 
@@ -78,6 +79,13 @@ uint32_t ModSystem::GetGameId(const GameId& acGameId) const noexcept
 
 void ModSystem::HandleMods(const Mods& acMods) noexcept
 {
+    // The server<->local FormID map is part of runtime mutation identity. Advance
+    // the process generation and keep the exclusive invalidation lease for the
+    // complete rebuild so no canonical dispatch can observe a half-published
+    // load-order mapping.
+    auto generationInvalidation =
+        PartyQuestRuntimeGenerationFence::GetProcessFence().BeginInvalidation();
+
     m_serverToGame.clear();
     m_liteToServer.clear();
     std::memset(m_standardToServer, 0, sizeof(m_standardToServer));
