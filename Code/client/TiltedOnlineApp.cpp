@@ -18,6 +18,7 @@
 #include <Services/ImguiService.h>
 #include <Services/DiscordService.h>
 
+#include <PartyQuestP0LiveDiagnostics.h>
 #include <PartyQuestSkyrimRuntimeThread.h>
 #include <ScriptExtender.h>
 #include <NvidiaUtil.h>
@@ -41,6 +42,10 @@ TiltedOnlineApp::TiltedOnlineApp()
     logger->set_pattern("%^[%Y-%m-%d %H:%M:%S.%e] [%l] [tid %t] %$ %v");
     spdlog::flush_every(std::chrono::seconds(1));
     set_default_logger(logger);
+
+    // Optional, read-only P0 evidence recorder. It is disabled by default and
+    // never grants runtime mutation authority.
+    PartyQuestP0LiveDiagnostics::Initialize();
 }
 
 TiltedOnlineApp::~TiltedOnlineApp() = default;
