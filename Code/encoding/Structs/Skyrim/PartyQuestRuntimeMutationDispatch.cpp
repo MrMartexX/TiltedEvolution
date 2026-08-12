@@ -79,6 +79,22 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
     PartyQuestRuntimeGuardedSession& aGuardedSession,
     const PartyQuestRuntimeApplyRequest& acCurrentRequest,
     const PartyQuestRuntimeCompatibilityRequirement& acRequirement,
+    const CompatibilityObserver& acObserver,
+    const MutationExecutor& acExecutor)
+{
+    return Dispatch(
+        aGuardedSession,
+        acCurrentRequest,
+        acRequirement,
+        PartyQuestRuntimeGenerationFence::GetProcessFence(),
+        acObserver,
+        acExecutor);
+}
+
+PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::Dispatch(
+    PartyQuestRuntimeGuardedSession& aGuardedSession,
+    const PartyQuestRuntimeApplyRequest& acCurrentRequest,
+    const PartyQuestRuntimeCompatibilityRequirement& acRequirement,
     PartyQuestRuntimeGenerationFence& aGenerationFence,
     const CompatibilityObserver& acObserver,
     const MutationExecutor& acExecutor)
