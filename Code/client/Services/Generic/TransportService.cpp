@@ -169,13 +169,16 @@ void TransportService::OnConnected()
 void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
     // Disconnect invalidates every compatibility/load-order witness before the
-    // event fanout. Do not retain the exclusive lease while calling arbitrary
-    // DisconnectedEvent consumers: the runtime session owner is responsible for
-    // taking its own full lifecycle lease around PrepareAndRelease(), and nested
-    // exclusive acquisition of the same shared_mutex would otherwise deadlock.
-    (void)PartyQuestRuntimeGenerationFence::GetProcessFence().Invalidate();
-
-    m_connected = false;
+    // event fanout. Hold the exclusive generation barrier just long enough to
+    // publish the disconnected transport state, then release it before calling
+    // arbitrary DisconnectedEvent consumers. The runtime session owner can then
+    // take its own full lifecycle lease around PrepareAndRelease() without a
+    // nested exclusive acquisition deadlock.
+    {
+        auto generationInvalidation =
+            PartyQuestRuntimeGenerationFence::GetProcessFence().BeginInvalidation();
+        m_connected = false;
+    }
 
     spdlog::warn("Disconnected from server {}", aReason);
 
