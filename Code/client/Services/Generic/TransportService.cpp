@@ -263,6 +263,7 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     {
         ErrorInfo += "\"error\": \"wrong_password\"";
         break;
+    }
     case AR::kServerFull:
     {
         ErrorInfo += "\"error\": \"server_full\"";
