@@ -1,5 +1,6 @@
 #include <TiltedOnlinePCH.h>
 
+#include <PartyQuestP0LiveDiagnostics.h>
 #include <SaveLoad.h>
 #include <Structs/Skyrim/PartyQuestSaveGuard.h>
 
@@ -72,6 +73,15 @@ bool TP_MAKE_THISCALL(
     auto permit = guard.TryEnterEngineSave();
     if (!permit.IsAllowed())
     {
+        PartyQuestP0LiveDiagnostics::RecordEngineSave(
+            "blocked-by-save-guard",
+            acFileName,
+            guard.GetTransactionId(),
+            aDeviceId,
+            aOutputStats,
+            false,
+            true,
+            false);
         spdlog::warn(
             "PartyQuest runtime blocked Skyrim save during critical repair: transaction={} device={} outputStats={} save={}",
             guard.GetTransactionId(),
@@ -83,6 +93,15 @@ bool TP_MAKE_THISCALL(
 
     if (!RealBGSSaveLoadManager_SaveImpl)
     {
+        PartyQuestP0LiveDiagnostics::RecordEngineSave(
+            "original-unavailable",
+            acFileName,
+            guard.GetTransactionId(),
+            aDeviceId,
+            aOutputStats,
+            true,
+            true,
+            false);
         spdlog::error(
             "PartyQuest runtime cannot enter Skyrim save pipeline: original BGSSaveLoadManager::Save_Impl is null");
         return false;
@@ -94,12 +113,33 @@ bool TP_MAKE_THISCALL(
     // callbacks all occur before the hooked SaveGame call unwinds. Holding the
     // permit over the complete original call therefore also drains a save before
     // a critical repair lease can be published.
-    return TiltedPhoques::ThisCall(
+    PartyQuestP0LiveDiagnostics::RecordEngineSave(
+        "enter-original",
+        acFileName,
+        guard.GetTransactionId(),
+        aDeviceId,
+        aOutputStats,
+        true,
+        false,
+        false);
+
+    const bool result = TiltedPhoques::ThisCall(
         RealBGSSaveLoadManager_SaveImpl,
         apThis,
         aDeviceId,
         aOutputStats,
         acFileName);
+
+    PartyQuestP0LiveDiagnostics::RecordEngineSave(
+        "return-original",
+        acFileName,
+        guard.GetTransactionId(),
+        aDeviceId,
+        aOutputStats,
+        true,
+        true,
+        result);
+    return result;
 }
 
 static TiltedPhoques::Initializer s_partyQuestSaveGuardHook(
