@@ -65,12 +65,21 @@ bool MatchesCompatibilityAuthority(
             acRequest.Plan.MutationAuthorization.GetAdapterMutationComponents() &&
         profile.GetAdapterMutationComponents() == PartyQuestVerificationComponent::QuestSnapshot;
 }
+
+bool GenerationChanged(
+    const PartyQuestRuntimeGenerationFence& acGenerationFence,
+    uint64_t aExpectedGeneration) noexcept
+{
+    return aExpectedGeneration == 0 ||
+        acGenerationFence.GetGeneration() != aExpectedGeneration;
+}
 } // namespace
 
 PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::Dispatch(
     PartyQuestRuntimeGuardedSession& aGuardedSession,
     const PartyQuestRuntimeApplyRequest& acCurrentRequest,
     const PartyQuestRuntimeCompatibilityRequirement& acRequirement,
+    PartyQuestRuntimeGenerationFence& aGenerationFence,
     const CompatibilityObserver& acObserver,
     const MutationExecutor& acExecutor)
 {
@@ -106,7 +115,14 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
         return result;
     }
 
+    const uint64_t expectedGeneration = aGenerationFence.GetGeneration();
     auto facts = acObserver(identity->QuestId);
+    if (GenerationChanged(aGenerationFence, expectedGeneration))
+    {
+        result.Status = PartyQuestRuntimeMutationDispatchStatus::RuntimeGenerationChanged;
+        return result;
+    }
+
     if (!facts)
     {
         result.Status = PartyQuestRuntimeMutationDispatchStatus::ObservationUnavailable;
@@ -143,9 +159,23 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
         return result;
     }
 
+    // A lifecycle/resolver transition while the durable arm was being written
+    // invalidates the earlier observation. Stay behind the recovery barrier.
+    if (GenerationChanged(aGenerationFence, expectedGeneration))
+    {
+        result.Status = PartyQuestRuntimeMutationDispatchStatus::RuntimeGenerationChanged;
+        return result;
+    }
+
     // Observe again after the durability write. A runtime/load-order change that
-    // happened while arming must never inherit the earlier compatibility result.
+    // happens during this sample must never inherit the earlier compatibility result.
     facts = acObserver(identity->QuestId);
+    if (GenerationChanged(aGenerationFence, expectedGeneration))
+    {
+        result.Status = PartyQuestRuntimeMutationDispatchStatus::RuntimeGenerationChanged;
+        return result;
+    }
+
     if (!facts)
     {
         result.Status = PartyQuestRuntimeMutationDispatchStatus::ObservationUnavailable;
@@ -173,8 +203,16 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
         return result;
     }
 
-    // Final structural/physical guard recheck is immediately adjacent to the
-    // callback. No bearer dispatch capability survives this function call.
+    // Pin the exact observed generation across the final context validation and
+    // synchronous executor callback. Invalidation takes the exclusive side of
+    // the same process-local fence and therefore cannot cross this boundary.
+    auto generationLease = aGenerationFence.TryAcquire(expectedGeneration);
+    if (!generationLease || !generationLease->IsValid())
+    {
+        result.Status = PartyQuestRuntimeMutationDispatchStatus::RuntimeGenerationChanged;
+        return result;
+    }
+
     if (!HasDispatchContext(
             aGuardedSession,
             *identity,
