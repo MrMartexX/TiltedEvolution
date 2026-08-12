@@ -3,6 +3,7 @@
 #include <Services/QuestSnapshotCollector.h>
 
 #include <Systems/ModSystem.h>
+#include <World.h>
 
 #include <Forms/BGSBaseAlias.h>
 #include <Forms/TESQuest.h>
