@@ -13,9 +13,7 @@ TP_THIS_FUNCTION(
     uint32_t,
     bool);
 
-namespace
-{
-TBGSSaveLoadManager_LoadImpl* s_realLoadImpl = nullptr;
+static TBGSSaveLoadManager_LoadImpl* RealBGSSaveLoadManager_LoadImpl = nullptr;
 
 bool TP_MAKE_THISCALL(
     PartyQuest_BGSSaveLoadManager_LoadImpl,
@@ -53,7 +51,7 @@ bool TP_MAKE_THISCALL(
             generationFence.GetGeneration());
     }
 
-    if (!s_realLoadImpl)
+    if (!RealBGSSaveLoadManager_LoadImpl)
     {
         spdlog::error(
             "PartyQuest P0 cannot enter Skyrim load pipeline: original BGSSaveLoadManager::Load_Impl is null");
@@ -63,7 +61,7 @@ bool TP_MAKE_THISCALL(
     }
 
     const bool result = TiltedPhoques::ThisCall(
-        s_realLoadImpl,
+        RealBGSSaveLoadManager_LoadImpl,
         apThis,
         acFileName,
         aDeviceId,
@@ -92,7 +90,7 @@ bool TP_MAKE_THISCALL(
     return result;
 }
 
-TiltedPhoques::Initializer s_partyQuestRuntimeLoadHook(
+static TiltedPhoques::Initializer s_partyQuestRuntimeLoadHook(
     []()
     {
         // CommonLibSSE-NG: BGSSaveLoadManager::Load_Impl is
@@ -100,16 +98,17 @@ TiltedPhoques::Initializer s_partyQuestRuntimeLoadHook(
         // same convention already used by Save_Impl=35727 in SaveLoad.cpp.
         POINTER_SKYRIMSE(TBGSSaveLoadManager_LoadImpl, s_loadImpl, 35728);
 
-        s_realLoadImpl = s_loadImpl.Get();
-        if (!s_realLoadImpl)
+        RealBGSSaveLoadManager_LoadImpl = s_loadImpl.Get();
+        if (!RealBGSSaveLoadManager_LoadImpl)
         {
             spdlog::error(
                 "PartyQuest P0 failed to resolve BGSSaveLoadManager::Load_Impl (Address Library id 35728); load lifecycle fencing not installed");
             return;
         }
 
-        TP_HOOK(&s_realLoadImpl, PartyQuest_BGSSaveLoadManager_LoadImpl);
+        TP_HOOK(
+            &RealBGSSaveLoadManager_LoadImpl,
+            PartyQuest_BGSSaveLoadManager_LoadImpl);
         spdlog::info(
             "PartyQuest P0 installed Skyrim Load_Impl generation lifecycle fence");
     });
-} // namespace
