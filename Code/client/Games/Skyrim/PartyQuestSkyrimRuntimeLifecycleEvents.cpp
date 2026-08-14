@@ -28,7 +28,6 @@ void InvalidateRuntimeGeneration(const char* acReason) noexcept
 
 class PartyQuestSkyrimRuntimeLifecycleEventSink final
     : public BSTEventSink<TESLoadGameEvent>
-    , public BSTEventSink<TESResetEvent>
 {
 public:
     BSTEventResult OnEvent(
@@ -39,16 +38,6 @@ public:
         // barrier. It still invalidates every witness from the previous loaded
         // world before the next P0 dispatch is allowed to reuse that generation.
         InvalidateRuntimeGeneration("engine-load-game");
-        return BSTEventResult::kOk;
-    }
-
-    BSTEventResult OnEvent(
-        const TESResetEvent*,
-        const EventDispatcher<TESResetEvent>*) override
-    {
-        // Reset is broader than a quest-specific signal and therefore suitable
-        // only as an invalidation source. It never grants runtime authority.
-        InvalidateRuntimeGeneration("engine-reset");
         return BSTEventResult::kOk;
     }
 };
@@ -62,14 +51,13 @@ TiltedPhoques::Initializer s_partyQuestRuntimeLifecycleEventRegistration(
         if (!pEvents)
         {
             spdlog::error(
-                "PartyQuest P0 could not register Skyrim lifecycle generation invalidation: event dispatcher unavailable");
+                "PartyQuest P0 could not register Skyrim load-game generation invalidation: event dispatcher unavailable");
             return;
         }
 
         pEvents->loadGameEvent.RegisterSink(&s_lifecycleEventSink);
-        pEvents->resetEvent.RegisterSink(&s_lifecycleEventSink);
 
         spdlog::info(
-            "PartyQuest P0 registered Skyrim load-game/reset generation invalidation sinks");
+            "PartyQuest P0 registered Skyrim load-game generation invalidation sink");
     });
 } // namespace
