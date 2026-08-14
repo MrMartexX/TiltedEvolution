@@ -9,6 +9,17 @@
 class PartyQuestRuntimeGenerationFence final
 {
 public:
+    struct LifecycleTransitionTicket
+    {
+        uint64_t Ticket{};
+        uint64_t Generation{};
+
+        [[nodiscard]] bool IsValid() const noexcept
+        {
+            return Ticket != 0 && Generation != 0;
+        }
+    };
+
     class ExecutionLease final
     {
     public:
@@ -43,12 +54,12 @@ public:
     };
 
     /**
-     * Exclusive lifecycle/resolver transition lease.
+     * Exclusive lifecycle/resolver transition lease for synchronous rebuilds.
      *
      * Construction advances the process-local generation while holding the
      * exclusive side of the same mutex used by ExecutionLease. Keep this lease
-     * alive for the complete state rebuild/teardown so a new dispatch cannot
-     * observe the new generation until the corresponding runtime state is fully
+     * alive for the complete synchronous state rebuild/teardown so a new
+     * dispatch cannot observe the new generation until runtime state is fully
      * published.
      */
     class InvalidationLease final
@@ -98,12 +109,25 @@ public:
      */
     [[nodiscard]] InvalidationLease BeginInvalidation() noexcept;
 
+    /**
+     * Publish an asynchronous engine lifecycle transition without transferring
+     * mutex ownership across threads. The generation advances at admission and
+     * TryAcquire() remains fail-closed until the exact ticket is completed.
+     */
+    [[nodiscard]] LifecycleTransitionTicket BeginLifecycleTransition() noexcept;
+    [[nodiscard]] bool CompleteLifecycleTransition(
+        LifecycleTransitionTicket aTicket) noexcept;
+    [[nodiscard]] bool IsLifecycleTransitionPending() const noexcept;
+
     [[nodiscard]] std::optional<ExecutionLease> TryAcquire(
         uint64_t aExpectedGeneration) const noexcept;
 
 private:
     [[nodiscard]] uint64_t AdvanceGenerationLocked() noexcept;
+    [[nodiscard]] uint64_t AllocateLifecycleTicketLocked() noexcept;
 
     mutable std::shared_mutex m_mutex;
     uint64_t m_generation{1};
+    uint64_t m_lifecycleTicket{};
+    uint64_t m_nextLifecycleTicket{1};
 };
