@@ -3,9 +3,11 @@
 
 #include <catch2/catch.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <future>
 #include <optional>
+#include <thread>
 
 using namespace std::chrono_literals;
 
@@ -51,6 +53,80 @@ TEST_CASE("Party quest invalidation lease prevents dispatch into a half-publishe
     invalidation.reset();
     REQUIRE(acquireFuture.wait_for(2s) == std::future_status::ready);
     CHECK(acquireFuture.get());
+}
+
+TEST_CASE("Async lifecycle transition advances generation and blocks dispatch until exact completion", "[quest.party-state.lifecycle][generation-fence]")
+{
+    PartyQuestRuntimeGenerationFence fence;
+    const uint64_t before = fence.GetGeneration();
+
+    const auto transition = fence.BeginLifecycleTransition();
+    REQUIRE(transition.IsValid());
+    REQUIRE(transition.Generation != before);
+    REQUIRE(fence.GetGeneration() == transition.Generation);
+    REQUIRE(fence.IsLifecycleTransitionPending());
+
+    CHECK_FALSE(fence.TryAcquire(before).has_value());
+    CHECK_FALSE(fence.TryAcquire(transition.Generation).has_value());
+    CHECK_FALSE(fence.BeginLifecycleTransition().IsValid());
+
+    auto wrong = transition;
+    ++wrong.Ticket;
+    if (wrong.Ticket == 0)
+        ++wrong.Ticket;
+    CHECK_FALSE(fence.CompleteLifecycleTransition(wrong));
+    REQUIRE(fence.IsLifecycleTransitionPending());
+    CHECK_FALSE(fence.TryAcquire(transition.Generation).has_value());
+
+    REQUIRE(fence.CompleteLifecycleTransition(transition));
+    REQUIRE_FALSE(fence.IsLifecycleTransitionPending());
+    CHECK_FALSE(fence.CompleteLifecycleTransition(transition));
+
+    auto execution = fence.TryAcquire(transition.Generation);
+    REQUIRE(execution.has_value());
+    CHECK(execution->IsValid());
+    CHECK(execution->GetGeneration() == transition.Generation);
+}
+
+TEST_CASE("Async lifecycle transition may complete on another thread", "[quest.party-state.lifecycle][generation-fence]")
+{
+    PartyQuestRuntimeGenerationFence fence;
+    const auto transition = fence.BeginLifecycleTransition();
+    REQUIRE(transition.IsValid());
+
+    std::atomic<bool> completed{false};
+    std::thread completionThread([&]()
+    {
+        completed.store(
+            fence.CompleteLifecycleTransition(transition),
+            std::memory_order_release);
+    });
+    completionThread.join();
+
+    REQUIRE(completed.load(std::memory_order_acquire));
+    REQUIRE_FALSE(fence.IsLifecycleTransitionPending());
+    auto execution = fence.TryAcquire(transition.Generation);
+    REQUIRE(execution.has_value());
+    CHECK(execution->IsValid());
+}
+
+TEST_CASE("Synchronous invalidation cannot erase a pending async lifecycle transition", "[quest.party-state.lifecycle][generation-fence]")
+{
+    PartyQuestRuntimeGenerationFence fence;
+    const auto transition = fence.BeginLifecycleTransition();
+    REQUIRE(transition.IsValid());
+
+    const uint64_t afterAdditionalInvalidation = fence.Invalidate();
+    REQUIRE(afterAdditionalInvalidation != transition.Generation);
+    REQUIRE(fence.IsLifecycleTransitionPending());
+    CHECK_FALSE(fence.TryAcquire(afterAdditionalInvalidation).has_value());
+
+    REQUIRE(fence.CompleteLifecycleTransition(transition));
+    REQUIRE_FALSE(fence.IsLifecycleTransitionPending());
+
+    auto execution = fence.TryAcquire(afterAdditionalInvalidation);
+    REQUIRE(execution.has_value());
+    CHECK(execution->IsValid());
 }
 
 TEST_CASE("Party quest runtime owner lifecycle invalidates process dispatch generation")
