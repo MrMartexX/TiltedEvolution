@@ -134,10 +134,6 @@ PartyQuestEngineLoadPermit::PartyQuestEngineLoadPermit(
 
 PartyQuestControlledSaveScope::PartyQuestControlledSaveScope(
     PartyQuestSaveGuard& aGuard,
-    uint64_t aTransactionId) noexcept;
-
-PartyQuestControlledSaveScope::PartyQuestControlledSaveScope(
-    PartyQuestSaveGuard& aGuard,
     uint64_t aTransactionId) noexcept
     : m_pGuard(&aGuard)
     , m_transactionId(aTransactionId)
