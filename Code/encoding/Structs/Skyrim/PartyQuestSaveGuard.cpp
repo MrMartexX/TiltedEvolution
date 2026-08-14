@@ -19,10 +19,14 @@ PartyQuestSaveGuardAcquireStatus PartyQuestSaveGuard::Acquire(uint64_t aTransact
 
     try
     {
-        // Exclusive acquisition waits for any engine save/load that already
-        // entered under a shared permit before publishing the critical repair
-        // lease.
+        // Exclusive acquisition waits for any engine save already executing
+        // under a shared permit. A published LoadGame ticket is different: the
+        // asynchronous load may no longer own a call-stack lock, so reject
+        // rather than waiting or publishing a repair into the transition.
         std::unique_lock lock(m_engineSaveGate);
+        if (m_engineLoadTicket != 0)
+            return PartyQuestSaveGuardAcquireStatus::Busy;
+
         const uint64_t current = m_transactionId.load(std::memory_order_acquire);
         if (current == aTransactionId)
             return PartyQuestSaveGuardAcquireStatus::Duplicate;
@@ -47,8 +51,8 @@ bool PartyQuestSaveGuard::Release(uint64_t aTransactionId) noexcept
 
     try
     {
-        // The exclusive side also waits for a controlled checkpoint save or an
-        // admitted engine load that is still executing under its shared permit.
+        // The exclusive side waits for a controlled checkpoint save that is
+        // still executing under its shared engine permit.
         std::unique_lock lock(m_engineSaveGate);
         if (m_transactionId.load(std::memory_order_acquire) != aTransactionId)
             return false;
@@ -82,15 +86,69 @@ PartyQuestEngineSavePermit PartyQuestSaveGuard::TryEnterEngineSave() const noexc
     }
 }
 
-PartyQuestEngineLoadPermit PartyQuestSaveGuard::TryEnterEngineLoad() const noexcept
+uint64_t PartyQuestSaveGuard::AllocateEngineLoadTicketLocked() noexcept
+{
+    uint64_t ticket = m_nextEngineLoadTicket++;
+    if (ticket == 0)
+        ticket = m_nextEngineLoadTicket++;
+    if (m_nextEngineLoadTicket == 0)
+        ++m_nextEngineLoadTicket;
+    return ticket;
+}
+
+PartyQuestEngineLoadTicket PartyQuestSaveGuard::BeginEngineLoad() noexcept
 {
     try
     {
-        return PartyQuestEngineLoadPermit(*this);
+        std::unique_lock lock(m_engineSaveGate);
+        if (m_transactionId.load(std::memory_order_acquire) != 0 ||
+            m_engineLoadTicket != 0)
+        {
+            return {};
+        }
+
+        m_engineLoadTicket = AllocateEngineLoadTicketLocked();
+        return {m_engineLoadTicket};
     }
     catch (...)
     {
         return {};
+    }
+}
+
+bool PartyQuestSaveGuard::CompleteEngineLoad(
+    PartyQuestEngineLoadTicket aTicket) noexcept
+{
+    if (!aTicket.IsValid())
+        return false;
+
+    try
+    {
+        std::unique_lock lock(m_engineSaveGate);
+        if (m_engineLoadTicket != aTicket.Value)
+            return false;
+
+        m_engineLoadTicket = 0;
+        return true;
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+bool PartyQuestSaveGuard::IsEngineLoadPending() const noexcept
+{
+    try
+    {
+        const std::shared_lock lock(m_engineSaveGate);
+        return m_engineLoadTicket != 0;
+    }
+    catch (...)
+    {
+        // Observation failure is reported conservatively as pending so callers
+        // never infer that starting critical work is safe.
+        return true;
     }
 }
 
@@ -113,22 +171,6 @@ PartyQuestEngineSavePermit::PartyQuestEngineSavePermit(
 
     // Do not hold a shared lock for a denied request. The critical repair owns
     // the logical lease already; returning false is enough to stop this save.
-    m_lock.unlock();
-}
-
-PartyQuestEngineLoadPermit::PartyQuestEngineLoadPermit(
-    const PartyQuestSaveGuard& acGuard)
-    : m_lock(acGuard.m_engineSaveGate)
-{
-    if (acGuard.GetTransactionId() == 0)
-    {
-        m_allowed = true;
-        return;
-    }
-
-    // LoadGame never has a controlled-repair bypass. Release the shared side on
-    // denial so recovery/abort can continue instead of being pinned by a load
-    // request that will not enter Skyrim.
     m_lock.unlock();
 }
 
