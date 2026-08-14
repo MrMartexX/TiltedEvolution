@@ -1,63 +1,115 @@
 #include <TiltedOnlinePCH.h>
 
-#include <Events/EventDispatcher.h>
-#include <Games/Events.h>
 #include <PartyQuestP0LiveDiagnostics.h>
+#include <SaveLoad.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+
+TP_THIS_FUNCTION(
+    TBGSSaveLoadManager_LoadImpl,
+    bool,
+    BGSSaveLoadManager,
+    const char*,
+    int32_t,
+    uint32_t,
+    bool);
 
 namespace
 {
-void InvalidateRuntimeGeneration(const char* acReason) noexcept
+TBGSSaveLoadManager_LoadImpl* s_realLoadImpl = nullptr;
+
+bool TP_MAKE_THISCALL(
+    PartyQuest_BGSSaveLoadManager_LoadImpl,
+    BGSSaveLoadManager,
+    const char* acFileName,
+    int32_t aDeviceId,
+    uint32_t aOutputStats,
+    bool aCheckForMods)
 {
     auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
     const uint64_t generationBefore = generationFence.GetGeneration();
 
-    // Keep the exclusive lease alive until the engine event has been published
-    // into the P0 generation. Any dispatch already holding a shared execution
-    // lease drains before this point; any later dispatch must observe the new
-    // generation and rebuild its runtime compatibility witness.
-    auto invalidation = generationFence.BeginInvalidation();
-    const uint64_t generationAfter = invalidation.GetGeneration();
+    // Load_Impl is the earliest verified Skyrim load boundary currently exposed
+    // by this client. Publish a process-local lifecycle ticket before entering
+    // the original engine call. TryAcquire() remains fail-closed for the complete
+    // load even though no mutex ownership is carried across the long-running
+    // engine operation.
+    const auto lifecycle = generationFence.BeginLifecycleTransition();
+    if (lifecycle.IsValid())
+    {
+        PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+            "engine-load-begin",
+            "lifecycle-ticket-published",
+            generationBefore,
+            lifecycle.Generation);
+    }
+    else
+    {
+        // An already-pending lifecycle transition still blocks TryAcquire(). A
+        // resolver/locking failure is deliberately not converted into authority.
+        PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+            "engine-load-begin",
+            "lifecycle-ticket-unavailable",
+            generationBefore,
+            generationFence.GetGeneration());
+    }
 
-    PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
-        acReason,
-        "engine-lifecycle-event",
-        generationBefore,
-        generationAfter);
+    if (!s_realLoadImpl)
+    {
+        spdlog::error(
+            "PartyQuest P0 cannot enter Skyrim load pipeline: original BGSSaveLoadManager::Load_Impl is null");
+        if (lifecycle.IsValid())
+            (void)generationFence.CompleteLifecycleTransition(lifecycle);
+        return false;
+    }
+
+    const bool result = TiltedPhoques::ThisCall(
+        s_realLoadImpl,
+        apThis,
+        acFileName,
+        aDeviceId,
+        aOutputStats,
+        aCheckForMods);
+
+    if (lifecycle.IsValid())
+    {
+        const bool completed = generationFence.CompleteLifecycleTransition(lifecycle);
+        const uint64_t generationAfter = generationFence.GetGeneration();
+        PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+            "engine-load-complete",
+            completed ? "lifecycle-ticket-completed" : "lifecycle-ticket-completion-failed",
+            lifecycle.Generation,
+            generationAfter);
+
+        if (!completed)
+        {
+            // A failed exact-ticket completion leaves the fence fail-closed; do
+            // not attempt to manufacture a replacement generation authority.
+            spdlog::error(
+                "PartyQuest P0 Skyrim load lifecycle ticket could not be completed; runtime mutation remains blocked");
+        }
+    }
+
+    return result;
 }
 
-class PartyQuestSkyrimRuntimeLifecycleEventSink final
-    : public BSTEventSink<TESLoadGameEvent>
-{
-public:
-    BSTEventResult OnEvent(
-        const TESLoadGameEvent*,
-        const EventDispatcher<TESLoadGameEvent>*) override
-    {
-        // TESLoadGameEvent is an engine load-game notification, not a pre-load
-        // barrier. It still invalidates every witness from the previous loaded
-        // world before the next P0 dispatch is allowed to reuse that generation.
-        InvalidateRuntimeGeneration("engine-load-game");
-        return BSTEventResult::kOk;
-    }
-};
-
-PartyQuestSkyrimRuntimeLifecycleEventSink s_lifecycleEventSink;
-
-TiltedPhoques::Initializer s_partyQuestRuntimeLifecycleEventRegistration(
+TiltedPhoques::Initializer s_partyQuestRuntimeLoadHook(
     []()
     {
-        auto* pEvents = EventDispatcherManager::Get();
-        if (!pEvents)
+        // CommonLibSSE-NG: BGSSaveLoadManager::Load_Impl is
+        // RELOCATION_ID(34819, 35728). STR VersionDb uses the AE-side id, the
+        // same convention already used by Save_Impl=35727 in SaveLoad.cpp.
+        POINTER_SKYRIMSE(TBGSSaveLoadManager_LoadImpl, s_loadImpl, 35728);
+
+        s_realLoadImpl = s_loadImpl.Get();
+        if (!s_realLoadImpl)
         {
             spdlog::error(
-                "PartyQuest P0 could not register Skyrim load-game generation invalidation: event dispatcher unavailable");
+                "PartyQuest P0 failed to resolve BGSSaveLoadManager::Load_Impl (Address Library id 35728); load lifecycle fencing not installed");
             return;
         }
 
-        pEvents->loadGameEvent.RegisterSink(&s_lifecycleEventSink);
-
+        TP_HOOK(&s_realLoadImpl, PartyQuest_BGSSaveLoadManager_LoadImpl);
         spdlog::info(
-            "PartyQuest P0 registered Skyrim load-game generation invalidation sink");
+            "PartyQuest P0 installed Skyrim Load_Impl generation lifecycle fence");
     });
 } // namespace
