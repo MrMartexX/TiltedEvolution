@@ -6,7 +6,6 @@
 
 class PartyQuestControlledSaveScope;
 class PartyQuestEngineSavePermit;
-class PartyQuestEngineLoadPermit;
 
 enum class PartyQuestSaveKind : uint8_t
 {
@@ -24,17 +23,24 @@ enum class PartyQuestSaveGuardAcquireStatus : uint8_t
     InvalidTransaction
 };
 
+struct PartyQuestEngineLoadTicket
+{
+    uint64_t Value{};
+
+    [[nodiscard]] bool IsValid() const noexcept { return Value != 0; }
+};
+
 /**
  * Transaction-scoped policy/lease used by the Skyrim save/load interception
  * layer.
  *
- * The transaction id remains atomic for cheap cross-thread observation. The
- * engine lifecycle gate additionally uses a shared mutex: every allowed engine
- * save or load holds a shared permit for the complete original engine call,
- * while Acquire and Release take the exclusive side. Therefore a critical
- * repair cannot become active until an already-running save/load has finished,
- * and a new uncontrolled save/load cannot slip through after the repair lease
- * is acquired.
+ * Allowed engine saves hold the shared side of m_engineSaveGate for the whole
+ * synchronous save call. Engine loads use an explicit cross-thread ticket:
+ * BeginEngineLoad() publishes the pending lifecycle transition under the
+ * exclusive side and CompleteEngineLoad() clears it only for the exact ticket.
+ * Acquire() takes the same exclusive side and rejects while a load is pending.
+ * This prevents a critical repair from becoming active between an asynchronous
+ * LoadGame request and the engine's later load-complete event.
  */
 class PartyQuestSaveGuard final
 {
@@ -57,15 +63,16 @@ public:
     [[nodiscard]] PartyQuestEngineSavePermit TryEnterEngineSave() const noexcept;
 
     /**
-     * Acquire permission to call the real Skyrim load function. The returned
-     * permit must stay alive until the original engine call returns.
+     * Publish an engine LoadGame transition before calling Load_Impl.
      *
-     * Loads have no controlled-checkpoint bypass: any active critical repair
-     * blocks LoadGame. Keeping the shared permit alive also prevents a repair
-     * from becoming active between the admission check and the end of the
-     * synchronous engine load call.
+     * No controlled-repair bypass exists. The request is denied while a
+     * critical repair or another load transition is active. A valid ticket must
+     * remain published until the exact load-complete event (or a proven failed
+     * request) calls CompleteEngineLoad().
      */
-    [[nodiscard]] PartyQuestEngineLoadPermit TryEnterEngineLoad() const noexcept;
+    [[nodiscard]] PartyQuestEngineLoadTicket BeginEngineLoad() noexcept;
+    [[nodiscard]] bool CompleteEngineLoad(PartyQuestEngineLoadTicket aTicket) noexcept;
+    [[nodiscard]] bool IsEngineLoadPending() const noexcept;
 
     [[nodiscard]] bool IsActive() const noexcept
     {
@@ -78,11 +85,14 @@ public:
     }
 
 private:
+    [[nodiscard]] uint64_t AllocateEngineLoadTicketLocked() noexcept;
+
     mutable std::shared_mutex m_engineSaveGate;
     std::atomic<uint64_t> m_transactionId{};
+    uint64_t m_engineLoadTicket{};
+    uint64_t m_nextEngineLoadTicket{1};
 
     friend class PartyQuestEngineSavePermit;
-    friend class PartyQuestEngineLoadPermit;
 };
 
 /**
@@ -104,34 +114,6 @@ public:
 
 private:
     explicit PartyQuestEngineSavePermit(const PartyQuestSaveGuard& acGuard);
-
-    std::shared_lock<std::shared_mutex> m_lock;
-    bool m_allowed{};
-
-    friend class PartyQuestSaveGuard;
-};
-
-/**
- * RAII permit held across the complete original BGSSaveLoadManager load call.
- * A load is allowed only while no critical runtime-repair transaction owns the
- * process guard. Unlike a controlled checkpoint save, there is deliberately no
- * transaction-local bypass for LoadGame.
- */
-class PartyQuestEngineLoadPermit final
-{
-public:
-    PartyQuestEngineLoadPermit() noexcept = default;
-    ~PartyQuestEngineLoadPermit() = default;
-
-    PartyQuestEngineLoadPermit(const PartyQuestEngineLoadPermit&) = delete;
-    PartyQuestEngineLoadPermit& operator=(const PartyQuestEngineLoadPermit&) = delete;
-    PartyQuestEngineLoadPermit(PartyQuestEngineLoadPermit&&) noexcept = default;
-    PartyQuestEngineLoadPermit& operator=(PartyQuestEngineLoadPermit&&) noexcept = default;
-
-    [[nodiscard]] bool IsAllowed() const noexcept { return m_allowed; }
-
-private:
-    explicit PartyQuestEngineLoadPermit(const PartyQuestSaveGuard& acGuard);
 
     std::shared_lock<std::shared_mutex> m_lock;
     bool m_allowed{};
