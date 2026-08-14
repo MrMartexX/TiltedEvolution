@@ -28,6 +28,7 @@
 #include <ModCompat/BehaviorVar.h>
 #include <PartyQuestP0LiveDiagnostics.h>
 #include <PlayerCharacter.h>
+#include <SaveLoad.h>
 
 World::World()
     : m_runner(m_dispatcher)
@@ -35,6 +36,12 @@ World::World()
     , m_modSystem(m_dispatcher)
     , m_lastFrameTime{std::chrono::high_resolution_clock::now()}
 {
+    // Register before services begin observing gameplay state. The corresponding
+    // Load_Impl hook is installed at module initialization; this process-lifetime
+    // sink supplies the authoritative TESLoadGameEvent completion boundary for
+    // its cross-thread lifecycle ticket.
+    InstallPartyQuestLoadGameLifecycleFence();
+
     ctx().emplace<ImguiService>();
     ctx().emplace<DiscoveryService>(*this, m_dispatcher);
     ctx().emplace<OverlayService>(*this, m_transport, m_dispatcher);
