@@ -1,5 +1,11 @@
 #pragma once
 
+/**
+ * Register the process-lifetime TESLoadGameEvent sink used to close a pending
+ * PartyQuest LoadGame lifecycle ticket. Safe to call more than once.
+ */
+void InstallPartyQuestLoadGameLifecycleFence() noexcept;
+
 #pragma pack(push, 1)
 
 struct BGSSaveLoadManager
