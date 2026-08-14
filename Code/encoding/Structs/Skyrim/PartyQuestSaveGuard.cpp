@@ -19,8 +19,9 @@ PartyQuestSaveGuardAcquireStatus PartyQuestSaveGuard::Acquire(uint64_t aTransact
 
     try
     {
-        // Exclusive acquisition waits for any engine save that already entered
-        // under a shared permit before publishing the critical repair lease.
+        // Exclusive acquisition waits for any engine save/load that already
+        // entered under a shared permit before publishing the critical repair
+        // lease.
         std::unique_lock lock(m_engineSaveGate);
         const uint64_t current = m_transactionId.load(std::memory_order_acquire);
         if (current == aTransactionId)
@@ -33,8 +34,8 @@ PartyQuestSaveGuardAcquireStatus PartyQuestSaveGuard::Acquire(uint64_t aTransact
     }
     catch (...)
     {
-        // Locking failure must never publish a repair that the save hook cannot
-        // reliably guard.
+        // Locking failure must never publish a repair that the engine lifecycle
+        // interception cannot reliably guard.
         return PartyQuestSaveGuardAcquireStatus::Busy;
     }
 }
@@ -46,8 +47,8 @@ bool PartyQuestSaveGuard::Release(uint64_t aTransactionId) noexcept
 
     try
     {
-        // The exclusive side also waits for a controlled checkpoint save that
-        // is still executing under its shared engine permit.
+        // The exclusive side also waits for a controlled checkpoint save or an
+        // admitted engine load that is still executing under its shared permit.
         std::unique_lock lock(m_engineSaveGate);
         if (m_transactionId.load(std::memory_order_acquire) != aTransactionId)
             return false;
@@ -81,6 +82,18 @@ PartyQuestEngineSavePermit PartyQuestSaveGuard::TryEnterEngineSave() const noexc
     }
 }
 
+PartyQuestEngineLoadPermit PartyQuestSaveGuard::TryEnterEngineLoad() const noexcept
+{
+    try
+    {
+        return PartyQuestEngineLoadPermit(*this);
+    }
+    catch (...)
+    {
+        return {};
+    }
+}
+
 PartyQuestEngineSavePermit::PartyQuestEngineSavePermit(
     const PartyQuestSaveGuard& acGuard)
     : m_lock(acGuard.m_engineSaveGate)
@@ -102,6 +115,26 @@ PartyQuestEngineSavePermit::PartyQuestEngineSavePermit(
     // the logical lease already; returning false is enough to stop this save.
     m_lock.unlock();
 }
+
+PartyQuestEngineLoadPermit::PartyQuestEngineLoadPermit(
+    const PartyQuestSaveGuard& acGuard)
+    : m_lock(acGuard.m_engineSaveGate)
+{
+    if (acGuard.GetTransactionId() == 0)
+    {
+        m_allowed = true;
+        return;
+    }
+
+    // LoadGame never has a controlled-repair bypass. Release the shared side on
+    // denial so recovery/abort can continue instead of being pinned by a load
+    // request that will not enter Skyrim.
+    m_lock.unlock();
+}
+
+PartyQuestControlledSaveScope::PartyQuestControlledSaveScope(
+    PartyQuestSaveGuard& aGuard,
+    uint64_t aTransactionId) noexcept;
 
 PartyQuestControlledSaveScope::PartyQuestControlledSaveScope(
     PartyQuestSaveGuard& aGuard,
