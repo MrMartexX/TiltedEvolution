@@ -12,15 +12,9 @@ bool EngineSaveAllowed(const PartyQuestSaveGuard& acGuard)
     auto permit = acGuard.TryEnterEngineSave();
     return permit.IsAllowed();
 }
-
-bool EngineLoadAllowed(const PartyQuestSaveGuard& acGuard)
-{
-    auto permit = acGuard.TryEnterEngineLoad();
-    return permit.IsAllowed();
-}
 } // namespace
 
-TEST_CASE("Critical repair save guard blocks user saves and loads but permits controlled checkpoints", "[quest.party-state.save-guard]")
+TEST_CASE("Critical repair save guard blocks user saves but permits controlled checkpoints", "[quest.party-state.save-guard]")
 {
     PartyQuestSaveGuard guard;
     REQUIRE(guard.CanSave(PartyQuestSaveKind::Manual));
@@ -28,7 +22,6 @@ TEST_CASE("Critical repair save guard blocks user saves and loads but permits co
     REQUIRE(guard.CanSave(PartyQuestSaveKind::Quick));
     REQUIRE(guard.CanSave(PartyQuestSaveKind::ControlledCheckpoint));
     REQUIRE(EngineSaveAllowed(guard));
-    REQUIRE(EngineLoadAllowed(guard));
 
     REQUIRE(guard.Acquire(1001) == PartyQuestSaveGuardAcquireStatus::Acquired);
     REQUIRE(guard.IsActive());
@@ -37,13 +30,12 @@ TEST_CASE("Critical repair save guard blocks user saves and loads but permits co
     REQUIRE_FALSE(guard.CanSave(PartyQuestSaveKind::Quick));
     REQUIRE(guard.CanSave(PartyQuestSaveKind::ControlledCheckpoint));
     REQUIRE_FALSE(EngineSaveAllowed(guard));
-    REQUIRE_FALSE(EngineLoadAllowed(guard));
+    REQUIRE_FALSE(guard.BeginEngineLoad().IsValid());
 
     REQUIRE(guard.Release(1001));
     REQUIRE_FALSE(guard.IsActive());
     REQUIRE(guard.CanSave(PartyQuestSaveKind::Manual));
     REQUIRE(EngineSaveAllowed(guard));
-    REQUIRE(EngineLoadAllowed(guard));
 }
 
 TEST_CASE("Critical repair save guard is transaction-scoped and idempotent", "[quest.party-state.save-guard]")
@@ -67,35 +59,28 @@ TEST_CASE("Controlled save scope requires the exact active transaction and suppo
     PartyQuestSaveGuard guard;
     REQUIRE(guard.Acquire(3001) == PartyQuestSaveGuardAcquireStatus::Acquired);
     REQUIRE_FALSE(EngineSaveAllowed(guard));
-    REQUIRE_FALSE(EngineLoadAllowed(guard));
 
     PartyQuestControlledSaveScope wrongTransaction(guard, 3002);
     REQUIRE_FALSE(wrongTransaction.IsArmed());
     REQUIRE_FALSE(EngineSaveAllowed(guard));
-    REQUIRE_FALSE(EngineLoadAllowed(guard));
 
     {
         PartyQuestControlledSaveScope outer(guard, 3001);
         REQUIRE(outer.IsArmed());
         REQUIRE(EngineSaveAllowed(guard));
-        REQUIRE_FALSE(EngineLoadAllowed(guard));
 
         {
             PartyQuestControlledSaveScope nested(guard, 3001);
             REQUIRE(nested.IsArmed());
             REQUIRE(EngineSaveAllowed(guard));
-            REQUIRE_FALSE(EngineLoadAllowed(guard));
         }
 
         REQUIRE(EngineSaveAllowed(guard));
-        REQUIRE_FALSE(EngineLoadAllowed(guard));
     }
 
     REQUIRE_FALSE(EngineSaveAllowed(guard));
-    REQUIRE_FALSE(EngineLoadAllowed(guard));
     REQUIRE(guard.Release(3001));
     REQUIRE(EngineSaveAllowed(guard));
-    REQUIRE(EngineLoadAllowed(guard));
 }
 
 TEST_CASE("Controlled save authorization is thread-local", "[quest.party-state.save-guard]")
@@ -108,7 +93,6 @@ TEST_CASE("Controlled save authorization is thread-local", "[quest.party-state.s
         PartyQuestControlledSaveScope scope(guard, 4001);
         REQUIRE(scope.IsArmed());
         REQUIRE(EngineSaveAllowed(guard));
-        REQUIRE_FALSE(EngineLoadAllowed(guard));
 
         std::thread worker([&]()
         {
@@ -121,11 +105,9 @@ TEST_CASE("Controlled save authorization is thread-local", "[quest.party-state.s
 
         REQUIRE_FALSE(otherThreadAllowed.load(std::memory_order_acquire));
         REQUIRE(EngineSaveAllowed(guard));
-        REQUIRE_FALSE(EngineLoadAllowed(guard));
     }
 
     REQUIRE_FALSE(EngineSaveAllowed(guard));
-    REQUIRE_FALSE(EngineLoadAllowed(guard));
     REQUIRE(guard.Release(4001));
 }
 
@@ -138,16 +120,13 @@ TEST_CASE("A stale controlled scope cannot authorize a later transaction", "[que
         PartyQuestControlledSaveScope staleScope(guard, 5001);
         REQUIRE(staleScope.IsArmed());
         REQUIRE(EngineSaveAllowed(guard));
-        REQUIRE_FALSE(EngineLoadAllowed(guard));
 
         REQUIRE(guard.Release(5001));
         REQUIRE(guard.Acquire(5002) == PartyQuestSaveGuardAcquireStatus::Acquired);
         REQUIRE_FALSE(EngineSaveAllowed(guard));
-        REQUIRE_FALSE(EngineLoadAllowed(guard));
     }
 
     REQUIRE_FALSE(EngineSaveAllowed(guard));
-    REQUIRE_FALSE(EngineLoadAllowed(guard));
     REQUIRE(guard.Release(5002));
 }
 
@@ -212,65 +191,47 @@ TEST_CASE("Critical repair acquisition drains an already running engine save", "
     REQUIRE(guard.Release(6001));
 }
 
-TEST_CASE("Critical repair acquisition drains an already running engine load", "[quest.party-state.save-guard][lifecycle]")
+TEST_CASE("Engine load ticket blocks critical repair until exact completion", "[quest.party-state.save-guard][lifecycle]")
 {
     PartyQuestSaveGuard guard;
-    std::atomic<bool> loadAttempted{false};
-    std::atomic<bool> loadAllowed{false};
-    std::atomic<bool> releaseLoad{false};
-    std::atomic<bool> acquireStarted{false};
-    std::atomic<bool> acquireFinished{false};
-    std::atomic<PartyQuestSaveGuardAcquireStatus> acquireStatus{
-        PartyQuestSaveGuardAcquireStatus::Busy};
+    const auto ticket = guard.BeginEngineLoad();
+    REQUIRE(ticket.IsValid());
+    REQUIRE(guard.IsEngineLoadPending());
 
-    std::thread loadThread([&]()
-    {
-        auto permit = guard.TryEnterEngineLoad();
-        loadAllowed.store(permit.IsAllowed(), std::memory_order_release);
-        loadAttempted.store(true, std::memory_order_release);
-        if (!permit.IsAllowed())
-            return;
+    REQUIRE_FALSE(guard.BeginEngineLoad().IsValid());
+    REQUIRE(guard.Acquire(7001) == PartyQuestSaveGuardAcquireStatus::Busy);
+    REQUIRE_FALSE(guard.IsActive());
 
-        while (!releaseLoad.load(std::memory_order_acquire))
-            std::this_thread::yield();
-    });
+    REQUIRE_FALSE(guard.CompleteEngineLoad({ticket.Value + 1}));
+    REQUIRE(guard.IsEngineLoadPending());
+    REQUIRE(guard.Acquire(7001) == PartyQuestSaveGuardAcquireStatus::Busy);
 
-    while (!loadAttempted.load(std::memory_order_acquire))
-        std::this_thread::yield();
+    REQUIRE(guard.CompleteEngineLoad(ticket));
+    REQUIRE_FALSE(guard.IsEngineLoadPending());
+    REQUIRE_FALSE(guard.CompleteEngineLoad(ticket));
 
-    if (!loadAllowed.load(std::memory_order_acquire))
-    {
-        releaseLoad.store(true, std::memory_order_release);
-        loadThread.join();
-        REQUIRE(loadAllowed.load(std::memory_order_acquire));
-        return;
-    }
-
-    std::thread acquireThread([&]()
-    {
-        acquireStarted.store(true, std::memory_order_release);
-        acquireStatus.store(guard.Acquire(7001), std::memory_order_release);
-        acquireFinished.store(true, std::memory_order_release);
-    });
-
-    while (!acquireStarted.load(std::memory_order_acquire))
-        std::this_thread::yield();
-
-    for (int i = 0; i < 256; ++i)
-        std::this_thread::yield();
-    const bool acquiredWhileLoadWasRunning =
-        acquireFinished.load(std::memory_order_acquire);
-
-    releaseLoad.store(true, std::memory_order_release);
-    loadThread.join();
-    acquireThread.join();
-
-    REQUIRE_FALSE(acquiredWhileLoadWasRunning);
-    REQUIRE(acquireFinished.load(std::memory_order_acquire));
-    REQUIRE(acquireStatus.load(std::memory_order_acquire) ==
-        PartyQuestSaveGuardAcquireStatus::Acquired);
-    REQUIRE(guard.GetTransactionId() == 7001);
-    REQUIRE_FALSE(EngineLoadAllowed(guard));
+    REQUIRE(guard.Acquire(7001) == PartyQuestSaveGuardAcquireStatus::Acquired);
+    REQUIRE_FALSE(guard.BeginEngineLoad().IsValid());
     REQUIRE(guard.Release(7001));
-    REQUIRE(EngineLoadAllowed(guard));
+}
+
+TEST_CASE("Engine load ticket may be completed on another thread", "[quest.party-state.save-guard][lifecycle]")
+{
+    PartyQuestSaveGuard guard;
+    const auto ticket = guard.BeginEngineLoad();
+    REQUIRE(ticket.IsValid());
+
+    std::atomic<bool> completed{false};
+    std::thread completionThread([&]()
+    {
+        completed.store(
+            guard.CompleteEngineLoad(ticket),
+            std::memory_order_release);
+    });
+    completionThread.join();
+
+    REQUIRE(completed.load(std::memory_order_acquire));
+    REQUIRE_FALSE(guard.IsEngineLoadPending());
+    REQUIRE(guard.Acquire(8001) == PartyQuestSaveGuardAcquireStatus::Acquired);
+    REQUIRE(guard.Release(8001));
 }
