@@ -9,6 +9,7 @@
 class PartyQuestRuntimeCheckpointCoordinator;
 class PartyQuestRuntimeRecoveryCoordinator;
 class PartyQuestRuntimeGuardedSession;
+class PartyQuestRuntimeVerificationGate;
 class PartyQuestRuntimeApplySessionTestAccess;
 
 enum class PartyQuestRuntimeDurableBeginStatus : uint8_t
@@ -57,6 +58,12 @@ struct PartyQuestRuntimeDurableVerificationResult
  * durable by design: every pre-mutation restart must rebuild current runtime
  * compatibility rather than resurrect an old dispatch capability.
  *
+ * Post-mutation production verification similarly requires a one-shot,
+ * process-local compatibility observation prepared by
+ * PartyQuestRuntimeVerificationGate. The old snapshot-only surface remains for
+ * isolated diagnostics but fails closed whenever the real process SaveGuard is
+ * holding the transaction.
+ *
  * Current storage does not claim power-loss durability.
  * The session still does not call Skyrim, Papyrus, save APIs or file I/O itself.
  */
@@ -99,6 +106,11 @@ public:
     /** Legacy compatibility surface: naked transaction assertions fail closed. */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkPapyrusQuiescent(uint64_t aTransactionId);
 
+    /**
+     * Diagnostic snapshot-only verification surface. When the real process
+     * SaveGuard owns this transaction, a fresh compatibility observation from
+     * PartyQuestRuntimeVerificationGate is mandatory and this call consumes it.
+     */
     [[nodiscard]] PartyQuestRuntimeDurableVerificationResult SubmitResnapshot(
         uint64_t aTransactionId,
         QuestSnapshot aObservedSnapshot);
@@ -150,6 +162,13 @@ public:
     }
 
 private:
+    struct PendingVerificationCompatibility
+    {
+        uint64_t TransactionId{};
+        uint64_t RuntimeGeneration{};
+        PartyQuestRuntimeSafetyProfile SafetyProfile;
+    };
+
     /** Only the full checkpoint coordinator may publish this durable bit. */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreatedInternal(
         uint64_t aTransactionId);
@@ -160,6 +179,16 @@ private:
      */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus ArmRuntimeMutationInternal(
         uint64_t aTransactionId);
+
+    /**
+     * Installs one fresh compatibility observation for exactly one production
+     * verification sample. The token is consumed before persistence so a failed
+     * durable write cannot replay old evidence.
+     */
+    [[nodiscard]] bool PrepareVerificationCompatibilityInternal(
+        uint64_t aTransactionId,
+        uint64_t aRuntimeGeneration,
+        const PartyQuestRuntimeSafetyProfile& acSafetyProfile) noexcept;
 
     /**
      * Clears a live post-mutation barrier only after the recovery coordinator
@@ -186,10 +215,13 @@ private:
         PartyQuestPersistenceGuarantee::Volatile};
     PartyQuestRuntimeApplyCoordinator m_coordinator;
     std::optional<PartyQuestRuntimeApplyIdentity> m_runtimeMutationAuthority;
+    std::optional<PendingVerificationCompatibility> m_pendingVerificationCompatibility;
+    uint64_t m_verificationRuntimeGeneration{};
 
     friend class PartyQuestRuntimeCheckpointCoordinator;
     friend class PartyQuestRuntimeRecoveryCoordinator;
     friend class PartyQuestRuntimeGuardedSession;
+    friend class PartyQuestRuntimeVerificationGate;
     // Defined only in Code/tests; no production implementation/API exists.
     friend class PartyQuestRuntimeApplySessionTestAccess;
 };

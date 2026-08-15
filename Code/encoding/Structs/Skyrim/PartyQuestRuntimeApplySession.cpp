@@ -1,5 +1,8 @@
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
 
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestSaveGuard.h>
+
 #include <optional>
 #include <utility>
 
@@ -23,6 +26,14 @@ bool MatchesRuntimeMutationAuthority(
         acAuthority.SidecarManifestFingerprint == acActive.SidecarManifestFingerprint &&
         acAuthority.Actions == acActive.Actions &&
         acAuthority.ExpectedVerification == acActive.ExpectedVerification;
+}
+
+bool IsProcessGuardedTransaction(uint64_t aTransactionId) noexcept
+{
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    return aTransactionId != 0 &&
+        processGuard.IsActive() &&
+        processGuard.GetTransactionId() == aTransactionId;
 }
 } // namespace
 
@@ -64,8 +75,6 @@ bool PartyQuestRuntimeApplySession::Persist(
     }
     catch (...)
     {
-        // A storage callback exception is equivalent to a failed durability
-        // barrier. Never publish the candidate state in memory afterward.
         return false;
     }
 }
@@ -111,6 +120,8 @@ PartyQuestRuntimeDurableBeginStatus PartyQuestRuntimeApplySession::Begin(
 
     m_coordinator = std::move(candidate);
     m_runtimeMutationAuthority = runtimeMutationAuthority;
+    m_pendingVerificationCompatibility.reset();
+    m_verificationRuntimeGeneration = 0;
     return TranslateBeginStatus(status);
 }
 
@@ -121,13 +132,14 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkWorl
     if (!candidate.MarkWorldReady(acCurrentRequest))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 
-    const auto runtimeMutationAuthority =
-        BuildRuntimeMutationAuthority(acCurrentRequest);
+    const auto runtimeMutationAuthority = BuildRuntimeMutationAuthority(acCurrentRequest);
     if (!Persist(candidate))
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
     m_runtimeMutationAuthority = runtimeMutationAuthority;
+    m_pendingVerificationCompatibility.reset();
+    m_verificationRuntimeGeneration = 0;
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
@@ -168,13 +180,13 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::ArmRunti
     if (!candidate.MarkApplyDispatched(aTransactionId))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 
-    // The persisted candidate already says RuntimeMutationMayHaveOccurred=true.
-    // A future Skyrim executor may run only after this succeeds.
     if (!Persist(candidate))
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
     m_runtimeMutationAuthority.reset();
+    m_pendingVerificationCompatibility.reset();
+    m_verificationRuntimeGeneration = 0;
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
@@ -186,13 +198,12 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkPapy
     if (!candidate.MarkPapyrusQuiescent(aMonitor, std::move(aAuthorization)))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 
-    // Trusted observation authorization is consumed before persistence. If
-    // durable publication fails, the live coordinator remains WaitingForPapyrus
-    // and the monitor must gather a fresh authoritative observation sequence.
     if (!Persist(candidate))
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
+    m_pendingVerificationCompatibility.reset();
+    m_verificationRuntimeGeneration = 0;
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
@@ -204,27 +215,106 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkPapy
     if (!candidate.MarkPapyrusQuiescent(aTracker, std::move(aAuthorization)))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 
-    // Authorization is intentionally consumed before persistence. If durable
-    // publication fails, the live coordinator remains WaitingForPapyrus and a
-    // caller must obtain fresh observations rather than replay stale evidence.
     if (!Persist(candidate))
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
+    m_pendingVerificationCompatibility.reset();
+    m_verificationRuntimeGeneration = 0;
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkPapyrusQuiescent(
     uint64_t)
 {
-    // A naked transaction id is not quiescence evidence.
     return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
+}
+
+bool PartyQuestRuntimeApplySession::PrepareVerificationCompatibilityInternal(
+    uint64_t aTransactionId,
+    uint64_t aRuntimeGeneration,
+    const PartyQuestRuntimeSafetyProfile& acSafetyProfile) noexcept
+{
+    const auto* active = m_coordinator.GetActive();
+    if (!active ||
+        aTransactionId == 0 ||
+        aRuntimeGeneration == 0 ||
+        active->TransactionId != aTransactionId ||
+        active->State != PartyQuestRuntimeApplyState::Verifying ||
+        !active->SaveGuardActive ||
+        !active->CheckpointCreated ||
+        !active->RuntimeMutationMayHaveOccurred ||
+        !IsProcessGuardedTransaction(aTransactionId) ||
+        !acSafetyProfile.IsVerifiedFor(active->QuestId) ||
+        acSafetyProfile.GetCompatibilityFingerprint() !=
+            active->ExpectedVerification.CompatibilityFingerprint ||
+        acSafetyProfile.GetAdapterMutationComponents() !=
+            PartyQuestVerificationComponent::QuestSnapshot ||
+        m_pendingVerificationCompatibility)
+    {
+        return false;
+    }
+
+    auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    if (generationFence.GetGeneration() != aRuntimeGeneration)
+        return false;
+
+    if (m_verificationRuntimeGeneration != 0 &&
+        m_verificationRuntimeGeneration != aRuntimeGeneration)
+    {
+        return false;
+    }
+
+    PendingVerificationCompatibility pending;
+    pending.TransactionId = aTransactionId;
+    pending.RuntimeGeneration = aRuntimeGeneration;
+    pending.SafetyProfile = acSafetyProfile;
+    m_pendingVerificationCompatibility = std::move(pending);
+    return true;
 }
 
 PartyQuestRuntimeDurableVerificationResult PartyQuestRuntimeApplySession::SubmitResnapshot(
     uint64_t aTransactionId,
     QuestSnapshot aObservedSnapshot)
 {
+    const bool processGuarded = IsProcessGuardedTransaction(aTransactionId);
+    uint64_t verifiedGeneration = 0;
+
+    if (processGuarded)
+    {
+        if (!m_pendingVerificationCompatibility ||
+            m_pendingVerificationCompatibility->TransactionId != aTransactionId)
+        {
+            return {PartyQuestRuntimeVerificationStatus::InvalidState, false};
+        }
+
+        const PendingVerificationCompatibility pending =
+            std::move(*m_pendingVerificationCompatibility);
+        m_pendingVerificationCompatibility.reset();
+
+        const auto* active = m_coordinator.GetActive();
+        auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+        if (!active ||
+            active->TransactionId != aTransactionId ||
+            active->State != PartyQuestRuntimeApplyState::Verifying ||
+            !pending.SafetyProfile.IsVerifiedFor(active->QuestId) ||
+            pending.SafetyProfile.GetCompatibilityFingerprint() !=
+                active->ExpectedVerification.CompatibilityFingerprint ||
+            pending.RuntimeGeneration == 0 ||
+            generationFence.GetGeneration() != pending.RuntimeGeneration ||
+            (m_verificationRuntimeGeneration != 0 &&
+             m_verificationRuntimeGeneration != pending.RuntimeGeneration))
+        {
+            return {PartyQuestRuntimeVerificationStatus::InvalidState, false};
+        }
+
+        auto lease = generationFence.TryAcquire(pending.RuntimeGeneration);
+        if (!lease || !lease->IsValid())
+            return {PartyQuestRuntimeVerificationStatus::InvalidState, false};
+
+        verifiedGeneration = pending.RuntimeGeneration;
+    }
+
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
     const PartyQuestRuntimeVerificationStatus verification =
         candidate.SubmitResnapshot(aTransactionId, std::move(aObservedSnapshot));
@@ -236,50 +326,66 @@ PartyQuestRuntimeDurableVerificationResult PartyQuestRuntimeApplySession::Submit
         return {verification, true};
 
     m_coordinator = std::move(candidate);
+    if (processGuarded && m_verificationRuntimeGeneration == 0)
+        m_verificationRuntimeGeneration = verifiedGeneration;
     return {verification, false};
 }
 
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::Commit(
     uint64_t aTransactionId)
 {
+    if (IsProcessGuardedTransaction(aTransactionId))
+    {
+        auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+        if (m_verificationRuntimeGeneration == 0 ||
+            generationFence.GetGeneration() != m_verificationRuntimeGeneration)
+        {
+            m_pendingVerificationCompatibility.reset();
+            return PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired;
+        }
+    }
+
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
     if (!candidate.Commit(aTransactionId))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 
-    // The committed transaction journal must be durable before the in-memory
-    // save guard is released/published as committed.
     if (!Persist(candidate))
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
     m_runtimeMutationAuthority.reset();
+    m_pendingVerificationCompatibility.reset();
+    m_verificationRuntimeGeneration = 0;
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::AbortBeforeMutation(
     uint64_t aTransactionId)
 {
+    m_pendingVerificationCompatibility.reset();
+
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
     if (!candidate.Abort(aTransactionId))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 
     if (candidate.LastAbortRequiresCheckpointRestore())
+    {
+        m_verificationRuntimeGeneration = 0;
         return PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired;
+    }
 
     if (!Persist(candidate))
         return PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure;
 
     m_coordinator = std::move(candidate);
     m_runtimeMutationAuthority.reset();
+    m_verificationRuntimeGeneration = 0;
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::CompleteLiveCheckpointRestore(
     uint64_t)
 {
-    // A transaction id alone is not proof that the exact PreRepair bytes were
-    // restored. Only PartyQuestRuntimeRecoveryCoordinator may cross the real
-    // recovery-completion barrier after independent filesystem verification.
     return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 }
 
@@ -305,6 +411,8 @@ PartyQuestRuntimeApplySession::CompleteLiveCheckpointRestoreInternal(
 
     m_coordinator = std::move(candidate);
     m_runtimeMutationAuthority.reset();
+    m_pendingVerificationCompatibility.reset();
+    m_verificationRuntimeGeneration = 0;
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
 
@@ -312,6 +420,8 @@ PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplySession::RestoreRecov
     const PartyQuestRuntimeRecoveryState& acState) noexcept
 {
     m_runtimeMutationAuthority.reset();
+    m_pendingVerificationCompatibility.reset();
+    m_verificationRuntimeGeneration = 0;
     return m_coordinator.RestoreRecoveryState(
         acState,
         m_campaignId,
@@ -321,9 +431,6 @@ PartyQuestRuntimeRecoveryDisposition PartyQuestRuntimeApplySession::RestoreRecov
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::CompleteCrashCheckpointRestore(
     uint64_t)
 {
-    // A transaction id alone is not proof that the exact crash-recovery bytes
-    // were restored. Only PartyQuestRuntimeRecoveryCoordinator may clear the
-    // persisted recovery barrier after independent filesystem verification.
     return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 }
 
@@ -340,5 +447,7 @@ PartyQuestRuntimeApplySession::CompleteCrashCheckpointRestoreInternal(
 
     m_coordinator = std::move(candidate);
     m_runtimeMutationAuthority.reset();
+    m_pendingVerificationCompatibility.reset();
+    m_verificationRuntimeGeneration = 0;
     return PartyQuestRuntimeDurableTransitionStatus::Applied;
 }
