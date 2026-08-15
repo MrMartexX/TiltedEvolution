@@ -118,7 +118,7 @@ TEST_CASE("Deferred world queue exposes stable target identities but requires ex
     REQUIRE(entry->ReferencedWorldTargets[1] == GameId(0, 0x5001));
 
     REQUIRE(queue.TakeReady().empty());
-    REQUIRE(queue.MarkReady(request));
+    REQUIRE(queue.MarkReady(request, request.CanonicalSnapshot.Revision));
 
     auto ready = queue.TakeReady();
     REQUIRE(ready.size() == 1);
@@ -149,7 +149,9 @@ TEST_CASE("Deferred world readiness rejects stale sidecar and compatibility iden
     ++changedSidecars.SidecarManifestFingerprint;
     REQUIRE(queue.Enqueue(changedSidecars) ==
         PartyQuestDeferredWorldEnqueueStatus::TransactionConflict);
-    REQUIRE_FALSE(queue.MarkReady(changedSidecars));
+    REQUIRE_FALSE(queue.MarkReady(
+        changedSidecars,
+        request.CanonicalSnapshot.Revision));
     REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
 
     auto changedCompatibility = BuildDeferredRequest(
@@ -161,10 +163,12 @@ TEST_CASE("Deferred world readiness rejects stale sidecar and compatibility iden
         2);
     REQUIRE(queue.Enqueue(changedCompatibility) ==
         PartyQuestDeferredWorldEnqueueStatus::TransactionConflict);
-    REQUIRE_FALSE(queue.MarkReady(changedCompatibility));
+    REQUIRE_FALSE(queue.MarkReady(
+        changedCompatibility,
+        request.CanonicalSnapshot.Revision));
     REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
 
-    REQUIRE(queue.MarkReady(request));
+    REQUIRE(queue.MarkReady(request, request.CanonicalSnapshot.Revision));
 }
 
 TEST_CASE("Deferred world queue rejects forged or stale mutation authorization", "[quest.party-state.deferred-world][mutation-authorization]")
@@ -213,7 +217,26 @@ TEST_CASE("Newer canonical observation invalidates deferred stale work before ce
     REQUIRE_FALSE(queue.InvalidateIfOlder(questId, 6));
     REQUIRE(queue.InvalidateIfOlder(questId, 7));
     REQUIRE(queue.GetPendingCount() == 0);
-    REQUIRE_FALSE(queue.MarkReady(request));
+    REQUIRE_FALSE(queue.MarkReady(request, 7));
+}
+
+TEST_CASE("Deferred world readiness independently rejects a superseded canonical revision", "[quest.party-state.deferred-world][revision]")
+{
+    PartyQuestDeferredWorldQueue queue;
+    const GameId questId(44, 0x2000);
+    const auto request = BuildDeferredRequest(5101, questId, 6, 91, 0x9100);
+    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+
+    // Simulate the critical race: no explicit InvalidateIfOlder callback ran,
+    // but the authoritative reconcile path already knows revision 9 by the time
+    // the old cell-load callback tries to mark revision 6 ready.
+    REQUIRE_FALSE(queue.MarkReady(request, 9));
+    REQUIRE(queue.GetPendingCount() == 0);
+    REQUIRE(queue.FindByTransaction(request.TransactionId) == nullptr);
+    REQUIRE(queue.TakeReady().empty());
+
+    // The obsolete transaction cannot be revived by replaying its old request.
+    REQUIRE_FALSE(queue.MarkReady(request, 9));
 }
 
 TEST_CASE("Deferred world ready requests are emitted deterministically by canonical world revision", "[quest.party-state.deferred-world]")
@@ -224,8 +247,8 @@ TEST_CASE("Deferred world ready requests are emitted deterministically by canoni
 
     REQUIRE(queue.Enqueue(later) == PartyQuestDeferredWorldEnqueueStatus::Queued);
     REQUIRE(queue.Enqueue(earlier) == PartyQuestDeferredWorldEnqueueStatus::Queued);
-    REQUIRE(queue.MarkReady(later));
-    REQUIRE(queue.MarkReady(earlier));
+    REQUIRE(queue.MarkReady(later, later.CanonicalSnapshot.Revision));
+    REQUIRE(queue.MarkReady(earlier, earlier.CanonicalSnapshot.Revision));
 
     const auto ready = queue.TakeReady();
     REQUIRE(ready.size() == 2);

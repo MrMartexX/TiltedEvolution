@@ -38,8 +38,10 @@ struct PartyQuestDeferredWorldEntry
  * The queue never assumes that a FormId being known means its cell is loaded.
  * External runtime hooks must explicitly call MarkReady with a freshly rebuilt
  * current-canonical request after resolving all targets. The full validated
- * identity must still match the queued plan. Newer canonical revisions replace
- * older pending work for the same quest so stale repairs are never executed.
+ * identity must still match the queued plan, and the caller must separately
+ * supply the latest authoritative canonical quest revision. Newer canonical
+ * revisions invalidate older pending work so stale repairs are never executed
+ * even if an old request is presented again when a cell later becomes ready.
  *
  * A deferred request also needs the exact compatibility-bound runtime mutation
  * authorization carried by its apply plan. This is defense in depth: the
@@ -57,7 +59,17 @@ public:
     [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus Enqueue(
         PartyQuestRuntimeApplyRequest aRequest);
 
-    bool MarkReady(PartyQuestRuntimeApplyRequest aCurrentRequest) noexcept;
+    /**
+     * Marks one exact queued request ready only when the latest independently
+     * observed canonical quest revision still equals the queued revision.
+     *
+     * aCurrentCanonicalQuestRevision must come from the current server-canonical
+     * observation/reconcile path, not from the deferred request itself. If that
+     * revision is newer, the stale queued entry is invalidated immediately.
+     */
+    bool MarkReady(
+        PartyQuestRuntimeApplyRequest aCurrentRequest,
+        uint64_t aCurrentCanonicalQuestRevision) noexcept;
 
     /** Drops a queued repair if a newer canonical quest revision is already known. */
     bool InvalidateIfOlder(

@@ -130,12 +130,11 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
 }
 
 bool PartyQuestDeferredWorldQueue::MarkReady(
-    PartyQuestRuntimeApplyRequest aCurrentRequest) noexcept
+    PartyQuestRuntimeApplyRequest aCurrentRequest,
+    uint64_t aCurrentCanonicalQuestRevision) noexcept
 {
     const uint64_t transactionId = aCurrentRequest.TransactionId;
-    const auto currentIdentity =
-        PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aCurrentRequest);
-    if (!currentIdentity)
+    if (transactionId == 0 || aCurrentCanonicalQuestRevision == 0)
         return false;
 
     const auto transactionIt = m_transactionQuests.find(transactionId);
@@ -143,10 +142,39 @@ bool PartyQuestDeferredWorldQueue::MarkReady(
         return false;
 
     const auto entryIt = m_entries.find(transactionIt->second);
-    const auto fingerprintIt = m_transactionFingerprints.find(transactionId);
     if (entryIt == m_entries.end() ||
-        fingerprintIt == m_transactionFingerprints.end() ||
-        entryIt->second.Request.TransactionId != transactionId ||
+        entryIt->second.Request.TransactionId != transactionId)
+    {
+        return false;
+    }
+
+    const uint64_t queuedRevision =
+        entryIt->second.Request.CanonicalSnapshot.Revision;
+
+    // A newer independent canonical observation irrevocably supersedes this
+    // deferred plan. Do not leave a stale ready candidate behind for a later
+    // cell-load callback to revive.
+    if (aCurrentCanonicalQuestRevision > queuedRevision)
+    {
+        m_transactionQuests.erase(transactionId);
+        m_entries.erase(entryIt);
+        return false;
+    }
+
+    if (aCurrentCanonicalQuestRevision != queuedRevision ||
+        aCurrentRequest.CanonicalSnapshot.Revision !=
+            aCurrentCanonicalQuestRevision)
+    {
+        return false;
+    }
+
+    const auto currentIdentity =
+        PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aCurrentRequest);
+    if (!currentIdentity)
+        return false;
+
+    const auto fingerprintIt = m_transactionFingerprints.find(transactionId);
+    if (fingerprintIt == m_transactionFingerprints.end() ||
         fingerprintIt->second != *currentIdentity)
     {
         return false;
