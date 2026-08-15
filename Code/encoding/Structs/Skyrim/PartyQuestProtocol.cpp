@@ -572,47 +572,85 @@ PartyQuestClientRepairResult PartyQuestClientSession::HandleRepairPlan(const Not
         return result;
     }
 
-    result.CampaignChanged = m_campaignId.IsValid() && m_campaignId != acPlan.CampaignId;
-    if (result.CampaignChanged)
-    {
-        m_replica = PartyQuestReplica{};
-        m_canonicalUpdates.clear();
-        m_repairs.clear();
-    }
-    m_campaignId = acPlan.CampaignId;
+    const bool hasCampaign = m_campaignId.IsValid();
+    const bool campaignChanged = hasCampaign && m_campaignId != acPlan.CampaignId;
+    const bool sameCampaign = hasCampaign && !campaignChanged;
 
-    const auto cachedIt = m_repairs.find(acPlan.PlanId);
-    if (cachedIt != m_repairs.end())
+    // Existing duplicate/conflict identity is meaningful only inside the
+    // currently published campaign. A new campaign may legitimately reuse a
+    // server-local PlanId after reconnect, but it must not erase the old cache
+    // until the candidate plan has actually been accepted.
+    if (sameCampaign)
     {
-        if (cachedIt->second.Plan == acPlan)
+        const auto cachedIt = m_repairs.find(acPlan.PlanId);
+        if (cachedIt != m_repairs.end())
         {
-            result.Status = PartyQuestClientRepairStatus::Duplicate;
-            result.Ack = cachedIt->second.Ack;
+            if (cachedIt->second.Plan == acPlan)
+            {
+                result.Status = PartyQuestClientRepairStatus::Duplicate;
+                result.Ack = cachedIt->second.Ack;
+                return result;
+            }
+
+            result.Status = PartyQuestClientRepairStatus::PlanConflict;
+            result.Ack.ApplyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
+            result.Ack.PostApplyReport = m_replica.BuildReport();
+            result.Ack.IsValid = true;
             return result;
         }
 
-        result.Status = PartyQuestClientRepairStatus::PlanConflict;
-        result.Ack.ApplyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
-        result.Ack.PostApplyReport = m_replica.BuildReport();
-        result.Ack.IsValid = true;
-        return result;
+        if (m_repairs.size() >= PartyQuestProtocolResourcePolicy::MaxClientRepairs)
+        {
+            result.Status = PartyQuestClientRepairStatus::ResourceLimitExceeded;
+            result.Ack.ApplyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
+            result.Ack.PostApplyReport = m_replica.BuildReport();
+            result.Ack.IsValid = true;
+            return result;
+        }
     }
 
-    if (m_repairs.size() >= PartyQuestProtocolResourcePolicy::MaxClientRepairs)
-    {
-        result.Status = PartyQuestClientRepairStatus::ResourceLimitExceeded;
-        result.Ack.ApplyStatus = PartyQuestReplicaApplyStatus::InvalidPlan;
-        result.Ack.PostApplyReport = m_replica.BuildReport();
-        result.Ack.IsValid = true;
-        return result;
-    }
-
-    const PartyQuestReplicaApplyStatus applyStatus = m_replica.Apply(acPlan.Plan);
+    // Validate and apply against an unpublished candidate. Switching campaigns
+    // starts from an empty replica, exactly as the old implementation did, but
+    // the old campaign/replica/caches remain authoritative until success.
+    PartyQuestReplica candidateReplica = campaignChanged
+        ? PartyQuestReplica{}
+        : m_replica;
+    const PartyQuestReplicaApplyStatus applyStatus = candidateReplica.Apply(acPlan.Plan);
 
     result.Status = ToClientRepairStatus(applyStatus);
     result.Ack.ApplyStatus = applyStatus;
-    result.Ack.PostApplyReport = m_replica.BuildReport();
     result.Ack.IsValid = true;
+
+    const bool accepted =
+        applyStatus == PartyQuestReplicaApplyStatus::Applied ||
+        applyStatus == PartyQuestReplicaApplyStatus::NoChanges;
+    if (!accepted)
+    {
+        // Report the actually published replica, not the rejected candidate.
+        result.Ack.PostApplyReport = m_replica.BuildReport();
+
+        // Preserve same-campaign duplicate/conflict semantics. Initial bind and
+        // campaign-switch failures remain side-effect free and therefore do not
+        // create cache entries in an unpublished campaign namespace.
+        if (sameCampaign)
+        {
+            m_repairs.emplace(
+                acPlan.PlanId,
+                RepairCacheEntry{acPlan, result.Ack, result.Status});
+        }
+        return result;
+    }
+
+    if (campaignChanged)
+    {
+        m_canonicalUpdates.clear();
+        m_repairs.clear();
+    }
+
+    m_replica = std::move(candidateReplica);
+    m_campaignId = acPlan.CampaignId;
+    result.CampaignChanged = campaignChanged;
+    result.Ack.PostApplyReport = m_replica.BuildReport();
 
     m_repairs.emplace(
         acPlan.PlanId,
