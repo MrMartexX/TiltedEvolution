@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
+#include <Structs/Skyrim/PartyQuestRuntimeVerificationGate.h>
 
 #include <party_quest_papyrus_runtime_observer_test_access.h>
 #include <party_quest_runtime_apply_session_test_access.h>
@@ -20,10 +21,52 @@ const PartyQuestPlayerProfileId kPapyrusAuthorityPlayer{
     0x9192939495969798ull,
     0xA1A2A3A4A5A6A7A8ull};
 
-PartyQuestRuntimeApplyRequest BuildProcessGuardRequest(uint64_t aTransactionId)
+struct ProcessCompatibilityFixture
+{
+    PartyQuestRuntimeCompatibilityRequirement Requirement;
+    PartyQuestRuntimeCompatibilityFacts Facts;
+    uint64_t Fingerprint{};
+};
+
+ProcessCompatibilityFixture BuildProcessCompatibility()
+{
+    ProcessCompatibilityFixture fixture;
+    fixture.Requirement.QuestId = GameId(95, 0x2600);
+    fixture.Requirement.ProfileVersion = 8;
+    fixture.Requirement.ResolvedRecordFingerprint = 0x8100810081008100ull;
+    fixture.Requirement.WinningOverrideFingerprint = 0x8200820082008200ull;
+    fixture.Requirement.ScriptFingerprint = 0x8300830083008300ull;
+    fixture.Requirement.NativeAdapterFingerprint = 0x8400840084008400ull;
+    fixture.Requirement.AdapterMutationComponents =
+        PartyQuestVerificationComponent::QuestSnapshot;
+
+    fixture.Facts.ProfileVersion = fixture.Requirement.ProfileVersion;
+    fixture.Facts.ResolvedRecordFingerprint =
+        fixture.Requirement.ResolvedRecordFingerprint;
+    fixture.Facts.WinningOverrideFingerprint =
+        fixture.Requirement.WinningOverrideFingerprint;
+    fixture.Facts.ScriptFingerprint = fixture.Requirement.ScriptFingerprint;
+    fixture.Facts.NativeAdapterFingerprint =
+        fixture.Requirement.NativeAdapterFingerprint;
+    fixture.Facts.AdapterMutationComponents =
+        fixture.Requirement.AdapterMutationComponents;
+
+    const auto decision = PartyQuestRuntimeCompatibilityPolicy::Evaluate(
+        fixture.Requirement,
+        fixture.Facts);
+    REQUIRE(decision.IsAuthorized());
+    fixture.Fingerprint = decision.SafetyProfile.GetCompatibilityFingerprint();
+    REQUIRE(fixture.Fingerprint != 0);
+    return fixture;
+}
+
+PartyQuestRuntimeApplyRequest BuildProcessGuardRequest(
+    uint64_t aTransactionId,
+    const ProcessCompatibilityFixture& acCompatibility)
 {
     QuestSnapshot snapshot;
     snapshot.QuestId = GameId(95, 0x2600);
+    REQUIRE(snapshot.QuestId == acCompatibility.Requirement.QuestId);
     snapshot.Status = QuestSnapshotStatus::Running;
     snapshot.CurrentStage = 40;
     snapshot.Revision = 6;
@@ -43,7 +86,10 @@ PartyQuestRuntimeApplyRequest BuildProcessGuardRequest(uint64_t aTransactionId)
     request.Plan.Actions = PartyQuestApplyAction::StageTransition |
         PartyQuestApplyAction::WaitForPapyrusQuiescence |
         PartyQuestApplyAction::ResnapshotAndVerify;
-    PartyQuestRuntimeSafetyTestAccess::AuthorizePlan(request.Plan, snapshot);
+    PartyQuestRuntimeSafetyTestAccess::AuthorizePlanWithCompatibilityFingerprint(
+        request.Plan,
+        snapshot,
+        acCompatibility.Fingerprint);
 
     REQUIRE(request.Plan.MutationAuthorization.IsVerified());
     return request;
@@ -82,6 +128,36 @@ struct ProcessGuardCleanup
             guard.Release(TransactionId);
     }
 };
+
+PartyQuestRuntimeGuardedVerificationResult SubmitProcessVerificationSample(
+    PartyQuestRuntimeGuardedSession& aGuarded,
+    PartyQuestRuntimeApplySession& aSession,
+    PartyQuestRuntimeVerificationMonitor& aMonitor,
+    uint64_t aTransactionId,
+    uint64_t aNowMs,
+    QuestSnapshot aSnapshot,
+    const ProcessCompatibilityFixture& acCompatibility)
+{
+    return PartyQuestRuntimeVerificationGate::Submit(
+        aGuarded,
+        aSession,
+        aMonitor,
+        aTransactionId,
+        aNowMs,
+        acCompatibility.Requirement,
+        [snapshot = std::move(aSnapshot)](const GameId& acQuestId) mutable
+            -> std::optional<QuestSnapshot>
+        {
+            if (snapshot.QuestId != acQuestId)
+                return std::nullopt;
+            return snapshot;
+        },
+        [facts = acCompatibility.Facts](const GameId&)
+            -> std::optional<PartyQuestRuntimeCompatibilityFacts>
+        {
+            return facts;
+        });
+}
 } // namespace
 
 TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "[quest.party-state.runtime-guard][quiescence][observer-authority]")
@@ -104,7 +180,8 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
     REQUIRE(&guarded.GetRuntimeSession() == &session);
     REQUIRE(&guarded.GetSaveGuard() == &processGuard);
 
-    const auto request = BuildProcessGuardRequest(transactionId);
+    const auto compatibility = BuildProcessCompatibility();
+    const auto request = BuildProcessGuardRequest(transactionId, compatibility);
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(processGuard.GetTransactionId() == transactionId);
     REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
@@ -177,11 +254,14 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
     REQUIRE(verificationMonitor.GetStatus() ==
         PartyQuestRuntimeVerificationMonitorStatus::Waiting);
 
-    const auto first = guarded.SubmitVerificationResnapshot(
+    const auto first = SubmitProcessVerificationSample(
+        guarded,
+        session,
         verificationMonitor,
         transactionId,
         130,
-        request.CanonicalSnapshot);
+        request.CanonicalSnapshot,
+        compatibility);
     REQUIRE(first.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(first.Verification ==
         PartyQuestRuntimeVerificationStatus::NeedsStableSample);
@@ -189,11 +269,14 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
         PartyQuestRuntimeVerificationMonitorStatus::Waiting);
     REQUIRE_FALSE(first.PersistenceFailed);
 
-    const auto second = guarded.SubmitVerificationResnapshot(
+    const auto second = SubmitProcessVerificationSample(
+        guarded,
+        session,
         verificationMonitor,
         transactionId,
         140,
-        request.CanonicalSnapshot);
+        request.CanonicalSnapshot,
+        compatibility);
     REQUIRE(second.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(second.Verification == PartyQuestRuntimeVerificationStatus::Stable);
     REQUIRE(second.MonitorStatus ==
@@ -233,7 +316,8 @@ TEST_CASE("Stable verification cannot be committed after its deadline", "[quest.
         [](const PartyQuestRuntimeRecoveryState&) { return true; },
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     PartyQuestRuntimeGuardedSession guarded(session);
-    const auto request = BuildProcessGuardRequest(transactionId);
+    const auto compatibility = BuildProcessCompatibility();
+    const auto request = BuildProcessGuardRequest(transactionId, compatibility);
 
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
@@ -262,17 +346,23 @@ TEST_CASE("Stable verification cannot be committed after its deadline", "[quest.
                 verificationMonitor,
                 120).Status == PartyQuestRuntimeGuardStatus::Ready);
 
-    REQUIRE(guarded.SubmitVerificationResnapshot(
+    REQUIRE(SubmitProcessVerificationSample(
+                guarded,
+                session,
                 verificationMonitor,
                 transactionId,
                 130,
-                request.CanonicalSnapshot).Verification ==
+                request.CanonicalSnapshot,
+                compatibility).Verification ==
         PartyQuestRuntimeVerificationStatus::NeedsStableSample);
-    const auto stable = guarded.SubmitVerificationResnapshot(
+    const auto stable = SubmitProcessVerificationSample(
+        guarded,
+        session,
         verificationMonitor,
         transactionId,
         140,
-        request.CanonicalSnapshot);
+        request.CanonicalSnapshot,
+        compatibility);
     REQUIRE(stable.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(stable.Verification == PartyQuestRuntimeVerificationStatus::Stable);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
