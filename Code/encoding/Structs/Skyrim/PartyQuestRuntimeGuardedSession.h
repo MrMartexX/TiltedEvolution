@@ -68,8 +68,10 @@ struct PartyQuestRuntimeGuardedVerificationResult
  *
  * - immediate repair: acquire physical guard before durable Begin();
  * - deferred repair: hold no guard while waiting for world targets;
- * - world ready: revalidate the full current request, then acquire the physical
- *   guard before durable MarkWorldReady();
+ * - production world-ready: PartyQuestDeferredWorldQueue revalidates the exact
+ *   current plan, pins the shared runtime generation, then calls the private
+ *   transition below so the physical guard is acquired before durable
+ *   MarkWorldReady() while the generation remains pinned;
  * - persistence failure before publication: release only a lease acquired by
  *   that failed call;
  * - commit/safe abort: persist the state transition first, then release guard;
@@ -99,6 +101,11 @@ public:
     [[nodiscard]] PartyQuestRuntimeGuardResult Begin(
         const PartyQuestRuntimeApplyRequest& acRequest) noexcept;
 
+    /**
+     * Explicit local-guard test seam. Production process-guard sessions must be
+     * advanced by PartyQuestDeferredWorldQueue::ConsumeRuntimeReady so exact
+     * generation/revision evidence cannot be bypassed.
+     */
     [[nodiscard]] PartyQuestRuntimeGuardResult MarkWorldReady(
         const PartyQuestRuntimeApplyRequest& acCurrentRequest) noexcept;
 
@@ -526,6 +533,10 @@ public:
     }
 
 private:
+    friend class PartyQuestDeferredWorldQueue;
+
+    [[nodiscard]] PartyQuestRuntimeGuardResult MarkWorldReadyPinned(
+        const PartyQuestRuntimeApplyRequest& acCurrentRequest) noexcept;
     [[nodiscard]] bool HasGuard(uint64_t aTransactionId) const noexcept;
     [[nodiscard]] PartyQuestRuntimeGuardStatus AcquireGuard(
         uint64_t aTransactionId,

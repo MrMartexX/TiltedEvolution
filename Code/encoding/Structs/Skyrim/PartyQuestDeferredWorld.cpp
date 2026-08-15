@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestDeferredWorld.h>
 
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeReferenceReadiness.h>
 
 #include <algorithm>
@@ -469,6 +470,156 @@ std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRea
     return ready;
 }
 
+size_t PartyQuestDeferredWorldQueue::ConsumeRuntimeReady(
+    PartyQuestRuntimeGuardedSession& aGuardedSession,
+    const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+    const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
+    const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept
+{
+    auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    if (!acCanonicalRevisionObserver ||
+        !acReferenceReadiness.UsesGenerationFence(generationFence) ||
+        &aGuardedSession.GetSaveGuard() != &processGuard)
+    {
+        return 0;
+    }
+
+    std::vector<GameId> orderedQuestIds;
+    orderedQuestIds.reserve(m_entries.size());
+    for (const auto& [questId, entry] : m_entries)
+    {
+        if (entry.Ready && !entry.Request.Plan.DryRunOnly)
+            orderedQuestIds.push_back(questId);
+    }
+
+    std::sort(orderedQuestIds.begin(), orderedQuestIds.end(), [this](
+        const GameId& acLeft,
+        const GameId& acRight)
+    {
+        const auto leftIt = m_entries.find(acLeft);
+        const auto rightIt = m_entries.find(acRight);
+        if (leftIt == m_entries.end() || rightIt == m_entries.end())
+            return GameIdLess(acLeft, acRight);
+
+        const auto& left = leftIt->second.Request;
+        const auto& right = rightIt->second.Request;
+        if (left.TargetWorldRevision != right.TargetWorldRevision)
+            return left.TargetWorldRevision < right.TargetWorldRevision;
+        return left.TransactionId < right.TransactionId;
+    });
+
+    size_t consumed = 0;
+    for (const GameId& questId : orderedQuestIds)
+    {
+        auto entryIt = m_entries.find(questId);
+        if (entryIt == m_entries.end() ||
+            !entryIt->second.Ready ||
+            entryIt->second.Request.Plan.DryRunOnly)
+        {
+            continue;
+        }
+
+        uint64_t currentRevision = 0;
+        try
+        {
+            currentRevision = acCanonicalRevisionObserver(questId);
+        }
+        catch (...)
+        {
+            ResetRuntimeReadiness(entryIt->second);
+            continue;
+        }
+
+        const uint64_t queuedRevision =
+            entryIt->second.Request.CanonicalSnapshot.Revision;
+        if (currentRevision > queuedRevision)
+        {
+            m_transactionQuests.erase(entryIt->second.Request.TransactionId);
+            m_entries.erase(entryIt);
+            continue;
+        }
+
+        if (currentRevision == 0 || currentRevision != queuedRevision)
+        {
+            ResetRuntimeReadiness(entryIt->second);
+            continue;
+        }
+
+        const auto currentIdentity =
+            PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(
+                entryIt->second.Request);
+        const auto fingerprintIt = m_transactionFingerprints.find(
+            entryIt->second.Request.TransactionId);
+        if (!currentIdentity ||
+            fingerprintIt == m_transactionFingerprints.end() ||
+            fingerprintIt->second != *currentIdentity)
+        {
+            ResetRuntimeReadiness(entryIt->second);
+            continue;
+        }
+
+        const auto readiness = EvaluateRuntimeReadiness(
+            entryIt->second,
+            generationFence,
+            acReferenceReadiness,
+            acSources);
+        if (!readiness.IsReady() ||
+            readiness.RuntimeGeneration != entryIt->second.ReadyGeneration)
+        {
+            ResetRuntimeReadiness(entryIt->second);
+            continue;
+        }
+
+        auto finalLease = generationFence.TryAcquire(readiness.RuntimeGeneration);
+        if (!finalLease || !finalLease->IsValid())
+        {
+            ResetRuntimeReadiness(entryIt->second);
+            continue;
+        }
+
+        uint64_t pinnedRevision = 0;
+        try
+        {
+            pinnedRevision = acCanonicalRevisionObserver(questId);
+        }
+        catch (...)
+        {
+            ResetRuntimeReadiness(entryIt->second);
+            continue;
+        }
+
+        if (pinnedRevision > queuedRevision)
+        {
+            m_transactionQuests.erase(entryIt->second.Request.TransactionId);
+            m_entries.erase(entryIt);
+            continue;
+        }
+
+        if (pinnedRevision == 0 || pinnedRevision != queuedRevision)
+        {
+            ResetRuntimeReadiness(entryIt->second);
+            continue;
+        }
+
+        const auto transition =
+            aGuardedSession.MarkWorldReadyPinned(entryIt->second.Request);
+        if (transition.Status != PartyQuestRuntimeGuardStatus::Ready ||
+            transition.TransitionStatus !=
+                PartyQuestRuntimeDurableTransitionStatus::Applied)
+        {
+            ResetRuntimeReadiness(entryIt->second);
+            continue;
+        }
+
+        m_transactionQuests.erase(entryIt->second.Request.TransactionId);
+        m_entries.erase(entryIt);
+        ++consumed;
+    }
+
+    return consumed;
+}
+
 std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRuntimeReady(
     PartyQuestRuntimeGenerationFence& aGenerationFence,
     const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
@@ -476,8 +627,11 @@ std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRun
     const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept
 {
     std::vector<PartyQuestRuntimeApplyRequest> ready;
-    if (!acCanonicalRevisionObserver)
+    if (!acCanonicalRevisionObserver ||
+        &aGenerationFence == &PartyQuestRuntimeGenerationFence::GetProcessFence())
+    {
         return ready;
+    }
 
     for (auto it = m_entries.begin(); it != m_entries.end();)
     {

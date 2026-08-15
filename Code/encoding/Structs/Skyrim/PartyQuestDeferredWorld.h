@@ -10,6 +10,7 @@
 #include <vector>
 
 class PartyQuestRuntimeGenerationFence;
+class PartyQuestRuntimeGuardedSession;
 class PartyQuestRuntimeReferenceReadiness;
 
 enum class PartyQuestDeferredWorldEnqueueStatus : uint8_t
@@ -96,10 +97,15 @@ struct PartyQuestDeferredWorldEntry
  * world/cell/session state is available.
  *
  * Diagnostic DryRunOnly plans may use MarkReady/TakeReady. Side-effecting
- * runtime plans are deliberately excluded from that legacy surface and must use
- * TryMarkRuntimeReady/TakeRuntimeReady, which classify reference/location/scene
- * dependencies separately, bind reference mapping to the runtime generation,
- * and revalidate the latest canonical revision before release.
+ * runtime plans must use TryMarkRuntimeReady followed by ConsumeRuntimeReady.
+ * The production consume path revalidates the newest canonical revision and
+ * dependency evidence, pins the shared process runtime generation through the
+ * durable DeferredWorld -> AwaitingCheckpoint transition, and removes the queue
+ * entry only after that transition succeeds.
+ *
+ * TakeRuntimeReady remains an explicit-fence unit-test extraction seam only. It
+ * refuses the shared process generation fence so production integration cannot
+ * accidentally carry an already-validated request beyond the lifecycle barrier.
  *
  * A deferred request also needs the exact compatibility-bound runtime mutation
  * authorization carried by its apply plan. Pending work and remembered
@@ -143,9 +149,22 @@ public:
     [[nodiscard]] std::vector<PartyQuestRuntimeApplyRequest> TakeReady();
 
     /**
-     * Runtime extraction revalidates canonical revision, generation and every
-     * world dependency at point of use. A generation change clears readiness
-     * and requires a fresh TryMarkRuntimeReady call.
+     * Production point-of-use transition for runtime deferred work.
+     *
+     * The shared process generation is pinned across canonical revalidation,
+     * physical SaveGuard acquisition and durable MarkWorldReady publication.
+     * A failed durable transition keeps the queue entry and clears its Ready bit
+     * so fresh evidence can retry without losing the deferred transaction.
+     */
+    [[nodiscard]] size_t ConsumeRuntimeReady(
+        PartyQuestRuntimeGuardedSession& aGuardedSession,
+        const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+        const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
+        const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept;
+
+    /**
+     * Explicit-fence unit-test extraction seam. Runtime production code must use
+     * ConsumeRuntimeReady; passing the shared process fence here fails closed.
      */
     [[nodiscard]] std::vector<PartyQuestRuntimeApplyRequest> TakeRuntimeReady(
         PartyQuestRuntimeGenerationFence& aGenerationFence,

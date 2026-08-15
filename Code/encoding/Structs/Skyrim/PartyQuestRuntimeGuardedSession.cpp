@@ -204,6 +204,21 @@ PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::Begin(
 PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::MarkWorldReady(
     const PartyQuestRuntimeApplyRequest& acCurrentRequest) noexcept
 {
+    if (&m_saveGuard == &PartyQuestSaveGuard::GetProcessGuard())
+    {
+        PartyQuestRuntimeGuardResult result;
+        result.Status = PartyQuestRuntimeGuardStatus::InvalidState;
+        result.TransactionId = acCurrentRequest.TransactionId;
+        result.GuardHeld = HasGuard(acCurrentRequest.TransactionId);
+        return result;
+    }
+
+    return MarkWorldReadyPinned(acCurrentRequest);
+}
+
+PartyQuestRuntimeGuardResult PartyQuestRuntimeGuardedSession::MarkWorldReadyPinned(
+    const PartyQuestRuntimeApplyRequest& acCurrentRequest) noexcept
+{
     const uint64_t transactionId = acCurrentRequest.TransactionId;
     PartyQuestRuntimeGuardResult result;
     result.TransactionId = transactionId;
