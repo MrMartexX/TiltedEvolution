@@ -26,6 +26,7 @@
 #include <ScriptExtender.h>
 #include <Services/DiscordService.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 // #include <imgui_internal.h>
 
@@ -172,10 +173,10 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
     // Disconnect invalidates every compatibility/load-order witness before the
     // event fanout. Hold the exclusive generation barrier just long enough to
-    // publish the disconnected transport state, then release it before calling
-    // arbitrary DisconnectedEvent consumers. The runtime session owner can then
-    // take its own full lifecycle lease around PrepareAndRelease() without a
-    // nested exclusive acquisition deadlock.
+    // publish the disconnected transport state, then release it before asking
+    // the runtime session owner for the durable lifecycle disposition. The owner
+    // takes its own full lifecycle lease, avoiding a nested exclusive-acquisition
+    // deadlock while still running before any DisconnectedEvent consumer.
     auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
     const uint64_t generationBefore = generationFence.GetGeneration();
     uint64_t generationAfter = generationBefore;
@@ -185,6 +186,31 @@ void TransportService::OnDisconnected(EDisconnectReason aReason)
         m_connected = false;
         PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
             "transport-disconnect", "disconnected-state-published", generationBefore, generationAfter);
+    }
+
+    auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto lifecycle = runtimeOwner.PrepareAndRelease(
+        PartyQuestRuntimeLifecycleEvent::Disconnect);
+    if (!lifecycle.CanProceed())
+    {
+        // The network disconnect has already happened and cannot be rolled back.
+        // Keep the owner/recovery evidence intact and only allow downstream
+        // services to mirror disconnected session state; they must not infer
+        // that canonical runtime repair became safe again.
+        spdlog::error(
+            "PartyQuest disconnect retained runtime recovery lock: status={} transaction={} guardHeld={} reason={}",
+            static_cast<uint32_t>(lifecycle.Status),
+            lifecycle.TransactionId,
+            lifecycle.GuardHeld,
+            static_cast<uint32_t>(aReason));
+    }
+    else if (lifecycle.Status ==
+             PartyQuestRuntimeLifecycleFenceStatus::SafeAbortApplied)
+    {
+        spdlog::info(
+            "PartyQuest disconnect durably aborted pre-mutation runtime work: transaction={} reason={}",
+            lifecycle.TransactionId,
+            static_cast<uint32_t>(aReason));
     }
 
     PartyQuestP0LiveDiagnostics::RecordTransportState("disconnected");
