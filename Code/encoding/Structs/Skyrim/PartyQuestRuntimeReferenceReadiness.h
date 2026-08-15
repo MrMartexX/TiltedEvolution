@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <mutex>
 #include <unordered_set>
+#include <vector>
 
 /**
  * Process-local evidence that a concrete Skyrim reference is currently loaded.
@@ -46,6 +47,18 @@ public:
      */
     [[nodiscard]] bool IsLoaded(
         uint32_t aFormId,
+        uint64_t aExpectedGeneration) const noexcept;
+
+    /**
+     * Query a complete set of local references under one generation lease.
+     *
+     * This is intentionally stronger than callers looping over IsLoaded(): a
+     * lifecycle invalidation cannot occur between individual reference checks
+     * and produce a mixed-generation positive result. Empty sets are accepted
+     * only for a valid, non-overflowed observation generation.
+     */
+    [[nodiscard]] bool AreLoaded(
+        const std::vector<uint32_t>& acFormIds,
         uint64_t aExpectedGeneration) const noexcept;
 
     [[nodiscard]] uint64_t GetObservationGeneration() const noexcept;

@@ -23,6 +23,37 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Reference readiness validates a complete target set under one generation lease",
+    "[quest.party-state.runtime-reference-readiness][lifecycle]")
+{
+    PartyQuestRuntimeGenerationFence fence;
+    PartyQuestRuntimeReferenceReadiness readiness(fence);
+    const uint64_t generation = fence.GetGeneration();
+
+    REQUIRE(readiness.Observe(0x1100, true));
+    REQUIRE(readiness.Observe(0x1200, true));
+    REQUIRE(readiness.Observe(0x1300, true));
+
+    const std::vector<uint32_t> complete{0x1100, 0x1200, 0x1300};
+    REQUIRE(readiness.AreLoaded(complete, generation));
+    REQUIRE_FALSE(readiness.AreLoaded({0x1100, 0x1400}, generation));
+    REQUIRE_FALSE(readiness.AreLoaded({0x1100, 0}, generation));
+
+    const auto transition = fence.BeginLifecycleTransition();
+    REQUIRE(transition.IsValid());
+    REQUIRE_FALSE(readiness.AreLoaded(complete, generation));
+    REQUIRE_FALSE(readiness.AreLoaded(complete, transition.Generation));
+
+    REQUIRE(fence.CompleteLifecycleTransition(transition));
+    REQUIRE_FALSE(readiness.AreLoaded(complete, transition.Generation));
+
+    REQUIRE(readiness.Observe(0x1100, true));
+    REQUIRE(readiness.Observe(0x1200, true));
+    REQUIRE(readiness.Observe(0x1300, true));
+    REQUIRE(readiness.AreLoaded(complete, transition.Generation));
+}
+
+TEST_CASE(
     "Reference readiness cannot survive runtime generation invalidation",
     "[quest.party-state.runtime-reference-readiness]")
 {
@@ -93,6 +124,7 @@ TEST_CASE(
     REQUIRE(readiness.IsOverflowed());
     REQUIRE_FALSE(readiness.IsLoaded(0x10000, generation));
     REQUIRE_FALSE(readiness.IsLoaded(0xF0000000u, generation));
+    REQUIRE_FALSE(readiness.AreLoaded({0x10000}, generation));
     REQUIRE_FALSE(readiness.Observe(0x10000, false));
 
     const uint64_t nextGeneration = fence.Invalidate();
@@ -100,4 +132,5 @@ TEST_CASE(
     REQUIRE(readiness.Observe(0x4000, true));
     REQUIRE_FALSE(readiness.IsOverflowed());
     REQUIRE(readiness.IsLoaded(0x4000, nextGeneration));
+    REQUIRE(readiness.AreLoaded({0x4000}, nextGeneration));
 }

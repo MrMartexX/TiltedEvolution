@@ -80,6 +80,30 @@ bool PartyQuestRuntimeReferenceReadiness::IsLoaded(
         m_loadedReferences.contains(aFormId);
 }
 
+bool PartyQuestRuntimeReferenceReadiness::AreLoaded(
+    const std::vector<uint32_t>& acFormIds,
+    uint64_t aExpectedGeneration) const noexcept
+{
+    if (aExpectedGeneration == 0)
+        return false;
+
+    auto lease = m_generationFence.TryAcquire(aExpectedGeneration);
+    if (!lease || !lease->IsValid())
+        return false;
+
+    std::lock_guard lock(m_mutex);
+    if (m_overflowed || m_observationGeneration != aExpectedGeneration)
+        return false;
+
+    for (const uint32_t formId : acFormIds)
+    {
+        if (formId == 0 || !m_loadedReferences.contains(formId))
+            return false;
+    }
+
+    return true;
+}
+
 uint64_t PartyQuestRuntimeReferenceReadiness::GetObservationGeneration() const noexcept
 {
     std::lock_guard lock(m_mutex);
