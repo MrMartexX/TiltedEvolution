@@ -19,6 +19,16 @@ PartyQuestRuntimeSessionOwnerBindResult MakeEarlyFailure(
 }
 } // namespace
 
+PartyQuestRuntimeSessionOwner&
+PartyQuestRuntimeSessionOwner::GetProcessOwner() noexcept
+{
+    // Construct the generation fence first so static destruction tears down the
+    // process owner while its generation barrier is still alive.
+    (void)PartyQuestRuntimeGenerationFence::GetProcessFence();
+    static PartyQuestRuntimeSessionOwner s_processOwner;
+    return s_processOwner;
+}
+
 PartyQuestRuntimeSessionOwner::~PartyQuestRuntimeSessionOwner() noexcept
 {
     // Teardown is itself a runtime-context transition. Hold the exclusive

@@ -4,6 +4,7 @@
 #include <PartyQuestP0LiveDiagnostics.h>
 #include <SaveLoad.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 #include <Structs/Skyrim/PartyQuestSaveGuard.h>
 
 #include <mutex>
@@ -293,6 +294,23 @@ bool TP_MAKE_THISCALL(
     uint32_t aOutputStats,
     bool aCheckForMods)
 {
+    // The process runtime owner owns persisted repair disposition. Fence it
+    // before the engine load admission so deferred work (which intentionally
+    // holds no physical SaveGuard yet) cannot survive across Load Game.
+    auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto lifecycle = runtimeOwner.PrepareAndRelease(
+        PartyQuestRuntimeLifecycleEvent::LoadGame);
+    if (!lifecycle.CanProceed())
+    {
+        spdlog::warn(
+            "PartyQuest runtime blocked Skyrim LoadGame because durable lifecycle disposition is unresolved: status={} transaction={} guardHeld={} save={}",
+            static_cast<uint32_t>(lifecycle.Status),
+            lifecycle.TransactionId,
+            lifecycle.GuardHeld,
+            acFileName ? acFileName : "<null>");
+        return false;
+    }
+
     auto& guard = PartyQuestSaveGuard::GetProcessGuard();
     auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
 

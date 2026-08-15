@@ -76,8 +76,10 @@ struct PartyQuestRuntimeSessionOwnerBindResult
  * the process-local publication-authority binding before the session object is
  * destroyed so no stale capability can pin the kernel lock past owner lifetime.
  *
- * This is a bootstrap/lifetime primitive only. It does not hook Skyrim load/new
- * game/main menu, network disconnect, party leave or shutdown entrypoints.
+ * This is a bootstrap/lifetime primitive. It does not itself discover campaign
+ * or profile identity and does not itself hook engine/network lifecycle sources;
+ * production integrations must use the shared process owner below rather than
+ * constructing an unreachable private owner.
  */
 class PartyQuestRuntimeSessionOwner final
 {
@@ -89,6 +91,9 @@ public:
     PartyQuestRuntimeSessionOwner& operator=(const PartyQuestRuntimeSessionOwner&) = delete;
     PartyQuestRuntimeSessionOwner(PartyQuestRuntimeSessionOwner&&) = delete;
     PartyQuestRuntimeSessionOwner& operator=(PartyQuestRuntimeSessionOwner&&) = delete;
+
+    /** Shared process owner used by production runtime/lifecycle integrations. */
+    [[nodiscard]] static PartyQuestRuntimeSessionOwner& GetProcessOwner() noexcept;
 
     [[nodiscard]] PartyQuestRuntimeSessionOwnerBindResult Bind(
         const PartyQuestCampaignId& acCampaignId,
