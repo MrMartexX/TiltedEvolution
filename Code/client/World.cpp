@@ -59,7 +59,7 @@ World::World()
     ctx().emplace<ObjectService>(*this, m_dispatcher, m_transport);
     ctx().emplace<CalendarService>(*this, m_dispatcher, m_transport);
     ctx().emplace<QuestService>(*this, m_dispatcher);
-    ctx().emplace<PartyService>(*this, m_dispatcher);
+    ctx().emplace<PartyService>(*this, m_dispatcher, m_transport);
     ctx().emplace<ActorValueService>(*this, m_dispatcher, m_transport);
     ctx().emplace<InventoryService>(*this, m_dispatcher, m_transport);
     ctx().emplace<MagicService>(*this, m_dispatcher, m_transport);
