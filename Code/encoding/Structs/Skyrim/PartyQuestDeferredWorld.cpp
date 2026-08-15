@@ -1,5 +1,8 @@
 #include <Structs/Skyrim/PartyQuestDeferredWorld.h>
 
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeReferenceReadiness.h>
+
 #include <algorithm>
 
 namespace
@@ -10,27 +13,31 @@ bool GameIdLess(const GameId& acLeft, const GameId& acRight) noexcept
         return acLeft.ModId < acRight.ModId;
     return acLeft.BaseId < acRight.BaseId;
 }
+
+void CanonicalizeTargets(std::vector<GameId>& aTargets)
+{
+    std::sort(aTargets.begin(), aTargets.end(), GameIdLess);
+    aTargets.erase(std::unique(aTargets.begin(), aTargets.end()), aTargets.end());
+}
+
+void ResetRuntimeReadiness(PartyQuestDeferredWorldEntry& aEntry) noexcept
+{
+    aEntry.Ready = false;
+    aEntry.ReadyGeneration = 0;
+}
 } // namespace
 
-std::vector<GameId> PartyQuestDeferredWorldQueue::CollectWorldTargets(
+std::vector<GameId> PartyQuestDeferredWorldQueue::CollectReferenceTargets(
     const QuestSnapshot& acSnapshot)
 {
     std::vector<GameId> targets;
     targets.reserve(
-        acSnapshot.ReferenceAliases.size() +
-        acSnapshot.LocationAliases.size() +
-        acSnapshot.CreatedReferences.size());
+        acSnapshot.ReferenceAliases.size() + acSnapshot.CreatedReferences.size());
 
     for (const QuestReferenceAliasSnapshot& alias : acSnapshot.ReferenceAliases)
     {
         if (alias.ReferenceId)
             targets.push_back(*alias.ReferenceId);
-    }
-
-    for (const QuestLocationAliasSnapshot& alias : acSnapshot.LocationAliases)
-    {
-        if (alias.LocationId)
-            targets.push_back(*alias.LocationId);
     }
 
     for (const GameId& reference : acSnapshot.CreatedReferences)
@@ -39,8 +46,33 @@ std::vector<GameId> PartyQuestDeferredWorldQueue::CollectWorldTargets(
             targets.push_back(reference);
     }
 
-    std::sort(targets.begin(), targets.end(), GameIdLess);
-    targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
+    CanonicalizeTargets(targets);
+    return targets;
+}
+
+std::vector<GameId> PartyQuestDeferredWorldQueue::CollectLocationTargets(
+    const QuestSnapshot& acSnapshot)
+{
+    std::vector<GameId> targets;
+    targets.reserve(acSnapshot.LocationAliases.size());
+
+    for (const QuestLocationAliasSnapshot& alias : acSnapshot.LocationAliases)
+    {
+        if (alias.LocationId)
+            targets.push_back(*alias.LocationId);
+    }
+
+    CanonicalizeTargets(targets);
+    return targets;
+}
+
+std::vector<GameId> PartyQuestDeferredWorldQueue::CollectWorldTargets(
+    const QuestSnapshot& acSnapshot)
+{
+    auto targets = CollectReferenceTargets(acSnapshot);
+    auto locations = CollectLocationTargets(acSnapshot);
+    targets.insert(targets.end(), locations.begin(), locations.end());
+    CanonicalizeTargets(targets);
     return targets;
 }
 
@@ -103,6 +135,8 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
         m_transactionQuests.erase(existingIt->second.Request.TransactionId);
 
         PartyQuestDeferredWorldEntry replacement;
+        replacement.ReferenceTargets = CollectReferenceTargets(aRequest.CanonicalSnapshot);
+        replacement.LocationTargets = CollectLocationTargets(aRequest.CanonicalSnapshot);
         replacement.ReferencedWorldTargets = CollectWorldTargets(aRequest.CanonicalSnapshot);
         replacement.HasSceneDependency = aRequest.CanonicalSnapshot.SceneParticipantPlayerId.has_value();
         replacement.Request = std::move(aRequest);
@@ -118,6 +152,8 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
         return PartyQuestDeferredWorldEnqueueStatus::ResourceLimitExceeded;
 
     PartyQuestDeferredWorldEntry entry;
+    entry.ReferenceTargets = CollectReferenceTargets(aRequest.CanonicalSnapshot);
+    entry.LocationTargets = CollectLocationTargets(aRequest.CanonicalSnapshot);
     entry.ReferencedWorldTargets = CollectWorldTargets(aRequest.CanonicalSnapshot);
     entry.HasSceneDependency = aRequest.CanonicalSnapshot.SceneParticipantPlayerId.has_value();
     entry.Request = std::move(aRequest);
@@ -133,6 +169,12 @@ bool PartyQuestDeferredWorldQueue::MarkReady(
     PartyQuestRuntimeApplyRequest aCurrentRequest,
     uint64_t aCurrentCanonicalQuestRevision) noexcept
 {
+    // This legacy path is diagnostic-only. A future executable adapter must use
+    // the runtime readiness surface so location/scene dependencies and the
+    // generation-bound reference mapping cannot be skipped.
+    if (!aCurrentRequest.Plan.DryRunOnly)
+        return false;
+
     const uint64_t transactionId = aCurrentRequest.TransactionId;
     if (transactionId == 0 || aCurrentCanonicalQuestRevision == 0)
         return false;
@@ -151,9 +193,6 @@ bool PartyQuestDeferredWorldQueue::MarkReady(
     const uint64_t queuedRevision =
         entryIt->second.Request.CanonicalSnapshot.Revision;
 
-    // A newer independent canonical observation irrevocably supersedes this
-    // deferred plan. Do not leave a stale ready candidate behind for a later
-    // cell-load callback to revive.
     if (aCurrentCanonicalQuestRevision > queuedRevision)
     {
         m_transactionQuests.erase(transactionId);
@@ -183,7 +222,232 @@ bool PartyQuestDeferredWorldQueue::MarkReady(
     aCurrentRequest.CanonicalSnapshot.Canonicalize();
     entryIt->second.Request = std::move(aCurrentRequest);
     entryIt->second.Ready = true;
+    entryIt->second.ReadyGeneration = 0;
     return true;
+}
+
+PartyQuestDeferredWorldRuntimeReadinessResult
+PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
+    const PartyQuestDeferredWorldEntry& acEntry,
+    PartyQuestRuntimeGenerationFence& aGenerationFence,
+    const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+    const PartyQuestDeferredWorldRuntimeReadinessSources& acSources) noexcept
+{
+    PartyQuestDeferredWorldRuntimeReadinessResult result;
+
+    if (acEntry.Request.Plan.DryRunOnly ||
+        acEntry.Request.TransactionId == 0 ||
+        acEntry.Request.CanonicalSnapshot.Revision == 0)
+    {
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::NotRuntimePlan;
+        return result;
+    }
+
+    if (!acReferenceReadiness.UsesGenerationFence(aGenerationFence))
+    {
+        result.Status =
+            PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceReadinessDomainMismatch;
+        return result;
+    }
+
+    const uint64_t expectedGeneration = aGenerationFence.GetGeneration();
+    if (expectedGeneration == 0)
+    {
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::RuntimeGenerationChanged;
+        return result;
+    }
+
+    std::vector<uint32_t> localReferenceIds;
+    localReferenceIds.reserve(acEntry.ReferenceTargets.size());
+
+    try
+    {
+        // Resolve mapping and inspect location/scene state while the exact
+        // lifecycle/load-order generation is pinned. ModSystem rebuilds take the
+        // exclusive side of this same fence.
+        auto generationLease = aGenerationFence.TryAcquire(expectedGeneration);
+        if (!generationLease || !generationLease->IsValid())
+        {
+            result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::RuntimeGenerationChanged;
+            return result;
+        }
+
+        if (!acEntry.ReferenceTargets.empty())
+        {
+            if (!acSources.ResolveReferenceFormId)
+            {
+                result.Status =
+                    PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceMappingUnavailable;
+                return result;
+            }
+
+            for (const GameId& target : acEntry.ReferenceTargets)
+            {
+                const uint32_t localFormId = acSources.ResolveReferenceFormId(target);
+                if (localFormId == 0)
+                {
+                    result.Status =
+                        PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceMappingUnavailable;
+                    return result;
+                }
+                localReferenceIds.push_back(localFormId);
+            }
+        }
+
+        if (!acEntry.LocationTargets.empty())
+        {
+            if (!acSources.IsLocationReady)
+            {
+                result.Status =
+                    PartyQuestDeferredWorldRuntimeReadinessStatus::LocationReadinessUnavailable;
+                return result;
+            }
+
+            for (const GameId& location : acEntry.LocationTargets)
+            {
+                if (!acSources.IsLocationReady(location))
+                {
+                    result.Status =
+                        PartyQuestDeferredWorldRuntimeReadinessStatus::LocationNotReady;
+                    return result;
+                }
+            }
+        }
+
+        if (acEntry.Request.CanonicalSnapshot.SceneParticipantPlayerId)
+        {
+            if (!acSources.IsSceneReady)
+            {
+                result.Status =
+                    PartyQuestDeferredWorldRuntimeReadinessStatus::SceneReadinessUnavailable;
+                return result;
+            }
+
+            if (!acSources.IsSceneReady(
+                    *acEntry.Request.CanonicalSnapshot.SceneParticipantPlayerId))
+            {
+                result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::SceneNotReady;
+                return result;
+            }
+        }
+    }
+    catch (...)
+    {
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::ObserverFailure;
+        return result;
+    }
+
+    if (aGenerationFence.GetGeneration() != expectedGeneration)
+    {
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::RuntimeGenerationChanged;
+        return result;
+    }
+
+    if (!localReferenceIds.empty())
+    {
+        if (!acReferenceReadiness.AreLoaded(localReferenceIds, expectedGeneration))
+        {
+            result.Status = aGenerationFence.GetGeneration() == expectedGeneration
+                ? PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceNotReady
+                : PartyQuestDeferredWorldRuntimeReadinessStatus::RuntimeGenerationChanged;
+            return result;
+        }
+    }
+
+    if (aGenerationFence.GetGeneration() != expectedGeneration)
+    {
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::RuntimeGenerationChanged;
+        return result;
+    }
+
+    result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::Ready;
+    result.RuntimeGeneration = expectedGeneration;
+    return result;
+}
+
+PartyQuestDeferredWorldRuntimeReadinessResult
+PartyQuestDeferredWorldQueue::TryMarkRuntimeReady(
+    PartyQuestRuntimeApplyRequest aCurrentRequest,
+    uint64_t aCurrentCanonicalQuestRevision,
+    PartyQuestRuntimeGenerationFence& aGenerationFence,
+    const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+    const PartyQuestDeferredWorldRuntimeReadinessSources& acSources) noexcept
+{
+    PartyQuestDeferredWorldRuntimeReadinessResult result;
+
+    if (aCurrentRequest.Plan.DryRunOnly)
+    {
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::NotRuntimePlan;
+        return result;
+    }
+
+    const uint64_t transactionId = aCurrentRequest.TransactionId;
+    if (transactionId == 0 || aCurrentCanonicalQuestRevision == 0)
+        return result;
+
+    const auto transactionIt = m_transactionQuests.find(transactionId);
+    if (transactionIt == m_transactionQuests.end())
+        return result;
+
+    const auto entryIt = m_entries.find(transactionIt->second);
+    if (entryIt == m_entries.end() ||
+        entryIt->second.Request.TransactionId != transactionId)
+    {
+        return result;
+    }
+
+    const uint64_t queuedRevision =
+        entryIt->second.Request.CanonicalSnapshot.Revision;
+
+    if (aCurrentCanonicalQuestRevision > queuedRevision)
+    {
+        m_transactionQuests.erase(transactionId);
+        m_entries.erase(entryIt);
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::StaleRevision;
+        return result;
+    }
+
+    if (aCurrentCanonicalQuestRevision != queuedRevision ||
+        aCurrentRequest.CanonicalSnapshot.Revision != aCurrentCanonicalQuestRevision)
+    {
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::StaleRevision;
+        return result;
+    }
+
+    const auto currentIdentity =
+        PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aCurrentRequest);
+    const auto fingerprintIt = m_transactionFingerprints.find(transactionId);
+    if (!currentIdentity ||
+        fingerprintIt == m_transactionFingerprints.end() ||
+        fingerprintIt->second != *currentIdentity)
+    {
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::IdentityMismatch;
+        return result;
+    }
+
+    result = EvaluateRuntimeReadiness(
+        entryIt->second,
+        aGenerationFence,
+        acReferenceReadiness,
+        acSources);
+    if (!result.IsReady())
+        return result;
+
+    // Reacquire the exact generation before publishing Ready so a lifecycle
+    // transition cannot cross the final evidence-to-queue boundary.
+    auto finalLease = aGenerationFence.TryAcquire(result.RuntimeGeneration);
+    if (!finalLease || !finalLease->IsValid())
+    {
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::RuntimeGenerationChanged;
+        result.RuntimeGeneration = 0;
+        return result;
+    }
+
+    aCurrentRequest.CanonicalSnapshot.Canonicalize();
+    entryIt->second.Request = std::move(aCurrentRequest);
+    entryIt->second.Ready = true;
+    entryIt->second.ReadyGeneration = result.RuntimeGeneration;
+    return result;
 }
 
 bool PartyQuestDeferredWorldQueue::InvalidateIfOlder(
@@ -207,8 +471,90 @@ std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRea
     std::vector<PartyQuestRuntimeApplyRequest> ready;
     for (auto it = m_entries.begin(); it != m_entries.end();)
     {
-        if (!it->second.Ready)
+        if (!it->second.Ready || !it->second.Request.Plan.DryRunOnly)
         {
+            ++it;
+            continue;
+        }
+
+        m_transactionQuests.erase(it->second.Request.TransactionId);
+        ready.push_back(std::move(it->second.Request));
+        it = m_entries.erase(it);
+    }
+
+    std::sort(ready.begin(), ready.end(), [](const auto& acLeft, const auto& acRight)
+    {
+        if (acLeft.TargetWorldRevision != acRight.TargetWorldRevision)
+            return acLeft.TargetWorldRevision < acRight.TargetWorldRevision;
+        return acLeft.TransactionId < acRight.TransactionId;
+    });
+    return ready;
+}
+
+std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRuntimeReady(
+    PartyQuestRuntimeGenerationFence& aGenerationFence,
+    const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+    const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
+    const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept
+{
+    std::vector<PartyQuestRuntimeApplyRequest> ready;
+    if (!acCanonicalRevisionObserver)
+        return ready;
+
+    for (auto it = m_entries.begin(); it != m_entries.end();)
+    {
+        if (!it->second.Ready || it->second.Request.Plan.DryRunOnly)
+        {
+            ++it;
+            continue;
+        }
+
+        uint64_t currentRevision = 0;
+        try
+        {
+            currentRevision = acCanonicalRevisionObserver(
+                it->second.Request.CanonicalSnapshot.QuestId);
+        }
+        catch (...)
+        {
+            ResetRuntimeReadiness(it->second);
+            ++it;
+            continue;
+        }
+
+        const uint64_t queuedRevision =
+            it->second.Request.CanonicalSnapshot.Revision;
+        if (currentRevision > queuedRevision)
+        {
+            m_transactionQuests.erase(it->second.Request.TransactionId);
+            it = m_entries.erase(it);
+            continue;
+        }
+
+        if (currentRevision == 0 || currentRevision != queuedRevision)
+        {
+            ResetRuntimeReadiness(it->second);
+            ++it;
+            continue;
+        }
+
+        const auto readiness = EvaluateRuntimeReadiness(
+            it->second,
+            aGenerationFence,
+            acReferenceReadiness,
+            acSources);
+        if (!readiness.IsReady() ||
+            readiness.RuntimeGeneration != it->second.ReadyGeneration)
+        {
+            ResetRuntimeReadiness(it->second);
+            ++it;
+            continue;
+        }
+
+        auto finalLease = aGenerationFence.TryAcquire(readiness.RuntimeGeneration);
+        if (!finalLease || !finalLease->IsValid())
+        {
+            ResetRuntimeReadiness(it->second);
             ++it;
             continue;
         }

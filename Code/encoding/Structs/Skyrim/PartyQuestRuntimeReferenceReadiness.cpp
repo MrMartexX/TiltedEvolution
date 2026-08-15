@@ -12,6 +12,12 @@ PartyQuestRuntimeReferenceReadiness::PartyQuestRuntimeReferenceReadiness(
 {
 }
 
+bool PartyQuestRuntimeReferenceReadiness::UsesGenerationFence(
+    const PartyQuestRuntimeGenerationFence& acGenerationFence) const noexcept
+{
+    return &m_generationFence == &acGenerationFence;
+}
+
 void PartyQuestRuntimeReferenceReadiness::ResetLocked(
     uint64_t aGeneration) noexcept
 {
@@ -50,10 +56,6 @@ bool PartyQuestRuntimeReferenceReadiness::Observe(
 
     if (m_loadedReferences.size() >= MaxTrackedReferences)
     {
-        // A partial positive set would be unsafe: callers could not distinguish
-        // "not observed" from "dropped because full". Once capacity is hit,
-        // fail closed for the whole generation and recover only after the next
-        // authoritative generation change.
         m_loadedReferences.clear();
         m_overflowed = true;
         return false;

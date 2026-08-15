@@ -29,6 +29,10 @@ public:
     explicit PartyQuestRuntimeReferenceReadiness(
         PartyQuestRuntimeGenerationFence& aGenerationFence) noexcept;
 
+    /** Exact generation domain used by this evidence tracker. */
+    [[nodiscard]] bool UsesGenerationFence(
+        const PartyQuestRuntimeGenerationFence& acGenerationFence) const noexcept;
+
     /**
      * Record one authoritative local loaded/unloaded observation.
      *
@@ -38,24 +42,14 @@ public:
      */
     [[nodiscard]] bool Observe(uint32_t aFormId, bool aLoaded) noexcept;
 
-    /**
-     * Query readiness for an exact expected runtime generation.
-     *
-     * A positive result retains the generation execution lease for the complete
-     * query, so invalidation cannot interleave between generation validation and
-     * reading the evidence set.
-     */
+    /** Query readiness for an exact expected runtime generation. */
     [[nodiscard]] bool IsLoaded(
         uint32_t aFormId,
         uint64_t aExpectedGeneration) const noexcept;
 
     /**
      * Query a complete set of local references under one generation lease.
-     *
-     * This is intentionally stronger than callers looping over IsLoaded(): a
-     * lifecycle invalidation cannot occur between individual reference checks
-     * and produce a mixed-generation positive result. Empty sets are accepted
-     * only for a valid, non-overflowed observation generation.
+     * A lifecycle invalidation cannot occur between individual reference checks.
      */
     [[nodiscard]] bool AreLoaded(
         const std::vector<uint32_t>& acFormIds,
