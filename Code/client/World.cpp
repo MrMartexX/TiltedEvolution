@@ -27,6 +27,7 @@
 
 #include <ModCompat/BehaviorVar.h>
 #include <PartyQuestP0LiveDiagnostics.h>
+#include <PartyQuestSkyrimReferenceReadiness.h>
 #include <PlayerCharacter.h>
 #include <SaveLoad.h>
 
@@ -42,6 +43,11 @@ World::World()
     // its cross-thread lifecycle ticket.
     InstallPartyQuestLoadGameLifecycleFence();
 
+    // TESObjectLoadedEvent is authoritative only for concrete local reference
+    // load/unload evidence. It is generation-bound and intentionally does not
+    // imply location-alias or scene readiness by itself.
+    InstallPartyQuestSkyrimReferenceReadiness();
+
     ctx().emplace<ImguiService>();
     ctx().emplace<DiscoveryService>(*this, m_dispatcher);
     ctx().emplace<OverlayService>(*this, m_transport, m_dispatcher);
@@ -53,7 +59,7 @@ World::World()
     ctx().emplace<ObjectService>(*this, m_dispatcher, m_transport);
     ctx().emplace<CalendarService>(*this, m_dispatcher, m_transport);
     ctx().emplace<QuestService>(*this, m_dispatcher);
-    ctx().emplace<PartyService>(*this, m_dispatcher, m_transport);
+    ctx().emplace<PartyService>(*this, m_dispatcher);
     ctx().emplace<ActorValueService>(*this, m_dispatcher, m_transport);
     ctx().emplace<InventoryService>(*this, m_dispatcher, m_transport);
     ctx().emplace<MagicService>(*this, m_dispatcher, m_transport);
