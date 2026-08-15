@@ -169,9 +169,6 @@ bool PartyQuestDeferredWorldQueue::MarkReady(
     PartyQuestRuntimeApplyRequest aCurrentRequest,
     uint64_t aCurrentCanonicalQuestRevision) noexcept
 {
-    // This legacy path is diagnostic-only. A future executable adapter must use
-    // the runtime readiness surface so location/scene dependencies and the
-    // generation-bound reference mapping cannot be skipped.
     if (!aCurrentRequest.Plan.DryRunOnly)
         return false;
 
@@ -250,6 +247,26 @@ PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
         return result;
     }
 
+    // No production Skyrim observer with reviewed semantics exists yet for
+    // location-alias or scene readiness. Callback-shaped placeholders are not
+    // authority: accepting a caller-supplied `return true` would turn an
+    // unreviewed heuristic into mutation authorization. Until dedicated
+    // capability-backed observers exist, these dependency classes are
+    // deliberately unsupported and fail closed.
+    if (!acEntry.LocationTargets.empty())
+    {
+        result.Status =
+            PartyQuestDeferredWorldRuntimeReadinessStatus::LocationReadinessUnavailable;
+        return result;
+    }
+
+    if (acEntry.Request.CanonicalSnapshot.SceneParticipantPlayerId)
+    {
+        result.Status =
+            PartyQuestDeferredWorldRuntimeReadinessStatus::SceneReadinessUnavailable;
+        return result;
+    }
+
     const uint64_t expectedGeneration = aGenerationFence.GetGeneration();
     if (expectedGeneration == 0)
     {
@@ -262,9 +279,9 @@ PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
 
     try
     {
-        // Resolve mapping and inspect location/scene state while the exact
-        // lifecycle/load-order generation is pinned. ModSystem rebuilds take the
-        // exclusive side of this same fence.
+        // Resolve the canonical -> local mapping while the exact load-order
+        // generation is pinned. ModSystem rebuilds take the exclusive side of
+        // this same fence.
         auto generationLease = aGenerationFence.TryAcquire(expectedGeneration);
         if (!generationLease || !generationLease->IsValid())
         {
@@ -291,43 +308,6 @@ PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
                     return result;
                 }
                 localReferenceIds.push_back(localFormId);
-            }
-        }
-
-        if (!acEntry.LocationTargets.empty())
-        {
-            if (!acSources.IsLocationReady)
-            {
-                result.Status =
-                    PartyQuestDeferredWorldRuntimeReadinessStatus::LocationReadinessUnavailable;
-                return result;
-            }
-
-            for (const GameId& location : acEntry.LocationTargets)
-            {
-                if (!acSources.IsLocationReady(location))
-                {
-                    result.Status =
-                        PartyQuestDeferredWorldRuntimeReadinessStatus::LocationNotReady;
-                    return result;
-                }
-            }
-        }
-
-        if (acEntry.Request.CanonicalSnapshot.SceneParticipantPlayerId)
-        {
-            if (!acSources.IsSceneReady)
-            {
-                result.Status =
-                    PartyQuestDeferredWorldRuntimeReadinessStatus::SceneReadinessUnavailable;
-                return result;
-            }
-
-            if (!acSources.IsSceneReady(
-                    *acEntry.Request.CanonicalSnapshot.SceneParticipantPlayerId))
-            {
-                result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::SceneNotReady;
-                return result;
             }
         }
     }
@@ -433,8 +413,6 @@ PartyQuestDeferredWorldQueue::TryMarkRuntimeReady(
     if (!result.IsReady())
         return result;
 
-    // Reacquire the exact generation before publishing Ready so a lifecycle
-    // transition cannot cross the final evidence-to-queue boundary.
     auto finalLease = aGenerationFence.TryAcquire(result.RuntimeGeneration);
     if (!finalLease || !finalLease->IsValid())
     {

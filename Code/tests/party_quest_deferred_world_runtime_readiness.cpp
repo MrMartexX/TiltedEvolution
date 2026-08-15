@@ -66,7 +66,7 @@ PartyQuestDeferredWorldRuntimeReadinessSources BuildReferenceSources()
 }
 } // namespace
 
-TEST_CASE("Runtime deferred readiness separates references from location evidence", "[quest.party-state.deferred-world][runtime-readiness]")
+TEST_CASE("Runtime deferred readiness separates references from unsupported location evidence", "[quest.party-state.deferred-world][runtime-readiness]")
 {
     PartyQuestRuntimeGenerationFence fence;
     PartyQuestRuntimeReferenceReadiness readiness(fence);
@@ -80,7 +80,6 @@ TEST_CASE("Runtime deferred readiness separates references from location evidenc
     REQUIRE(entry->LocationTargets == std::vector<GameId>{GameId(0, 0x5101)});
     REQUIRE(entry->ReferencedWorldTargets.size() == 2);
 
-    // The diagnostic bypass is closed for side-effecting plans.
     REQUIRE_FALSE(queue.MarkReady(request, request.CanonicalSnapshot.Revision));
     REQUIRE(queue.TakeReady().empty());
 
@@ -96,6 +95,9 @@ TEST_CASE("Runtime deferred readiness separates references from location evidenc
         PartyQuestDeferredWorldRuntimeReadinessStatus::LocationReadinessUnavailable);
     REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
 
+    // A caller-supplied callback is deliberately not authority. This remains
+    // fail-closed until a dedicated capability-backed Skyrim location observer
+    // is reviewed and wired.
     sources.IsLocationReady = [](const GameId&) { return true; };
     result = queue.TryMarkRuntimeReady(
         request,
@@ -103,20 +105,17 @@ TEST_CASE("Runtime deferred readiness separates references from location evidenc
         fence,
         readiness,
         sources);
-    REQUIRE(result.IsReady());
-    REQUIRE(queue.FindByTransaction(request.TransactionId)->ReadyGeneration ==
-        fence.GetGeneration());
-
-    const auto ready = queue.TakeRuntimeReady(
-        fence,
-        readiness,
-        sources,
-        [revision = request.CanonicalSnapshot.Revision](const GameId&)
-        {
-            return revision;
-        });
-    REQUIRE(ready.size() == 1);
-    REQUIRE(ready[0].TransactionId == request.TransactionId);
+    REQUIRE(result.Status ==
+        PartyQuestDeferredWorldRuntimeReadinessStatus::LocationReadinessUnavailable);
+    REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
+    REQUIRE(queue.TakeRuntimeReady(
+                fence,
+                readiness,
+                sources,
+                [revision = request.CanonicalSnapshot.Revision](const GameId&)
+                {
+                    return revision;
+                }).empty());
 }
 
 TEST_CASE("Runtime deferred reference readiness requires exact mapping and loaded evidence", "[quest.party-state.deferred-world][runtime-readiness]")
@@ -148,7 +147,7 @@ TEST_CASE("Runtime deferred reference readiness requires exact mapping and loade
     REQUIRE(result.IsReady());
 }
 
-TEST_CASE("Runtime deferred scene dependency fails closed without its own observer", "[quest.party-state.deferred-world][runtime-readiness]")
+TEST_CASE("Runtime deferred scene dependency cannot be authorized by a callback placeholder", "[quest.party-state.deferred-world][runtime-readiness]")
 {
     PartyQuestRuntimeGenerationFence fence;
     PartyQuestRuntimeReferenceReadiness readiness(fence);
@@ -162,13 +161,11 @@ TEST_CASE("Runtime deferred scene dependency fails closed without its own observ
     REQUIRE(result.Status ==
         PartyQuestDeferredWorldRuntimeReadinessStatus::SceneReadinessUnavailable);
 
-    sources.IsSceneReady = [](uint32_t) { return false; };
+    sources.IsSceneReady = [](uint32_t) { return true; };
     result = queue.TryMarkRuntimeReady(request, 6, fence, readiness, sources);
-    REQUIRE(result.Status == PartyQuestDeferredWorldRuntimeReadinessStatus::SceneNotReady);
-
-    sources.IsSceneReady = [](uint32_t playerId) { return playerId == 77; };
-    result = queue.TryMarkRuntimeReady(request, 6, fence, readiness, sources);
-    REQUIRE(result.IsReady());
+    REQUIRE(result.Status ==
+        PartyQuestDeferredWorldRuntimeReadinessStatus::SceneReadinessUnavailable);
+    REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
 }
 
 TEST_CASE("Runtime deferred readiness cannot mix generation domains", "[quest.party-state.deferred-world][runtime-readiness][lifecycle]")

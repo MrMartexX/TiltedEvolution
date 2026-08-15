@@ -74,9 +74,6 @@ bool PartyQuestSkyrimStageMutationExecutor::Execute(
     if (!pQuest || pQuest->formID != formId)
         return false;
 
-    // Re-resolve the local form back through the current load-order map. The
-    // surrounding process generation execution lease prevents HandleMods() from
-    // rebuilding that map until this callback returns.
     GameId roundTripId;
     if (!aModSystem.GetServerModId(pQuest->formID, roundTripId) ||
         roundTripId != acRequest.CanonicalSnapshot.QuestId)
@@ -96,13 +93,17 @@ bool PartyQuestSkyrimStageMutationExecutor::Execute(
     if (!ContainsStage(*pQuest, targetStage))
         return false;
 
-    // This first executor is forward-only. Rollback/reset/start/stop semantics
-    // require a separately reviewed adapter and are deliberately rejected.
     if (targetStage < pQuest->currentStage)
         return false;
 
+    // P0 safety boundary: the adapter may prove that a request is structurally
+    // eligible, but it must not execute canonical Skyrim mutation yet. Keep the
+    // native SetStage call physically absent until P0-A..H are closed on one
+    // final GREEN SHA and the mutation milestone explicitly re-enables it with
+    // its own live proof. Returning true for the already-equal stage is safe and
+    // idempotent because no mutation occurs.
     if (targetStage == pQuest->currentStage)
         return true;
 
-    return pQuest->SetStage(targetStage);
+    return false;
 }
