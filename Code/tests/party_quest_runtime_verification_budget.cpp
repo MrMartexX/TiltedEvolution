@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeVerificationGate.h>
 
