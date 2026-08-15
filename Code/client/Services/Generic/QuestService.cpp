@@ -19,6 +19,7 @@
 #include <Messages/RequestQuestUpdate.h>
 #include <Messages/NotifyQuestUpdate.h>
 #include <Messages/PartyQuestMessages.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 static TESQuest* FindQuestByNameId(const String& name)
 {
@@ -383,6 +384,57 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
 {
     if (!m_partyQuestSession || !m_world.GetPartyService().IsInParty())
         return;
+
+    const PartyQuestCampaignId currentCampaign = m_partyQuestSession->GetCampaignId();
+    const bool switchingCampaign =
+        currentCampaign.IsValid() &&
+        acPlan.IsValid &&
+        acPlan.CampaignId.IsValid() &&
+        acPlan.ReportId != 0 &&
+        acPlan.PlanId != 0 &&
+        currentCampaign != acPlan.CampaignId;
+
+    if (switchingCampaign)
+    {
+        // A malformed/rejected candidate must not itself trigger a lifecycle
+        // transition. New-campaign repair semantics start from an empty replica,
+        // so validate the exact candidate shape before touching runtime ownership.
+        PartyQuestReplica candidateReplica;
+        const PartyQuestReplicaApplyStatus candidateStatus =
+            candidateReplica.Apply(acPlan.Plan);
+        const bool candidateAccepted =
+            candidateStatus == PartyQuestReplicaApplyStatus::Applied ||
+            candidateStatus == PartyQuestReplicaApplyStatus::NoChanges;
+
+        if (candidateAccepted)
+        {
+            auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+            const auto lifecycle = runtimeOwner.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
+            if (!lifecycle.CanProceed())
+            {
+                // No wire status currently represents a local durable-recovery
+                // barrier. Fail closed by withholding the ACK and retaining the
+                // old published campaign; a later server retry can succeed only
+                // after exact recovery makes the lifecycle transition safe.
+                m_partyQuestProtocolVerified = false;
+                m_partyQuestSubmissions.RequeueInFlight();
+                m_requestTransactions.clear();
+                spdlog::error(
+                    "PartyQuestProtocol blocked campaign switch by runtime lifecycle fence: oldCampaign={:016X}{:016X} newCampaign={:016X}{:016X} report={} plan={} status={} transaction={} guardHeld={}",
+                    currentCampaign.High,
+                    currentCampaign.Low,
+                    acPlan.CampaignId.High,
+                    acPlan.CampaignId.Low,
+                    acPlan.ReportId,
+                    acPlan.PlanId,
+                    static_cast<unsigned>(lifecycle.Status),
+                    lifecycle.TransactionId,
+                    lifecycle.GuardHeld);
+                return;
+            }
+        }
+    }
 
     const PartyQuestClientRepairResult result = m_partyQuestSession->HandleRepairPlan(acPlan);
     if (result.CampaignChanged)
