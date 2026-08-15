@@ -11,6 +11,7 @@ enum class PartyQuestRuntimeLifecycleEvent : uint8_t
     MainMenu,
     ProfileSwitch,
     CampaignSwitch,
+    PartyLeave,
     Disconnect,
     Shutdown
 };
@@ -46,8 +47,8 @@ struct PartyQuestRuntimeLifecycleFenceResult
  * Game-independent lifecycle fence for a guarded runtime repair.
  *
  * The future Skyrim integration must call Prepare() before Load Game, New Game,
- * Main Menu, profile/campaign switch, disconnect and orderly shutdown. This
- * policy does not itself hook those engine events.
+ * Main Menu, profile/campaign switch, party leave, disconnect and orderly
+ * shutdown. This policy does not itself hook those engine/network events.
  *
  * Pre-mutation work is durably aborted before the lifecycle transition may
  * proceed. Once RuntimeMutationMayHaveOccurred is set, the transition is denied

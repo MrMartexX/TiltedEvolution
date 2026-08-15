@@ -17,12 +17,13 @@ const PartyQuestPlayerProfileId kLifecyclePlayer{
     0x3132333435363738ull,
     0x4142434445464748ull};
 
-constexpr std::array<PartyQuestRuntimeLifecycleEvent, 7> kLifecycleEvents{
+constexpr std::array<PartyQuestRuntimeLifecycleEvent, 8> kLifecycleEvents{
     PartyQuestRuntimeLifecycleEvent::LoadGame,
     PartyQuestRuntimeLifecycleEvent::NewGame,
     PartyQuestRuntimeLifecycleEvent::MainMenu,
     PartyQuestRuntimeLifecycleEvent::ProfileSwitch,
     PartyQuestRuntimeLifecycleEvent::CampaignSwitch,
+    PartyQuestRuntimeLifecycleEvent::PartyLeave,
     PartyQuestRuntimeLifecycleEvent::Disconnect,
     PartyQuestRuntimeLifecycleEvent::Shutdown};
 
