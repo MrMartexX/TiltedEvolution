@@ -22,6 +22,7 @@
 #include <PartyQuestSkyrimRuntimeThread.h>
 #include <ScriptExtender.h>
 #include <NvidiaUtil.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 using TiltedPhoques::Debug;
 
@@ -74,6 +75,32 @@ bool TiltedOnlineApp::BeginMain()
 
 bool TiltedOnlineApp::EndMain()
 {
+    // EndMain is the explicit orderly teardown boundary. Fence the persisted
+    // runtime owner before hooks/resources disappear so pre-mutation work is
+    // durably aborted and post-mutation/recovery-blocked evidence is retained
+    // for exact restart recovery rather than being mistaken for a clean exit.
+    auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto lifecycle = runtimeOwner.PrepareAndRelease(
+        PartyQuestRuntimeLifecycleEvent::Shutdown);
+    if (!lifecycle.CanProceed())
+    {
+        // Process shutdown itself is not reversible. Do not fabricate a local
+        // restore here; leave the durable journal/workspace evidence intact so
+        // the next process can reconcile through the normal recovery path.
+        spdlog::error(
+            "PartyQuest orderly shutdown retained runtime recovery state: status={} transaction={} guardHeld={}",
+            static_cast<uint32_t>(lifecycle.Status),
+            lifecycle.TransactionId,
+            lifecycle.GuardHeld);
+    }
+    else if (lifecycle.Status ==
+             PartyQuestRuntimeLifecycleFenceStatus::SafeAbortApplied)
+    {
+        spdlog::info(
+            "PartyQuest orderly shutdown durably aborted pre-mutation runtime work: transaction={}",
+            lifecycle.TransactionId);
+    }
+
     UninstallHooks();
     if (m_pDevice)
         m_pDevice->Release();
