@@ -55,10 +55,11 @@ struct PartyQuestRuntimeMutationDispatchResult
  * cannot silently cross the observation-to-dispatch boundary.
  *
  * The production entrypoint additionally requires the exact guarded session
- * owned by PartyQuestRuntimeSessionOwner::GetProcessOwner(). This prevents an
- * otherwise valid private/test session from becoming a parallel mutation
- * authority outside the lifecycle owner that receives LoadGame, disconnect,
- * campaign-switch and shutdown fencing.
+ * owned by PartyQuestRuntimeSessionOwner::GetProcessOwner(). Any call through
+ * the explicit-fence seam that touches either the shared process generation
+ * fence or the shared process SaveGuard is subject to the same rule and must use
+ * both process resources together. This prevents a private/test session from
+ * mixing one process-global authority with an unrelated lifecycle domain.
  *
  * The generation is deliberately process-local and is never durable authority.
  * No reusable dispatch token escapes this call.
@@ -84,9 +85,10 @@ public:
         const MutationExecutor& acExecutor);
 
     /**
-     * Explicit-fence seam for deterministic unit tests. Production integration
-     * must use the overload above: this seam deliberately does not consult the
-     * process owner because local test sessions are not production authority.
+     * Explicit-fence seam for deterministic unit tests. A fully local SaveGuard
+     * plus local generation fence may use this overload without a process owner.
+     * If either supplied component is the shared process resource, both process
+     * resources and the exact process-owned guarded session are mandatory.
      */
     [[nodiscard]] static PartyQuestRuntimeMutationDispatchResult Dispatch(
         PartyQuestRuntimeGuardedSession& aGuardedSession,

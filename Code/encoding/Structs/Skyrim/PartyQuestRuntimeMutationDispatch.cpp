@@ -74,6 +74,30 @@ bool GenerationChanged(
     return aExpectedGeneration == 0 ||
         acGenerationFence.GetGeneration() != aExpectedGeneration;
 }
+
+bool HasValidProcessOwnership(
+    PartyQuestRuntimeGuardedSession& aGuardedSession,
+    PartyQuestRuntimeGenerationFence& aGenerationFence) noexcept
+{
+    auto& processFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    const bool usesProcessFence = &aGenerationFence == &processFence;
+    const bool usesProcessGuard = &aGuardedSession.GetSaveGuard() == &processGuard;
+
+    // A fully local guard/fence pair is the deterministic unit-test seam.
+    if (!usesProcessFence && !usesProcessGuard)
+        return true;
+
+    // The process fence and process SaveGuard form one lifecycle domain. Mixing
+    // either with a private session or unrelated generation domain would let the
+    // lifecycle owner fence a different object than the one reaching dispatch.
+    if (!usesProcessFence || !usesProcessGuard)
+        return false;
+
+    auto& processOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    return processOwner.IsBound() &&
+        processOwner.GetGuardedSession() == &aGuardedSession;
+}
 } // namespace
 
 PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::Dispatch(
@@ -117,6 +141,12 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
 {
     PartyQuestRuntimeMutationDispatchResult result;
     result.ArmResult.TransactionId = acCurrentRequest.TransactionId;
+
+    if (!HasValidProcessOwnership(aGuardedSession, aGenerationFence))
+    {
+        result.Status = PartyQuestRuntimeMutationDispatchStatus::ProcessOwnerMismatch;
+        return result;
+    }
 
     if (!acObserver || !acExecutor)
     {
