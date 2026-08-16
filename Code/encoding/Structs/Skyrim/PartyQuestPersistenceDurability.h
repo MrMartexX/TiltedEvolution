@@ -16,6 +16,11 @@ enum class PartyQuestPersistenceGuarantee : uint8_t
  * accepted as process-crash resilience for PoC runtime mutation barriers. It
  * does not issue OS/file/device and parent-directory durable flushes, so it
  * must never be advertised as power-loss durable.
+ *
+ * Terminology rule: legacy identifiers/comments that use "durable" describe
+ * persisted transaction/recovery ordering only within CurrentLocalGuarantee
+ * unless they explicitly require PowerLossDurable. Such naming is not evidence
+ * that bytes reached stable storage across sudden power loss.
  */
 struct PartyQuestPersistenceDurabilityPolicy
 {
@@ -37,5 +42,10 @@ struct PartyQuestPersistenceDurabilityPolicy
         PartyQuestPersistenceGuarantee aProvided) noexcept
     {
         return Meets(aProvided, MinimumProductionRuntimeMutationGuarantee);
+    }
+
+    [[nodiscard]] static constexpr bool AllowsNativeRuntimeMutation() noexcept
+    {
+        return IsProductionRuntimeMutationReady(CurrentLocalGuarantee);
     }
 };

@@ -41,11 +41,14 @@ struct PartyQuestReplicaSnapshotResult
 /**
  * High-level transaction boundary for filesystem-only co-op snapshots.
  *
- * A multi-file copy is not considered usable until its durable manifest is
- * present and the final bytes verify against it. If a prior process copied the
- * complete file set but died before writing the manifest, the manager may adopt
- * those exact verified bytes and finish the manifest instead of overwriting
- * them. Partial or conflicting destinations fail closed.
+ * A multi-file copy is not considered usable until its process-crash-persistent
+ * completion manifest is present and the final bytes verify against it. The
+ * publication guarantee is PartyQuestPersistenceDurabilityPolicy's
+ * CurrentLocalGuarantee; manifest completion alone is not proof of power-loss
+ * stable storage. If a prior process copied the complete file set but died
+ * before writing the manifest, the manager may adopt those exact verified bytes
+ * and finish the manifest instead of overwriting them. Partial or conflicting
+ * destinations fail closed.
  *
  * Revision-scoped publication is additionally serialized by the exact
  * campaign/player kernel-backed workspace lease. Standalone callers acquire

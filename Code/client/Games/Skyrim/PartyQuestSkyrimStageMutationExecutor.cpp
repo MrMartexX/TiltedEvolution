@@ -3,6 +3,8 @@
 #include <PartyQuestSkyrimStageMutationExecutor.h>
 #include <PartyQuestSkyrimRuntimeThread.h>
 
+#include <Structs/Skyrim/PartyQuestPersistenceDurability.h>
+
 #include <Forms/TESQuest.h>
 #include <Services/QuestSnapshotCollector.h>
 #include <Systems/ModSystem.h>
@@ -96,14 +98,22 @@ bool PartyQuestSkyrimStageMutationExecutor::Execute(
     if (targetStage < pQuest->currentStage)
         return false;
 
+    // Returning true for the already-equal stage is safe and idempotent because
+    // no native mutation or persistent side effect occurs.
+    if (targetStage == pQuest->currentStage)
+        return true;
+
+    // INV-DURABILITY-001: a future native SetStage side effect may not execute
+    // merely because process-crash persistence succeeded. Production mutation
+    // remains physically fenced until file/device and parent-directory stable
+    // storage semantics raise CurrentLocalGuarantee to PowerLossDurable.
+    if (!PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation())
+        return false;
+
     // P0 safety boundary: the adapter may prove that a request is structurally
     // eligible, but it must not execute canonical Skyrim mutation yet. Keep the
     // native SetStage call physically absent until P0-A..H are closed on one
     // final GREEN SHA and the mutation milestone explicitly re-enables it with
-    // its own live proof. Returning true for the already-equal stage is safe and
-    // idempotent because no mutation occurs.
-    if (targetStage == pQuest->currentStage)
-        return true;
-
+    // its own live proof.
     return false;
 }
