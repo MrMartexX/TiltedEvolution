@@ -2,6 +2,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 #include <party_quest_runtime_safety_test_access.h>
+#include <party_quest_runtime_session_owner_test_access.h>
 
 #include <catch2/catch.hpp>
 
@@ -342,8 +343,6 @@ TEST_CASE("Workspace lease subprocess crash helper", "[.][quest.party-state.runt
             root / "lease-crash",
             std::chrono::seconds(15)))
     {
-        // Deliberately bypass all C++ destructors. The operating system must
-        // release the native lease when this process terminates.
         std::_Exit(97);
     }
     FAIL("Workspace lease crash helper timed out");
@@ -629,33 +628,35 @@ TEST_CASE("Runtime session owner reconstructs process guard for durable recovery
                 paths.RuntimeApplySidecar,
                 state) == PartyQuestRuntimeApplyPersistenceStatus::Success);
 
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
     REQUIRE_FALSE(processGuard.IsActive());
-    {
-        PartyQuestRuntimeSessionOwner owner;
-        const auto bound = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
-        REQUIRE(bound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
-        REQUIRE(bound.Store.Status ==
-            PartyQuestRuntimeSessionStoreStatus::RecoveryRequired);
-        REQUIRE(bound.RecoveryRequired());
-        REQUIRE(bound.GuardHeld);
-        REQUIRE(owner.IsBound());
-        REQUIRE(owner.IsRecoveryBlocked());
-        REQUIRE(processGuard.GetTransactionId() == transactionId);
 
-        const auto blocked = owner.PrepareAndRelease(
-            PartyQuestRuntimeLifecycleEvent::Shutdown);
-        REQUIRE(blocked.Status ==
-            PartyQuestRuntimeLifecycleFenceStatus::RecoveryBlocked);
-        REQUIRE_FALSE(blocked.CanProceed());
-        REQUIRE(blocked.GuardHeld);
-        REQUIRE(owner.IsBound());
-        REQUIRE(owner.IsRecoveryBlocked());
-    }
+    const auto bound = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(bound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(bound.Store.Status ==
+        PartyQuestRuntimeSessionStoreStatus::RecoveryRequired);
+    REQUIRE(bound.RecoveryRequired());
+    REQUIRE(bound.GuardHeld);
+    REQUIRE(owner.IsBound());
+    REQUIRE(owner.IsRecoveryBlocked());
+    REQUIRE(processGuard.GetTransactionId() == transactionId);
+
+    const auto blocked = owner.PrepareAndRelease(
+        PartyQuestRuntimeLifecycleEvent::Shutdown);
+    REQUIRE(blocked.Status ==
+        PartyQuestRuntimeLifecycleFenceStatus::RecoveryBlocked);
+    REQUIRE_FALSE(blocked.CanProceed());
+    REQUIRE(blocked.GuardHeld);
+    REQUIRE(owner.IsBound());
+    REQUIRE(owner.IsRecoveryBlocked());
 
     // Test cleanup only: production must resolve the exact checkpoint instead of
     // releasing this guard directly.
     REQUIRE(processGuard.Release(transactionId));
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    REQUIRE_FALSE(owner.IsBound());
 }
 
 TEST_CASE("Runtime session owner forbids silent identity or root rebinding", "[quest.party-state.runtime-owner][identity]")
@@ -691,10 +692,12 @@ TEST_CASE("Runtime session owner releases pre-mutation work only through lifecyc
 {
     OwnerSandbox sandbox;
     const auto paths = BuildOwnerPaths(sandbox.Root);
+
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
     REQUIRE_FALSE(processGuard.IsActive());
 
-    PartyQuestRuntimeSessionOwner owner;
     REQUIRE(owner.Bind(kOwnerCampaign, kOwnerPlayer, paths).Status ==
         PartyQuestRuntimeSessionOwnerBindStatus::Bound);
     auto* guarded = owner.GetGuardedSession();
