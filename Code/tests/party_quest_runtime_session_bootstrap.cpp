@@ -1,0 +1,251 @@
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionBootstrap.h>
+
+#include <party_quest_runtime_session_owner_test_access.h>
+
+#include <catch2/catch.hpp>
+
+#include <chrono>
+#include <filesystem>
+#include <type_traits>
+
+class PartyQuestPlayerProfileLineageTestAccess final
+{
+public:
+    static PartyQuestPlayerProfileLineageAuthorization Issue(
+        PartyQuestPlayerProfileId aProfileId,
+        uint64_t aRuntimeGeneration,
+        bool aExactCharacterLineage = true,
+        bool aPersistedWithCharacterLineage = true,
+        bool aFilenameIndependent = true) noexcept
+    {
+        return PartyQuestPlayerProfileLineageAuthorization(
+            aProfileId,
+            aRuntimeGeneration,
+            aExactCharacterLineage,
+            aPersistedWithCharacterLineage,
+            aFilenameIndependent);
+    }
+};
+
+namespace
+{
+const PartyQuestCampaignId kBootstrapCampaign{
+    0xA101A102A103A104ull,
+    0xA105A106A107A108ull};
+const PartyQuestPlayerProfileId kBootstrapProfile{
+    0xB101B102B103B104ull,
+    0xB105B106B107B108ull};
+
+struct BootstrapSandbox
+{
+    std::filesystem::path Root;
+    std::filesystem::path CoopRoot;
+
+    BootstrapSandbox()
+    {
+        const auto nonce =
+            std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        Root = std::filesystem::temp_directory_path() /
+            ("tp_party_quest_runtime_bootstrap_" + std::to_string(nonce));
+        CoopRoot = Root / "CoopCampaigns";
+        std::error_code ec;
+        std::filesystem::remove_all(Root, ec);
+        ec.clear();
+        std::filesystem::create_directories(Root, ec);
+        REQUIRE_FALSE(ec);
+        REQUIRE(CoopRoot.is_absolute());
+    }
+
+    ~BootstrapSandbox()
+    {
+        PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+        std::error_code ec;
+        std::filesystem::remove_all(Root, ec);
+    }
+};
+
+PartyQuestPlayerProfileLineageAuthorization IssueForCurrentGeneration(
+    bool aExactCharacterLineage = true,
+    bool aPersistedWithCharacterLineage = true,
+    bool aFilenameIndependent = true)
+{
+    const uint64_t generation =
+        PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
+    return PartyQuestPlayerProfileLineageTestAccess::Issue(
+        kBootstrapProfile,
+        generation,
+        aExactCharacterLineage,
+        aPersistedWithCharacterLineage,
+        aFilenameIndependent);
+}
+} // namespace
+
+TEST_CASE(
+    "Runtime bootstrap requires unforgeable character-lineage profile authority",
+    "[quest.party-state.runtime-bootstrap][identity]")
+{
+    static_assert(std::is_default_constructible_v<
+        PartyQuestPlayerProfileLineageAuthorization>);
+
+    BootstrapSandbox sandbox;
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    REQUIRE_FALSE(owner.IsBound());
+
+    const PartyQuestPlayerProfileLineageAuthorization unverified;
+    REQUIRE_FALSE(unverified.IsVerified());
+    const auto rejected = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
+        sandbox.CoopRoot,
+        kBootstrapCampaign,
+        unverified);
+    REQUIRE(rejected.Status ==
+        PartyQuestRuntimeSessionBootstrapStatus::UnverifiedPlayerProfile);
+    REQUIRE_FALSE(rejected.IsBound());
+    REQUIRE_FALSE(owner.IsBound());
+
+    const auto filenameDerivedClaim = IssueForCurrentGeneration(
+        true,
+        true,
+        false);
+    REQUIRE_FALSE(filenameDerivedClaim.IsVerified());
+    const auto filenameRejected =
+        PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
+            sandbox.CoopRoot,
+            kBootstrapCampaign,
+            filenameDerivedClaim);
+    REQUIRE(filenameRejected.Status ==
+        PartyQuestRuntimeSessionBootstrapStatus::UnverifiedPlayerProfile);
+    REQUIRE_FALSE(owner.IsBound());
+}
+
+TEST_CASE(
+    "Runtime bootstrap binds exact profile layout under the current generation lease",
+    "[quest.party-state.runtime-bootstrap][identity][generation]")
+{
+    BootstrapSandbox sandbox;
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    REQUIRE_FALSE(owner.IsBound());
+
+    const auto authorization = IssueForCurrentGeneration();
+    REQUIRE(authorization.IsVerified());
+
+    const auto bound = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
+        sandbox.CoopRoot,
+        kBootstrapCampaign,
+        authorization);
+    REQUIRE(bound.Status == PartyQuestRuntimeSessionBootstrapStatus::Bound);
+    REQUIRE(bound.IsBound());
+    REQUIRE(bound.Owner.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(owner.IsBound());
+    REQUIRE(owner.GetRuntimeSession() != nullptr);
+    REQUIRE(owner.GetRuntimeSession()->GetCampaignId() == kBootstrapCampaign);
+    REQUIRE(owner.GetRuntimeSession()->GetPlayerProfileId() == kBootstrapProfile);
+
+    const auto expectedPaths = PartyQuestCoopSaveLayout::Build(
+        sandbox.CoopRoot,
+        kBootstrapCampaign,
+        kBootstrapProfile);
+    REQUIRE(expectedPaths.has_value());
+    REQUIRE(owner.GetPaths() != nullptr);
+    REQUIRE(*owner.GetPaths() == *expectedPaths);
+
+    const auto duplicate = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
+        sandbox.CoopRoot,
+        kBootstrapCampaign,
+        authorization);
+    REQUIRE(duplicate.Status == PartyQuestRuntimeSessionBootstrapStatus::Bound);
+    REQUIRE(duplicate.Owner.Status ==
+        PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound);
+    REQUIRE(duplicate.IsBound());
+
+    REQUIRE(owner.PrepareAndRelease(
+        PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
+    REQUIRE_FALSE(owner.IsBound());
+}
+
+TEST_CASE(
+    "Runtime bootstrap rejects stale profile authority after generation invalidation",
+    "[quest.party-state.runtime-bootstrap][generation][lifecycle]")
+{
+    BootstrapSandbox sandbox;
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+
+    const auto staleAuthorization = IssueForCurrentGeneration();
+    const uint64_t authorizedGeneration =
+        staleAuthorization.GetRuntimeGeneration();
+    const uint64_t currentGeneration = fence.Invalidate();
+    REQUIRE(currentGeneration != authorizedGeneration);
+
+    const auto rejected = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
+        sandbox.CoopRoot,
+        kBootstrapCampaign,
+        staleAuthorization);
+    REQUIRE(rejected.Status ==
+        PartyQuestRuntimeSessionBootstrapStatus::RuntimeGenerationUnavailable);
+    REQUIRE_FALSE(rejected.IsBound());
+    REQUIRE_FALSE(owner.IsBound());
+}
+
+TEST_CASE(
+    "Runtime bootstrap cannot cross a pending lifecycle transition",
+    "[quest.party-state.runtime-bootstrap][generation][lifecycle]")
+{
+    BootstrapSandbox sandbox;
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    REQUIRE_FALSE(fence.IsLifecycleTransitionPending());
+
+    const auto ticket = fence.BeginLifecycleTransition();
+    REQUIRE(ticket.IsValid());
+    REQUIRE(fence.IsLifecycleTransitionPending());
+
+    const auto authorization = PartyQuestPlayerProfileLineageTestAccess::Issue(
+        kBootstrapProfile,
+        ticket.Generation);
+    REQUIRE(authorization.IsVerified());
+
+    const auto rejected = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
+        sandbox.CoopRoot,
+        kBootstrapCampaign,
+        authorization);
+    REQUIRE(rejected.Status ==
+        PartyQuestRuntimeSessionBootstrapStatus::RuntimeGenerationUnavailable);
+    REQUIRE_FALSE(rejected.IsBound());
+    REQUIRE_FALSE(owner.IsBound());
+
+    REQUIRE(fence.CompleteLifecycleTransition(ticket));
+    REQUIRE_FALSE(fence.IsLifecycleTransitionPending());
+}
+
+TEST_CASE(
+    "Runtime bootstrap rejects invalid campaign and non-absolute replica root before binding",
+    "[quest.party-state.runtime-bootstrap][identity][confinement]")
+{
+    BootstrapSandbox sandbox;
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto authorization = IssueForCurrentGeneration();
+
+    const auto invalidCampaign =
+        PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
+            sandbox.CoopRoot,
+            {},
+            authorization);
+    REQUIRE(invalidCampaign.Status ==
+        PartyQuestRuntimeSessionBootstrapStatus::InvalidCampaign);
+    REQUIRE_FALSE(owner.IsBound());
+
+    const auto relativeRoot =
+        PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
+            std::filesystem::path("CoopCampaigns"),
+            kBootstrapCampaign,
+            authorization);
+    REQUIRE(relativeRoot.Status ==
+        PartyQuestRuntimeSessionBootstrapStatus::InvalidReplicaRoot);
+    REQUIRE_FALSE(owner.IsBound());
+}
