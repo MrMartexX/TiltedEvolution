@@ -532,9 +532,12 @@ void QuestService::OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUp
                 candidate.CanonicalSnapshot = acUpdate.CanonicalSnapshot;
 
                 const auto observeStatus =
-                    m_partyQuestRuntimeCanonicalInbox.Observe(std::move(candidate));
+                    m_partyQuestRuntimeCanonicalInbox.Observe(
+                        std::move(candidate),
+                        m_partyQuestSession->GetReplica());
                 if (observeStatus == PartyQuestRuntimeCanonicalObserveStatus::TransactionConflict ||
                     observeStatus == PartyQuestRuntimeCanonicalObserveStatus::CampaignMismatch ||
+                    observeStatus == PartyQuestRuntimeCanonicalObserveStatus::ReplicaHeadMismatch ||
                     observeStatus == PartyQuestRuntimeCanonicalObserveStatus::InvalidInput ||
                     observeStatus == PartyQuestRuntimeCanonicalObserveStatus::ResourceLimitExceeded)
                 {

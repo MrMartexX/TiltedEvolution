@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <unordered_map>
 
+class PartyQuestReplica;
+
 enum class PartyQuestRuntimeCanonicalObserveStatus : uint8_t
 {
     Accepted,
@@ -15,6 +17,7 @@ enum class PartyQuestRuntimeCanonicalObserveStatus : uint8_t
     Stale,
     TransactionConflict,
     CampaignMismatch,
+    ReplicaHeadMismatch,
     InvalidInput,
     ResourceLimitExceeded
 };
@@ -53,8 +56,15 @@ public:
     /** Clears candidates and transaction history and removes campaign binding. */
     void Reset() noexcept;
 
+    /**
+     * Observes exact server provenance only while it is still the published
+     * canonical replica head for that quest/world revision. The replica check
+     * prevents an old exact protocol Duplicate from being reintroduced after a
+     * later repair or canonical update has advanced the published replica.
+     */
     [[nodiscard]] PartyQuestRuntimeCanonicalObserveStatus Observe(
-        PartyQuestRuntimeCanonicalCandidate aCandidate);
+        PartyQuestRuntimeCanonicalCandidate aCandidate,
+        const PartyQuestReplica& acPublishedReplica);
 
     [[nodiscard]] const PartyQuestRuntimeCanonicalCandidate* FindLatest(
         const GameId& acQuestId) const noexcept;

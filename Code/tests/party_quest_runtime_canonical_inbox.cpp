@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeCanonicalInbox.h>
+#include <Structs/Skyrim/PartyQuestRepair.h>
 
 #include <catch2/catch.hpp>
 
@@ -36,6 +37,15 @@ PartyQuestRuntimeCanonicalCandidate BuildCandidate(
     candidate.CanonicalSnapshot = std::move(snapshot);
     return candidate;
 }
+
+PartyQuestReplica BuildPublishedReplica(
+    const PartyQuestRuntimeCanonicalCandidate& acCandidate)
+{
+    PartyQuestReplica replica;
+    replica.ObserveLocalSnapshot(acCandidate.CanonicalSnapshot);
+    replica.SetObservedWorldRevision(acCandidate.WorldRevision);
+    return replica;
+}
 } // namespace
 
 TEST_CASE(
@@ -44,8 +54,9 @@ TEST_CASE(
 {
     PartyQuestRuntimeCanonicalInbox inbox;
     const auto candidate = BuildCandidate(kCampaignA, 42001, 52001, 8, 20);
+    const auto publishedReplica = BuildPublishedReplica(candidate);
 
-    REQUIRE(inbox.Observe(candidate) ==
+    REQUIRE(inbox.Observe(candidate, publishedReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::InvalidInput);
     REQUIRE(inbox.GetPendingQuestCount() == 0);
     REQUIRE_FALSE(inbox.BindCampaign({}));
@@ -53,7 +64,7 @@ TEST_CASE(
 
     auto wrongCampaign = candidate;
     wrongCampaign.CampaignId = kCampaignB;
-    REQUIRE(inbox.Observe(wrongCampaign) ==
+    REQUIRE(inbox.Observe(wrongCampaign, publishedReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::CampaignMismatch);
     REQUIRE(inbox.GetPendingQuestCount() == 0);
     REQUIRE(inbox.GetRememberedTransactionCount() == 0);
@@ -67,9 +78,10 @@ TEST_CASE(
     REQUIRE(inbox.BindCampaign(kCampaignA));
 
     const auto candidate = BuildCandidate(kCampaignA, 42002, 52002, 9, 30);
-    REQUIRE(inbox.Observe(candidate) ==
+    const auto publishedReplica = BuildPublishedReplica(candidate);
+    REQUIRE(inbox.Observe(candidate, publishedReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::Accepted);
-    REQUIRE(inbox.Observe(candidate) ==
+    REQUIRE(inbox.Observe(candidate, publishedReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::Duplicate);
 
     auto conflict = candidate;
@@ -78,7 +90,7 @@ TEST_CASE(
     conflict.CanonicalSnapshot.CompletedStages.push_back(40);
     conflict.CanonicalSnapshot.Revision += 1;
     conflict.CanonicalSnapshot.Canonicalize();
-    REQUIRE(inbox.Observe(conflict) ==
+    REQUIRE(inbox.Observe(conflict, publishedReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::TransactionConflict);
 
     const auto* latest = inbox.FindLatest(kQuestId);
@@ -95,21 +107,25 @@ TEST_CASE(
     REQUIRE(inbox.BindCampaign(kCampaignA));
 
     const auto first = BuildCandidate(kCampaignA, 42003, 52003, 10, 30);
-    REQUIRE(inbox.Observe(first) ==
+    const auto firstReplica = BuildPublishedReplica(first);
+    REQUIRE(inbox.Observe(first, firstReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::Accepted);
 
     const auto newer = BuildCandidate(kCampaignA, 42004, 52004, 11, 40);
-    REQUIRE(inbox.Observe(newer) ==
+    const auto newerReplica = BuildPublishedReplica(newer);
+    REQUIRE(inbox.Observe(newer, newerReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::Superseded);
     REQUIRE(*inbox.FindLatest(kQuestId) == newer);
 
     const auto staleWorld = BuildCandidate(kCampaignA, 42005, 52004, 12, 50);
-    REQUIRE(inbox.Observe(staleWorld) ==
+    const auto staleWorldReplica = BuildPublishedReplica(staleWorld);
+    REQUIRE(inbox.Observe(staleWorld, staleWorldReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::Stale);
     REQUIRE(*inbox.FindLatest(kQuestId) == newer);
 
     const auto staleQuest = BuildCandidate(kCampaignA, 42006, 52005, 11, 50);
-    REQUIRE(inbox.Observe(staleQuest) ==
+    const auto staleQuestReplica = BuildPublishedReplica(staleQuest);
+    REQUIRE(inbox.Observe(staleQuest, staleQuestReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::Stale);
     REQUIRE(*inbox.FindLatest(kQuestId) == newer);
 
@@ -119,7 +135,7 @@ TEST_CASE(
     staleConflict.WorldRevision = 52006;
     staleConflict.CanonicalSnapshot.Revision = 13;
     staleConflict.CanonicalSnapshot.Canonicalize();
-    REQUIRE(inbox.Observe(staleConflict) ==
+    REQUIRE(inbox.Observe(staleConflict, staleWorldReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::TransactionConflict);
     REQUIRE(inbox.GetRememberedTransactionCount() == 4);
 }
@@ -131,7 +147,8 @@ TEST_CASE(
     PartyQuestRuntimeCanonicalInbox inbox;
     REQUIRE(inbox.BindCampaign(kCampaignA));
     const auto oldCandidate = BuildCandidate(kCampaignA, 42007, 52007, 13, 60);
-    REQUIRE(inbox.Observe(oldCandidate) ==
+    const auto oldReplica = BuildPublishedReplica(oldCandidate);
+    REQUIRE(inbox.Observe(oldCandidate, oldReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::Accepted);
     REQUIRE(inbox.GetPendingQuestCount() == 1);
     REQUIRE(inbox.GetRememberedTransactionCount() == 1);
@@ -144,11 +161,47 @@ TEST_CASE(
 
     auto newCandidate = oldCandidate;
     newCandidate.CampaignId = kCampaignB;
-    REQUIRE(inbox.Observe(newCandidate) ==
+    const auto newReplica = BuildPublishedReplica(newCandidate);
+    REQUIRE(inbox.Observe(newCandidate, newReplica) ==
         PartyQuestRuntimeCanonicalObserveStatus::Accepted);
 
     inbox.Reset();
     REQUIRE_FALSE(inbox.GetCampaignId().IsValid());
+    REQUIRE(inbox.GetPendingQuestCount() == 0);
+    REQUIRE(inbox.GetRememberedTransactionCount() == 0);
+}
+
+TEST_CASE(
+    "Runtime canonical inbox rejects a cached duplicate that is no longer the published replica head",
+    "[quest.party-state.runtime-canonical-inbox][revision][replay]")
+{
+    PartyQuestRuntimeCanonicalInbox inbox;
+    REQUIRE(inbox.BindCampaign(kCampaignA));
+
+    const auto oldCandidate = BuildCandidate(kCampaignA, 42008, 52008, 14, 60);
+    const auto oldReplica = BuildPublishedReplica(oldCandidate);
+    REQUIRE(inbox.Observe(oldCandidate, oldReplica) ==
+        PartyQuestRuntimeCanonicalObserveStatus::Accepted);
+
+    // A verified repair starts a fresh runtime-evidence epoch. Protocol-level
+    // duplicate caches may still remember the old exact transaction, but the
+    // repaired published replica has advanced and is now the only valid head.
+    inbox.Reset();
+    REQUIRE(inbox.BindCampaign(kCampaignA));
+
+    const auto repairedHead = BuildCandidate(kCampaignA, 42009, 52009, 15, 70);
+    const auto repairedReplica = BuildPublishedReplica(repairedHead);
+    REQUIRE(inbox.Observe(oldCandidate, repairedReplica) ==
+        PartyQuestRuntimeCanonicalObserveStatus::ReplicaHeadMismatch);
+    REQUIRE(inbox.GetPendingQuestCount() == 0);
+    REQUIRE(inbox.GetRememberedTransactionCount() == 0);
+
+    // Even a forged/replayed packet that preserves the current world revision
+    // must match the exact published canonical snapshot, not only the revision.
+    auto sameWorldWrongSnapshot = oldCandidate;
+    sameWorldWrongSnapshot.WorldRevision = repairedHead.WorldRevision;
+    REQUIRE(inbox.Observe(sameWorldWrongSnapshot, repairedReplica) ==
+        PartyQuestRuntimeCanonicalObserveStatus::ReplicaHeadMismatch);
     REQUIRE(inbox.GetPendingQuestCount() == 0);
     REQUIRE(inbox.GetRememberedTransactionCount() == 0);
 }

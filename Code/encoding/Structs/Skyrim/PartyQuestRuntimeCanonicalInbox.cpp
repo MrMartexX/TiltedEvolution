@@ -1,6 +1,23 @@
 #include <Structs/Skyrim/PartyQuestRuntimeCanonicalInbox.h>
 
+#include <Structs/Skyrim/PartyQuestRepair.h>
+
 #include <utility>
+
+namespace
+{
+bool MatchesPublishedReplicaHead(
+    const PartyQuestRuntimeCanonicalCandidate& acCandidate,
+    const PartyQuestReplica& acPublishedReplica) noexcept
+{
+    if (acPublishedReplica.GetWorldRevision() != acCandidate.WorldRevision)
+        return false;
+
+    const QuestSnapshot* pPublished =
+        acPublishedReplica.FindQuest(acCandidate.CanonicalSnapshot.QuestId);
+    return pPublished && *pPublished == acCandidate.CanonicalSnapshot;
+}
+} // namespace
 
 bool PartyQuestRuntimeCanonicalInbox::BindCampaign(
     const PartyQuestCampaignId& acCampaignId)
@@ -25,7 +42,8 @@ void PartyQuestRuntimeCanonicalInbox::Reset() noexcept
 }
 
 PartyQuestRuntimeCanonicalObserveStatus PartyQuestRuntimeCanonicalInbox::Observe(
-    PartyQuestRuntimeCanonicalCandidate aCandidate)
+    PartyQuestRuntimeCanonicalCandidate aCandidate,
+    const PartyQuestReplica& acPublishedReplica)
 {
     aCandidate.CanonicalSnapshot.Canonicalize();
 
@@ -51,12 +69,22 @@ PartyQuestRuntimeCanonicalObserveStatus PartyQuestRuntimeCanonicalInbox::Observe
 
     const auto transactionIt = m_transactionIdentities.find(
         aCandidate.TransactionId);
-    if (transactionIt != m_transactionIdentities.end())
+    if (transactionIt != m_transactionIdentities.end() &&
+        transactionIt->second != identity)
     {
-        return transactionIt->second == identity
-            ? PartyQuestRuntimeCanonicalObserveStatus::Duplicate
-            : PartyQuestRuntimeCanonicalObserveStatus::TransactionConflict;
+        return PartyQuestRuntimeCanonicalObserveStatus::TransactionConflict;
     }
+
+    // Protocol-level duplicate recognition intentionally survives normal
+    // retransmission. Runtime evidence has the stronger requirement that the
+    // exact canonical packet must still be the currently published replica
+    // head. A repair or later canonical update may make an otherwise exact
+    // cached protocol Duplicate stale for runtime planning.
+    if (!MatchesPublishedReplicaHead(aCandidate, acPublishedReplica))
+        return PartyQuestRuntimeCanonicalObserveStatus::ReplicaHeadMismatch;
+
+    if (transactionIt != m_transactionIdentities.end())
+        return PartyQuestRuntimeCanonicalObserveStatus::Duplicate;
 
     if (m_transactionIdentities.size() >= MaxRememberedTransactions)
         return PartyQuestRuntimeCanonicalObserveStatus::ResourceLimitExceeded;
