@@ -9,6 +9,8 @@
 #include <memory>
 #include <optional>
 
+class PartyQuestRuntimeSessionOwnerTestAccess;
+
 enum class PartyQuestRuntimeSessionOwnerBindStatus : uint8_t
 {
     Bound,
@@ -146,6 +148,8 @@ public:
     }
 
 private:
+    friend class PartyQuestRuntimeSessionOwnerTestAccess;
+
     void Clear() noexcept;
 
     PartyQuestReplicaWorkspaceLease m_workspaceLease;

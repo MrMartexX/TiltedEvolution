@@ -4,6 +4,7 @@
 
 #include <party_quest_papyrus_runtime_observer_test_access.h>
 #include <party_quest_runtime_apply_session_test_access.h>
+#include <party_quest_runtime_process_owner_test_support.h>
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
@@ -43,18 +44,6 @@ struct LiveRecoverySandbox
     {
         std::error_code ec;
         std::filesystem::remove_all(Root, ec);
-    }
-};
-
-struct ProcessGuardCleanup
-{
-    uint64_t TransactionId{};
-
-    ~ProcessGuardCleanup()
-    {
-        auto& guard = PartyQuestSaveGuard::GetProcessGuard();
-        if (TransactionId != 0 && guard.GetTransactionId() == TransactionId)
-            guard.Release(TransactionId);
     }
 };
 
@@ -145,10 +134,6 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
     constexpr uint64_t transactionId = 28001;
     constexpr uint64_t worldRevision = 1880;
 
-    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
-    REQUIRE_FALSE(processGuard.IsActive());
-    ProcessGuardCleanup cleanup{transactionId};
-
     LiveRecoverySandbox sandbox;
     const auto paths = PartyQuestCoopSaveLayout::Build(
         sandbox.Root / "CoopCampaigns",
@@ -172,23 +157,27 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
             {*spec});
     REQUIRE(checkpointPlan.IsReady());
 
-    PartyQuestReplicaSnapshotManager manager(
-        *paths,
-        kLiveRecoveryCampaign,
-        kLiveRecoveryPlayer);
-    REQUIRE(manager.EnsureRevisionCheckpoint(
-                PartyQuestCheckpointKind::PreRepair,
-                worldRevision,
-                checkpointPlan).IsReady());
+    {
+        PartyQuestReplicaSnapshotManager manager(
+            *paths,
+            kLiveRecoveryCampaign,
+            kLiveRecoveryPlayer);
+        REQUIRE(manager.EnsureRevisionCheckpoint(
+                    PartyQuestCheckpointKind::PreRepair,
+                    worldRevision,
+                    checkpointPlan).IsReady());
+    }
 
-    PartyQuestRuntimeApplySession session(
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
         kLiveRecoveryCampaign,
         kLiveRecoveryPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
-    PartyQuestRuntimeGuardedSession guarded(session);
-    const auto request = BuildLiveRecoveryRequest(transactionId, worldRevision);
+        *paths);
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
+    REQUIRE_FALSE(processGuard.IsActive());
 
+    const auto request = BuildLiveRecoveryRequest(transactionId, worldRevision);
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
                 session,
@@ -224,8 +213,6 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
         PartyQuestRuntimeApplyState::WaitingForPapyrus);
     REQUIRE(processGuard.GetTransactionId() == transactionId);
 
-    // The unresolved post-mutation transaction/guard prevents unrelated work
-    // from being admitted while exact recovery is still outstanding.
     const auto blockedRequest = BuildLiveRecoveryRequest(transactionId + 1, worldRevision + 1);
     const auto blocked = guarded.Begin(blockedRequest);
     REQUIRE(blocked.Status == PartyQuestRuntimeGuardStatus::GuardBusy);
@@ -246,18 +233,16 @@ TEST_CASE("Only terminal authoritative monitor failures request live recovery", 
     constexpr uint64_t transactionId = 28002;
     constexpr uint64_t worldRevision = 1881;
 
-    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
-    REQUIRE_FALSE(processGuard.IsActive());
-    ProcessGuardCleanup cleanup{transactionId};
-
-    PartyQuestRuntimeApplySession session(
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
         kLiveRecoveryCampaign,
         kLiveRecoveryPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
-    PartyQuestRuntimeGuardedSession guarded(session);
-    const auto request = BuildLiveRecoveryRequest(transactionId, worldRevision);
+        "tp_party_quest_live_recovery_28002");
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
+    REQUIRE_FALSE(processGuard.IsActive());
 
+    const auto request = BuildLiveRecoveryRequest(transactionId, worldRevision);
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
                 session,
@@ -294,8 +279,6 @@ TEST_CASE("Only terminal authoritative monitor failures request live recovery", 
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::WaitingForPapyrus);
 
-    // Reset the non-terminal monitor and prove a trusted Unsupported result is
-    // terminal and immediately requires exact checkpoint recovery.
     REQUIRE(waitingMonitor.Reset(transactionId));
     UnsupportedPapyrusObserver unsupportedObserver;
     const auto unsupportedAuthorization =

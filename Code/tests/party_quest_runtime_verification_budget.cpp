@@ -5,6 +5,7 @@
 
 #include <party_quest_papyrus_runtime_observer_test_access.h>
 #include <party_quest_runtime_apply_session_test_access.h>
+#include <party_quest_runtime_process_owner_test_support.h>
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
@@ -104,18 +105,6 @@ public:
     }
 };
 
-struct VerificationProcessGuardCleanup
-{
-    uint64_t TransactionId{};
-
-    ~VerificationProcessGuardCleanup()
-    {
-        auto& guard = PartyQuestSaveGuard::GetProcessGuard();
-        if (TransactionId != 0 && guard.GetTransactionId() == TransactionId)
-            guard.Release(TransactionId);
-    }
-};
-
 void AdvanceToBoundedVerification(
     PartyQuestRuntimeGuardedSession& aGuarded,
     PartyQuestRuntimeApplySession& aSession,
@@ -191,18 +180,17 @@ PartyQuestRuntimeGuardedVerificationResult SubmitSample(
 TEST_CASE("Repeated verification divergence exhausts the process budget and requires exact recovery", "[quest.party-state.runtime-guard][verification-budget]")
 {
     constexpr uint64_t transactionId = 30001;
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
+        kVerificationBudgetCampaign,
+        kVerificationBudgetPlayer,
+        "tp_party_quest_verification_budget_30001");
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
     REQUIRE_FALSE(processGuard.IsActive());
-    VerificationProcessGuardCleanup cleanup{transactionId};
 
     const GameId questId(96, 0x3000);
     const auto compatibility = BuildCompatibility(questId);
-    PartyQuestRuntimeApplySession session(
-        kVerificationBudgetCampaign,
-        kVerificationBudgetPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
-    PartyQuestRuntimeGuardedSession guarded(session);
     const auto request = BuildVerificationBudgetRequest(
         transactionId,
         questId.BaseId,
@@ -268,18 +256,17 @@ TEST_CASE("Repeated verification divergence exhausts the process budget and requ
 TEST_CASE("Verification deadline starts at Verifying transition and cannot wait forever for the first resnapshot", "[quest.party-state.runtime-guard][verification-budget]")
 {
     constexpr uint64_t transactionId = 30101;
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
+        kVerificationBudgetCampaign,
+        kVerificationBudgetPlayer,
+        "tp_party_quest_verification_budget_30101");
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
     REQUIRE_FALSE(processGuard.IsActive());
-    VerificationProcessGuardCleanup cleanup{transactionId};
 
     const GameId questId(96, 0x3100);
     const auto compatibility = BuildCompatibility(questId);
-    PartyQuestRuntimeApplySession session(
-        kVerificationBudgetCampaign,
-        kVerificationBudgetPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
-    PartyQuestRuntimeGuardedSession guarded(session);
     const auto request = BuildVerificationBudgetRequest(
         transactionId,
         questId.BaseId,
@@ -313,18 +300,17 @@ TEST_CASE("Verification deadline starts at Verifying transition and cannot wait 
 TEST_CASE("Process verification rejects snapshot-only bypass and stale compatibility", "[quest.party-state.runtime-guard][verification-envelope]")
 {
     constexpr uint64_t transactionId = 30201;
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
+        kVerificationBudgetCampaign,
+        kVerificationBudgetPlayer,
+        "tp_party_quest_verification_budget_30201");
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
     REQUIRE_FALSE(processGuard.IsActive());
-    VerificationProcessGuardCleanup cleanup{transactionId};
 
     const GameId questId(96, 0x3200);
     const auto compatibility = BuildCompatibility(questId);
-    PartyQuestRuntimeApplySession session(
-        kVerificationBudgetCampaign,
-        kVerificationBudgetPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
-    PartyQuestRuntimeGuardedSession guarded(session);
     const auto request = BuildVerificationBudgetRequest(
         transactionId,
         questId.BaseId,
@@ -348,18 +334,17 @@ TEST_CASE("Process verification rejects snapshot-only bypass and stale compatibi
 TEST_CASE("Stable verification cannot commit after runtime generation changes", "[quest.party-state.runtime-guard][verification-envelope][lifecycle]")
 {
     constexpr uint64_t transactionId = 30301;
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
+        kVerificationBudgetCampaign,
+        kVerificationBudgetPlayer,
+        "tp_party_quest_verification_budget_30301");
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
     REQUIRE_FALSE(processGuard.IsActive());
-    VerificationProcessGuardCleanup cleanup{transactionId};
 
     const GameId questId(96, 0x3300);
     const auto compatibility = BuildCompatibility(questId);
-    PartyQuestRuntimeApplySession session(
-        kVerificationBudgetCampaign,
-        kVerificationBudgetPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
-    PartyQuestRuntimeGuardedSession guarded(session);
     const auto request = BuildVerificationBudgetRequest(
         transactionId,
         questId.BaseId,

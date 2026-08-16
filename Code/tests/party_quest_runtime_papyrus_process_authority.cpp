@@ -4,6 +4,7 @@
 
 #include <party_quest_papyrus_runtime_observer_test_access.h>
 #include <party_quest_runtime_apply_session_test_access.h>
+#include <party_quest_runtime_process_owner_test_support.h>
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
@@ -117,18 +118,6 @@ private:
     uint64_t m_generation{};
 };
 
-struct ProcessGuardCleanup
-{
-    uint64_t TransactionId{};
-
-    ~ProcessGuardCleanup()
-    {
-        auto& guard = PartyQuestSaveGuard::GetProcessGuard();
-        if (TransactionId != 0 && guard.GetTransactionId() == TransactionId)
-            guard.Release(TransactionId);
-    }
-};
-
 PartyQuestRuntimeGuardedVerificationResult SubmitProcessVerificationSample(
     PartyQuestRuntimeGuardedSession& aGuarded,
     PartyQuestRuntimeApplySession& aSession,
@@ -167,16 +156,14 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
         const PartyQuestRuntimeApplySession&>);
 
     constexpr uint64_t transactionId = 26001;
-    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
-    REQUIRE_FALSE(processGuard.IsActive());
-    ProcessGuardCleanup cleanup{transactionId};
-
-    PartyQuestRuntimeApplySession session(
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
         kPapyrusAuthorityCampaign,
         kPapyrusAuthorityPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
-    PartyQuestRuntimeGuardedSession guarded(session);
+        "tp_party_quest_papyrus_authority_26001");
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
+    REQUIRE_FALSE(processGuard.IsActive());
     REQUIRE(&guarded.GetRuntimeSession() == &session);
     REQUIRE(&guarded.GetSaveGuard() == &processGuard);
 
@@ -242,7 +229,6 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::Verifying);
 
-    // Raw process-guard resnapshotting must not bypass the bounded monitor.
     const auto rawResnapshot = guarded.SubmitResnapshot(
         transactionId,
         request.CanonicalSnapshot);
@@ -283,7 +269,6 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
         PartyQuestRuntimeVerificationMonitorStatus::Stable);
     REQUIRE_FALSE(second.PersistenceFailed);
 
-    // Raw process-guard commit cannot skip the monitor's final deadline check.
     const auto rawCommit = guarded.Commit(transactionId);
     REQUIRE(rawCommit.Status == PartyQuestRuntimeGuardStatus::InvalidState);
     REQUIRE(rawCommit.GuardHeld);
@@ -306,16 +291,15 @@ TEST_CASE("Process guarded runtime requires trusted Papyrus monitor evidence", "
 TEST_CASE("Stable verification cannot be committed after its deadline", "[quest.party-state.runtime-guard][verification-budget][commit]")
 {
     constexpr uint64_t transactionId = 26002;
-    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
-    REQUIRE_FALSE(processGuard.IsActive());
-    ProcessGuardCleanup cleanup{transactionId};
-
-    PartyQuestRuntimeApplySession session(
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
         kPapyrusAuthorityCampaign,
         kPapyrusAuthorityPlayer,
-        [](const PartyQuestRuntimeRecoveryState&) { return true; },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
-    PartyQuestRuntimeGuardedSession guarded(session);
+        "tp_party_quest_papyrus_authority_26002");
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
+    REQUIRE_FALSE(processGuard.IsActive());
+
     const auto compatibility = BuildProcessCompatibility();
     const auto request = BuildProcessGuardRequest(transactionId, compatibility);
 

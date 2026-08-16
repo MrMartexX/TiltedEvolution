@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 #include <atomic>
 #include <chrono>
@@ -99,6 +100,21 @@ PartyQuestRuntimeGuardStatus PartyQuestRuntimeGuardedSession::AcquireGuard(
     bool& aAcquiredHere) noexcept
 {
     aAcquiredHere = false;
+
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    if (&m_saveGuard == &processGuard)
+    {
+        auto& processOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+        if (!processOwner.IsBound() ||
+            processOwner.GetGuardedSession() != this)
+        {
+            // INV-LIFECYCLE-001: the physical process SaveGuard is critical
+            // repair ownership. A private session that the process lifecycle
+            // owner cannot fence must never acquire or inherit that guard.
+            return PartyQuestRuntimeGuardStatus::InvalidState;
+        }
+    }
+
     switch (m_saveGuard.Acquire(aTransactionId))
     {
     case PartyQuestSaveGuardAcquireStatus::Acquired:
