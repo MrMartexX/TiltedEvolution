@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestCampaign.h>
+#include <Structs/Skyrim/QuestSnapshot.h>
 
 #include <cstddef>
 #include <cstdint>
