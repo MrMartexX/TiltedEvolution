@@ -1,10 +1,27 @@
 #include <Structs/Skyrim/PartyQuestRuntimeVerificationGate.h>
 
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 #include <Structs/Skyrim/PartyQuestSaveGuard.h>
 
 namespace
 {
+PartyQuestRuntimeGuardedVerificationResult RejectStructuralMismatch(
+    PartyQuestRuntimeGuardedSession& aGuardedSession,
+    PartyQuestRuntimeVerificationMonitor& aMonitor,
+    uint64_t aTransactionId) noexcept
+{
+    PartyQuestRuntimeGuardedVerificationResult result;
+    result.TransactionId = aTransactionId;
+    result.MonitorStatus = aMonitor.GetStatus();
+
+    const auto& guard = aGuardedSession.GetSaveGuard();
+    result.GuardHeld = aTransactionId != 0 &&
+        guard.IsActive() &&
+        guard.GetTransactionId() == aTransactionId;
+    return result;
+}
+
 PartyQuestRuntimeGuardedVerificationResult SubmitInvalidVerification(
     PartyQuestRuntimeGuardedSession& aGuardedSession,
     PartyQuestRuntimeVerificationMonitor& aMonitor,
@@ -31,6 +48,25 @@ PartyQuestRuntimeGuardedVerificationResult PartyQuestRuntimeVerificationGate::Su
     const CompatibilityObserver& acCompatibilityObserver) noexcept
 {
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& processOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+
+    // INV-LIFECYCLE-001 / INV-VERIFY-001: structural wiring must be proven
+    // before any fail-closed verification submission is allowed to mutate
+    // runtime/recovery state. A caller cannot pair the process-owned guarded
+    // wrapper with another durable session, nor can a private guarded wrapper
+    // drive verification for the process-owned durable session.
+    if (!processOwner.IsBound() ||
+        processOwner.GetGuardedSession() != &aGuardedSession ||
+        processOwner.GetRuntimeSession() != &aSession ||
+        &aGuardedSession.GetRuntimeSession() != &aSession ||
+        &aGuardedSession.GetSaveGuard() != &processGuard)
+    {
+        return RejectStructuralMismatch(
+            aGuardedSession,
+            aMonitor,
+            aTransactionId);
+    }
+
     const auto* active = aSession.GetCoordinator().GetActive();
     if (!active ||
         aTransactionId == 0 ||
@@ -132,8 +168,8 @@ PartyQuestRuntimeGuardedVerificationResult PartyQuestRuntimeVerificationGate::Su
         aNowMs,
         std::move(*snapshot));
 
-    // Defensive cleanup if a mismatched guarded-session instance rejected the
-    // call before the intended session could consume its one-shot capability.
+    // Defensive cleanup if guarded verification rejected the call before the
+    // exact process-owned session could consume its one-shot capability.
     aSession.m_pendingVerificationCompatibility.reset();
     return result;
 }
