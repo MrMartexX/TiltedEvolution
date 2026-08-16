@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 
+class PartyQuestRuntimeSessionBootstrap;
 class PartyQuestRuntimeSessionOwnerTestAccess;
 
 enum class PartyQuestRuntimeSessionOwnerBindStatus : uint8_t
@@ -16,6 +17,7 @@ enum class PartyQuestRuntimeSessionOwnerBindStatus : uint8_t
     Bound,
     AlreadyBound,
     BindConflict,
+    ProcessBootstrapRequired,
     ProcessGuardBusy,
     InvalidIdentity,
     InvalidLayout,
@@ -78,10 +80,11 @@ struct PartyQuestRuntimeSessionOwnerBindResult
  * the process-local publication-authority binding before the session object is
  * destroyed so no stale capability can pin the kernel lock past owner lifetime.
  *
- * This is a bootstrap/lifetime primitive. It does not itself discover campaign
- * or profile identity and does not itself hook engine/network lifecycle sources;
- * production integrations must use the shared process owner below rather than
- * constructing an unreachable private owner.
+ * This is a bootstrap/lifetime primitive. Direct Bind() remains available for
+ * isolated non-process owners used to exercise the primitive itself, but it is
+ * rejected on GetProcessOwner(). Production process ownership must pass through
+ * PartyQuestRuntimeSessionBootstrap, which proves current character lineage and
+ * pins the exact runtime generation before entering the private process bind.
  */
 class PartyQuestRuntimeSessionOwner final
 {
@@ -97,6 +100,11 @@ public:
     /** Shared process owner used by production runtime/lifecycle integrations. */
     [[nodiscard]] static PartyQuestRuntimeSessionOwner& GetProcessOwner() noexcept;
 
+    /**
+     * Low-level bind for isolated owner tests/tools. Calling this directly on
+     * GetProcessOwner() fails closed unless a test-only friend grants a one-shot
+     * authorization. Production process binding is bootstrap-only.
+     */
     [[nodiscard]] PartyQuestRuntimeSessionOwnerBindResult Bind(
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestPlayerProfileId& acPlayerProfileId,
@@ -148,10 +156,22 @@ public:
     }
 
 private:
+    friend class PartyQuestRuntimeSessionBootstrap;
     friend class PartyQuestRuntimeSessionOwnerTestAccess;
+
+    [[nodiscard]] PartyQuestRuntimeSessionOwnerBindResult BindVerifiedProcessOwner(
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acPlayerProfileId,
+        const PartyQuestCoopSavePaths& acPaths) noexcept;
+
+    [[nodiscard]] PartyQuestRuntimeSessionOwnerBindResult BindInternal(
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acPlayerProfileId,
+        const PartyQuestCoopSavePaths& acPaths) noexcept;
 
     void Clear() noexcept;
 
+    bool m_allowNextDirectProcessBindForTesting{};
     PartyQuestReplicaWorkspaceLease m_workspaceLease;
     std::unique_ptr<PartyQuestRuntimeApplySession> m_session;
     std::unique_ptr<PartyQuestRuntimeGuardedSession> m_guardedSession;

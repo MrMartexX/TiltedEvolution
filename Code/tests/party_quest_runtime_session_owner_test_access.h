@@ -12,5 +12,16 @@ public:
         if (guard.IsActive())
             (void)guard.Release(guard.GetTransactionId());
         owner.Clear();
+
+        // Existing low-level process-owner tests intentionally bypass the
+        // production bootstrap. Keep that authority explicit, test-only and
+        // one-shot so it cannot leak into production integration code.
+        owner.m_allowNextDirectProcessBindForTesting = true;
+    }
+
+    static void RevokeDirectProcessBindForTesting() noexcept
+    {
+        PartyQuestRuntimeSessionOwner::GetProcessOwner()
+            .m_allowNextDirectProcessBindForTesting = false;
     }
 };

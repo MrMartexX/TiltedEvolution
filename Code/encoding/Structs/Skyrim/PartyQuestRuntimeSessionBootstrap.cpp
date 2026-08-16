@@ -57,11 +57,13 @@ PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
             return result;
         }
 
-        // Keep generationLease alive through the complete synchronous Bind().
-        // Lifecycle invalidation requires the exclusive side of the same fence,
-        // so no character/runtime transition can cross this publication point.
+        // Keep generationLease alive through the complete synchronous process
+        // bind. Lifecycle invalidation requires the exclusive side of the same
+        // fence, so no character/runtime transition can cross publication.
+        // BindVerifiedProcessOwner is private: the verified profile bootstrap is
+        // structurally required for production access to the shared owner.
         auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
-        result.Owner = owner.Bind(
+        result.Owner = owner.BindVerifiedProcessOwner(
             acCampaignId,
             acPlayerProfile.GetProfileId(),
             *paths);

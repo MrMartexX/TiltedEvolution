@@ -43,6 +43,44 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::Bind(
     const PartyQuestPlayerProfileId& acPlayerProfileId,
     const PartyQuestCoopSavePaths& acPaths) noexcept
 {
+    if (this == &GetProcessOwner())
+    {
+        if (!m_allowNextDirectProcessBindForTesting)
+        {
+            return MakeEarlyFailure(
+                PartyQuestRuntimeSessionOwnerBindStatus::ProcessBootstrapRequired,
+                PartyQuestRuntimeSessionStoreStatus::InvalidIdentity);
+        }
+
+        // Test-only friend authorization is deliberately one-shot so a prior
+        // low-level test bind cannot silently authorize later process-owner work.
+        m_allowNextDirectProcessBindForTesting = false;
+    }
+
+    return BindInternal(acCampaignId, acPlayerProfileId, acPaths);
+}
+
+PartyQuestRuntimeSessionOwnerBindResult
+PartyQuestRuntimeSessionOwner::BindVerifiedProcessOwner(
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acPlayerProfileId,
+    const PartyQuestCoopSavePaths& acPaths) noexcept
+{
+    if (this != &GetProcessOwner())
+    {
+        return MakeEarlyFailure(
+            PartyQuestRuntimeSessionOwnerBindStatus::ProcessBootstrapRequired,
+            PartyQuestRuntimeSessionStoreStatus::InvalidIdentity);
+    }
+
+    return BindInternal(acCampaignId, acPlayerProfileId, acPaths);
+}
+
+PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInternal(
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acPlayerProfileId,
+    const PartyQuestCoopSavePaths& acPaths) noexcept
+{
     try
     {
         if (!acCampaignId.IsValid() || !acPlayerProfileId.IsValid())
