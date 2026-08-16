@@ -352,6 +352,7 @@ void QuestService::OnPartyQuestTransactionResult(const NotifyPartyQuestTransacti
         if (transactionId != 0)
             m_partyQuestSubmissions.Reject(transactionId);
         m_partyQuestProtocolVerified = false;
+        m_partyQuestRuntimeCanonicalInbox.Reset();
         SendPartyQuestReplicaReport(false, "invalid-transaction-result");
         return;
     }
@@ -380,6 +381,7 @@ void QuestService::OnPartyQuestTransactionResult(const NotifyPartyQuestTransacti
         acResult.Result.Status == PartyQuestApplyStatus::InvalidTransactionId)
     {
         m_partyQuestProtocolVerified = false;
+        m_partyQuestRuntimeCanonicalInbox.Reset();
         SendPartyQuestReplicaReport(false, "transaction-rejected");
     }
 }
@@ -424,6 +426,7 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
                 m_partyQuestProtocolVerified = false;
                 m_partyQuestSubmissions.RequeueInFlight();
                 m_requestTransactions.clear();
+                m_partyQuestRuntimeCanonicalInbox.Reset();
                 spdlog::error(
                     "PartyQuestProtocol blocked campaign switch by runtime lifecycle fence: oldCampaign={:016X}{:016X} newCampaign={:016X}{:016X} report={} plan={} status={} transaction={} guardHeld={}",
                     currentCampaign.High,
@@ -470,6 +473,12 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
          result.Ack.ApplyStatus == PartyQuestReplicaApplyStatus::NoChanges))
     {
         const PartyQuestCampaignId verifiedCampaign = m_partyQuestSession->GetCampaignId();
+
+        // A repair establishes a new canonical replica evidence epoch even when
+        // the CampaignId itself did not change. Repair items do not carry the
+        // exact server TransactionId provenance required by runtime planning, so
+        // no pre-repair runtime candidate may survive across this boundary.
+        m_partyQuestRuntimeCanonicalInbox.Reset();
         if (!m_partyQuestRuntimeCanonicalInbox.BindCampaign(verifiedCampaign))
         {
             spdlog::error(
@@ -486,6 +495,7 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
     else
     {
         m_partyQuestProtocolVerified = false;
+        m_partyQuestRuntimeCanonicalInbox.Reset();
     }
 }
 
@@ -562,6 +572,7 @@ void QuestService::OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUp
         m_partyQuestProtocolVerified = false;
         m_partyQuestSubmissions.RequeueInFlight();
         m_requestTransactions.clear();
+        m_partyQuestRuntimeCanonicalInbox.Reset();
         SendPartyQuestReplicaReport(false, "canonical-gap");
     }
 }
