@@ -3,6 +3,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeReferenceReadiness.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 #include <algorithm>
 
@@ -478,7 +479,10 @@ size_t PartyQuestDeferredWorldQueue::ConsumeRuntimeReady(
 {
     auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
-    if (!acCanonicalRevisionObserver ||
+    auto& processOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    if (!processOwner.IsBound() ||
+        processOwner.GetGuardedSession() != &aGuardedSession ||
+        !acCanonicalRevisionObserver ||
         !acReferenceReadiness.UsesGenerationFence(generationFence) ||
         &aGuardedSession.GetSaveGuard() != &processGuard)
     {

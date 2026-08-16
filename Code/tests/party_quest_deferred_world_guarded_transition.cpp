@@ -11,12 +11,16 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeReferenceReadiness.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
 
-#include <vector>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <string>
 
 namespace
 {
@@ -27,30 +31,55 @@ const PartyQuestPlayerProfileId kDeferredConsumePlayer{
     0x8111222233334444ull,
     0x8555666677778888ull};
 
-struct DeferredConsumeDurability
+struct DeferredConsumeSandbox
 {
-    PartyQuestSaveGuard* Guard{};
-    bool Allow{true};
-    std::vector<bool> GuardActiveDuringPersist;
+    std::filesystem::path Root;
 
-    bool Persist(const PartyQuestRuntimeRecoveryState&)
+    DeferredConsumeSandbox()
     {
-        GuardActiveDuringPersist.push_back(Guard && Guard->IsActive());
-        return Allow;
+        const auto nonce =
+            std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        Root = std::filesystem::temp_directory_path() /
+            ("tp_party_quest_deferred_owner_" + std::to_string(nonce));
+        std::error_code ec;
+        std::filesystem::remove_all(Root, ec);
+        ec.clear();
+        std::filesystem::create_directories(Root, ec);
+        REQUIRE_FALSE(ec);
+    }
+
+    ~DeferredConsumeSandbox()
+    {
+        // Keep the process singleton from contaminating later TPTests even when
+        // an assertion exits the test before the explicit release below.
+        auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+        (void)owner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Shutdown);
+
+        std::error_code ec;
+        std::filesystem::remove_all(Root, ec);
     }
 };
 
-PartyQuestRuntimeApplySession BuildDeferredConsumeSession(
-    DeferredConsumeDurability& aDurability)
+PartyQuestCoopSavePaths BuildDeferredConsumePaths(
+    const std::filesystem::path& acRoot)
 {
-    return PartyQuestRuntimeApplySession(
+    const auto paths = PartyQuestCoopSaveLayout::Build(
+        acRoot / "CoopCampaigns",
         kDeferredConsumeCampaign,
-        kDeferredConsumePlayer,
-        [&aDurability](const PartyQuestRuntimeRecoveryState& acState)
-        {
-            return aDurability.Persist(acState);
-        },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
+        kDeferredConsumePlayer);
+    REQUIRE(paths.has_value());
+    return *paths;
+}
+
+PartyQuestRuntimeSessionOwner& ResetProcessOwner()
+{
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto released = owner.PrepareAndRelease(
+        PartyQuestRuntimeLifecycleEvent::Shutdown);
+    REQUIRE(released.CanProceed());
+    REQUIRE_FALSE(owner.IsBound());
+    REQUIRE_FALSE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
+    return owner;
 }
 
 PartyQuestRuntimeApplyRequest BuildDeferredConsumeRequest(
@@ -94,20 +123,47 @@ PartyQuestDeferredWorldRuntimeReadinessSources BuildDeferredConsumeSources()
     };
     return sources;
 }
+
+PartyQuestRuntimeGuardedSession& BindDeferredConsumeOwner(
+    DeferredConsumeSandbox& aSandbox,
+    PartyQuestCoopSavePaths& aPaths)
+{
+    auto& owner = ResetProcessOwner();
+    aPaths = BuildDeferredConsumePaths(aSandbox.Root);
+    const auto bound = owner.Bind(
+        kDeferredConsumeCampaign,
+        kDeferredConsumePlayer,
+        aPaths);
+    REQUIRE(bound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(bound.IsBound());
+    REQUIRE(owner.IsBound());
+    REQUIRE(owner.GetGuardedSession() != nullptr);
+    return *owner.GetGuardedSession();
+}
+
+void ReleaseDeferredConsumeOwner()
+{
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto released = owner.PrepareAndRelease(
+        PartyQuestRuntimeLifecycleEvent::Shutdown);
+    REQUIRE(released.CanProceed());
+    REQUIRE_FALSE(owner.IsBound());
+    REQUIRE_FALSE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
+}
 } // namespace
 
 TEST_CASE(
-    "Production deferred world consumption rejects stale generation and publishes only under process fence",
-    "[quest.party-state.deferred-world][runtime-readiness][lifecycle][runtime-guard]")
+    "Production deferred world consumption rejects stale generation and publishes only through the process owner",
+    "[quest.party-state.deferred-world][runtime-readiness][lifecycle][runtime-guard][runtime-owner]")
 {
+    DeferredConsumeSandbox sandbox;
+    PartyQuestCoopSavePaths paths;
+    auto& guarded = BindDeferredConsumeOwner(sandbox, paths);
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
     auto& processFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
     REQUIRE_FALSE(processGuard.IsActive());
     REQUIRE_FALSE(processFence.IsLifecycleTransitionPending());
 
-    DeferredConsumeDurability durability{&processGuard};
-    auto session = BuildDeferredConsumeSession(durability);
-    PartyQuestRuntimeGuardedSession guarded(session);
     PartyQuestDeferredWorldQueue queue;
     PartyQuestRuntimeReferenceReadiness readiness(processFence);
 
@@ -132,8 +188,8 @@ TEST_CASE(
     REQUIRE(marked.IsReady());
     REQUIRE(queue.FindByTransaction(request.TransactionId)->Ready);
 
-    // The old extraction and direct process-guard transition surfaces are both
-    // fail-closed. Production must use ConsumeRuntimeReady.
+    // The extraction and direct process-guard transition surfaces are both
+    // fail-closed. Production must consume through the exact bound process owner.
     REQUIRE(queue.TakeRuntimeReady(
                 processFence,
                 readiness,
@@ -142,7 +198,7 @@ TEST_CASE(
     REQUIRE(queue.FindByTransaction(request.TransactionId) != nullptr);
     REQUIRE(guarded.MarkWorldReady(request).Status ==
         PartyQuestRuntimeGuardStatus::InvalidState);
-    REQUIRE(session.GetCoordinator().GetActive()->State ==
+    REQUIRE(guarded.GetRuntimeSession().GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::DeferredWorld);
 
     const uint64_t markedGeneration = marked.RuntimeGeneration;
@@ -156,7 +212,7 @@ TEST_CASE(
                 revisionObserver) == 0);
     REQUIRE(queue.FindByTransaction(request.TransactionId) != nullptr);
     REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
-    REQUIRE(session.GetCoordinator().GetActive()->State ==
+    REQUIRE(guarded.GetRuntimeSession().GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::DeferredWorld);
     REQUIRE_FALSE(processGuard.IsActive());
 
@@ -176,28 +232,29 @@ TEST_CASE(
                 sources,
                 revisionObserver) == 1);
     REQUIRE(queue.GetPendingCount() == 0);
-    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
-    REQUIRE(session.GetCoordinator().GetActive()->State ==
+    REQUIRE(guarded.GetRuntimeSession().GetCoordinator().GetActive() != nullptr);
+    REQUIRE(guarded.GetRuntimeSession().GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::AwaitingCheckpoint);
     REQUIRE(processGuard.GetTransactionId() == request.TransactionId);
 
     const auto aborted = guarded.AbortBeforeMutation(request.TransactionId);
     REQUIRE(aborted.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE_FALSE(processGuard.IsActive());
+    ReleaseDeferredConsumeOwner();
 }
 
 TEST_CASE(
-    "Deferred world consume retains queue entry when durable world-ready publication fails",
-    "[quest.party-state.deferred-world][runtime-readiness][persistence][runtime-guard]")
+    "Deferred world consume retains queue entry when owner journal publication fails",
+    "[quest.party-state.deferred-world][runtime-readiness][persistence][runtime-guard][runtime-owner]")
 {
+    DeferredConsumeSandbox sandbox;
+    PartyQuestCoopSavePaths paths;
+    auto& guarded = BindDeferredConsumeOwner(sandbox, paths);
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
     auto& processFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
     REQUIRE_FALSE(processGuard.IsActive());
     REQUIRE_FALSE(processFence.IsLifecycleTransitionPending());
 
-    DeferredConsumeDurability durability{&processGuard};
-    auto session = BuildDeferredConsumeSession(durability);
-    PartyQuestRuntimeGuardedSession guarded(session);
     PartyQuestDeferredWorldQueue queue;
     PartyQuestRuntimeReferenceReadiness readiness(processFence);
 
@@ -219,7 +276,20 @@ TEST_CASE(
                 readiness,
                 sources).IsReady());
 
-    durability.Allow = false;
+    auto blockedTemporary = paths.RuntimeApplySidecar;
+    blockedTemporary += ".tmp";
+    std::error_code ec;
+    std::filesystem::remove_all(blockedTemporary, ec);
+    ec.clear();
+    std::filesystem::create_directories(blockedTemporary, ec);
+    REQUIRE_FALSE(ec);
+    std::ofstream blocker(blockedTemporary / "blocker", std::ios::binary | std::ios::trunc);
+    REQUIRE(blocker.is_open());
+    blocker.put('x');
+    blocker.flush();
+    REQUIRE(blocker.good());
+    blocker.close();
+
     REQUIRE(queue.ConsumeRuntimeReady(
                 guarded,
                 readiness,
@@ -229,13 +299,15 @@ TEST_CASE(
     const auto* retained = queue.FindByTransaction(request.TransactionId);
     REQUIRE(retained != nullptr);
     REQUIRE_FALSE(retained->Ready);
-    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
-    REQUIRE(session.GetCoordinator().GetActive()->State ==
+    REQUIRE(guarded.GetRuntimeSession().GetCoordinator().GetActive() != nullptr);
+    REQUIRE(guarded.GetRuntimeSession().GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::DeferredWorld);
-    REQUIRE_FALSE(session.GetCoordinator().GetActive()->SaveGuardActive);
+    REQUIRE_FALSE(guarded.GetRuntimeSession().GetCoordinator().GetActive()->SaveGuardActive);
     REQUIRE_FALSE(processGuard.IsActive());
 
-    durability.Allow = true;
+    std::filesystem::remove_all(blockedTemporary, ec);
+    REQUIRE_FALSE(ec);
+
     REQUIRE(queue.TryMarkRuntimeReady(
                 request,
                 request.CanonicalSnapshot.Revision,
@@ -253,4 +325,131 @@ TEST_CASE(
     const auto aborted = guarded.AbortBeforeMutation(request.TransactionId);
     REQUIRE(aborted.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE_FALSE(processGuard.IsActive());
+    ReleaseDeferredConsumeOwner();
+}
+
+TEST_CASE(
+    "Production deferred world consumption rejects an unbound private process-guard session before observation",
+    "[quest.party-state.deferred-world][runtime-readiness][runtime-owner][fail-closed]")
+{
+    auto& owner = ResetProcessOwner();
+    REQUIRE_FALSE(owner.IsBound());
+
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& processFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    PartyQuestRuntimeApplySession session(
+        kDeferredConsumeCampaign,
+        kDeferredConsumePlayer,
+        [](const PartyQuestRuntimeRecoveryState&)
+        {
+            return true;
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
+    PartyQuestRuntimeGuardedSession guarded(session);
+    PartyQuestDeferredWorldQueue queue;
+    PartyQuestRuntimeReferenceReadiness readiness(processFence);
+
+    const auto request = BuildDeferredConsumeRequest(33003, 9, 0x6300);
+    const auto sources = BuildDeferredConsumeSources();
+    size_t revisionObservations{};
+    const auto revisionObserver = [
+        revision = request.CanonicalSnapshot.Revision,
+        &revisionObservations](const GameId&)
+    {
+        ++revisionObservations;
+        return revision;
+    };
+
+    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Deferred);
+    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(readiness.Observe(0x6300, true));
+    REQUIRE(queue.TryMarkRuntimeReady(
+                request,
+                request.CanonicalSnapshot.Revision,
+                processFence,
+                readiness,
+                sources).IsReady());
+
+    REQUIRE(queue.ConsumeRuntimeReady(
+                guarded,
+                readiness,
+                sources,
+                revisionObserver) == 0);
+    REQUIRE(revisionObservations == 0);
+    REQUIRE(queue.FindByTransaction(request.TransactionId) != nullptr);
+    REQUIRE(queue.FindByTransaction(request.TransactionId)->Ready);
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::DeferredWorld);
+    REQUIRE_FALSE(processGuard.IsActive());
+
+    const auto aborted = guarded.AbortBeforeMutation(request.TransactionId);
+    REQUIRE(aborted.Status == PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE_FALSE(processGuard.IsActive());
+}
+
+TEST_CASE(
+    "Production deferred world consumption rejects a different process-guard session while owner is bound",
+    "[quest.party-state.deferred-world][runtime-readiness][runtime-owner][process-domain]")
+{
+    DeferredConsumeSandbox sandbox;
+    PartyQuestCoopSavePaths paths;
+    auto& ownerGuarded = BindDeferredConsumeOwner(sandbox, paths);
+    REQUIRE(PartyQuestRuntimeSessionOwner::GetProcessOwner().GetGuardedSession() ==
+        &ownerGuarded);
+
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& processFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    PartyQuestRuntimeApplySession privateSession(
+        kDeferredConsumeCampaign,
+        kDeferredConsumePlayer,
+        [](const PartyQuestRuntimeRecoveryState&)
+        {
+            return true;
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
+    PartyQuestRuntimeGuardedSession privateGuarded(privateSession);
+    REQUIRE(&privateGuarded != &ownerGuarded);
+
+    PartyQuestDeferredWorldQueue queue;
+    PartyQuestRuntimeReferenceReadiness readiness(processFence);
+    const auto request = BuildDeferredConsumeRequest(33004, 10, 0x6400);
+    const auto sources = BuildDeferredConsumeSources();
+    size_t revisionObservations{};
+    const auto revisionObserver = [
+        revision = request.CanonicalSnapshot.Revision,
+        &revisionObservations](const GameId&)
+    {
+        ++revisionObservations;
+        return revision;
+    };
+
+    REQUIRE(privateGuarded.Begin(request).Status ==
+        PartyQuestRuntimeGuardStatus::Deferred);
+    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(readiness.Observe(0x6400, true));
+    REQUIRE(queue.TryMarkRuntimeReady(
+                request,
+                request.CanonicalSnapshot.Revision,
+                processFence,
+                readiness,
+                sources).IsReady());
+
+    REQUIRE(queue.ConsumeRuntimeReady(
+                privateGuarded,
+                readiness,
+                sources,
+                revisionObserver) == 0);
+    REQUIRE(revisionObservations == 0);
+    REQUIRE(queue.FindByTransaction(request.TransactionId) != nullptr);
+    REQUIRE(queue.FindByTransaction(request.TransactionId)->Ready);
+    REQUIRE(privateSession.GetCoordinator().GetActive() != nullptr);
+    REQUIRE(privateSession.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::DeferredWorld);
+    REQUIRE_FALSE(processGuard.IsActive());
+
+    const auto aborted = privateGuarded.AbortBeforeMutation(request.TransactionId);
+    REQUIRE(aborted.Status == PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE_FALSE(processGuard.IsActive());
+    ReleaseDeferredConsumeOwner();
 }
