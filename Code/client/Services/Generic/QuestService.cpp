@@ -60,6 +60,7 @@ void QuestService::OnConnected(const ConnectedEvent& acEvent) noexcept
     m_partyQuestProtocolVerified = false;
     m_partyQuestSubmissions.RequeueInFlight();
     m_requestTransactions.clear();
+    m_partyQuestRuntimeCanonicalInbox.Reset();
 
     if (!m_partyQuestSession)
     {
@@ -94,6 +95,7 @@ void QuestService::OnDisconnected(const DisconnectedEvent&) noexcept
     m_partyQuestProtocolVerified = false;
     m_partyQuestSubmissions.RequeueInFlight();
     m_requestTransactions.clear();
+    m_partyQuestRuntimeCanonicalInbox.Reset();
 
     spdlog::info(
         "PartyQuestProtocol client disconnected: player={} retainedWorldRevision={} queuedSubmissions={}",
@@ -105,6 +107,7 @@ void QuestService::OnDisconnected(const DisconnectedEvent&) noexcept
 void QuestService::OnPartyJoined(const PartyJoinedEvent&) noexcept
 {
     m_partyQuestProtocolVerified = false;
+    m_partyQuestRuntimeCanonicalInbox.Reset();
     SendPartyQuestReplicaReport(m_connectionGeneration > 1, "party-joined");
 }
 
@@ -113,6 +116,7 @@ void QuestService::OnPartyLeft(const PartyLeftEvent&) noexcept
     m_partyQuestProtocolVerified = false;
     m_partyQuestSubmissions.RequeueInFlight();
     m_requestTransactions.clear();
+    m_partyQuestRuntimeCanonicalInbox.Reset();
 
     spdlog::info(
         "PartyQuestProtocol party left: player={} retainedWorldRevision={} queuedSubmissions={}",
@@ -465,6 +469,17 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
         (result.Ack.ApplyStatus == PartyQuestReplicaApplyStatus::Applied ||
          result.Ack.ApplyStatus == PartyQuestReplicaApplyStatus::NoChanges))
     {
+        const PartyQuestCampaignId verifiedCampaign = m_partyQuestSession->GetCampaignId();
+        if (!m_partyQuestRuntimeCanonicalInbox.BindCampaign(verifiedCampaign))
+        {
+            spdlog::error(
+                "PartyQuestRuntime canonical evidence remains unbound after verified repair: campaign={:016X}{:016X} report={} plan={}",
+                verifiedCampaign.High,
+                verifiedCampaign.Low,
+                acPlan.ReportId,
+                acPlan.PlanId);
+        }
+
         m_partyQuestProtocolVerified = true;
         FlushQueuedPartyQuestSnapshots("after-repair");
     }
@@ -494,6 +509,45 @@ void QuestService::OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUp
     if (status == PartyQuestClientCanonicalStatus::Applied ||
         status == PartyQuestClientCanonicalStatus::Duplicate)
     {
+        if (m_partyQuestProtocolVerified)
+        {
+            const PartyQuestCampaignId campaignId = m_partyQuestSession->GetCampaignId();
+            if (campaignId.IsValid() &&
+                m_partyQuestRuntimeCanonicalInbox.GetCampaignId() == campaignId)
+            {
+                PartyQuestRuntimeCanonicalCandidate candidate;
+                candidate.CampaignId = campaignId;
+                candidate.TransactionId = acUpdate.TransactionId;
+                candidate.WorldRevision = acUpdate.WorldRevision;
+                candidate.CanonicalSnapshot = acUpdate.CanonicalSnapshot;
+
+                const auto observeStatus =
+                    m_partyQuestRuntimeCanonicalInbox.Observe(std::move(candidate));
+                if (observeStatus == PartyQuestRuntimeCanonicalObserveStatus::TransactionConflict ||
+                    observeStatus == PartyQuestRuntimeCanonicalObserveStatus::CampaignMismatch ||
+                    observeStatus == PartyQuestRuntimeCanonicalObserveStatus::InvalidInput ||
+                    observeStatus == PartyQuestRuntimeCanonicalObserveStatus::ResourceLimitExceeded)
+                {
+                    spdlog::warn(
+                        "PartyQuestRuntime canonical evidence suppressed: transaction={} campaign={:016X}{:016X} status={}",
+                        acUpdate.TransactionId,
+                        campaignId.High,
+                        campaignId.Low,
+                        static_cast<unsigned>(observeStatus));
+                }
+            }
+            else
+            {
+                spdlog::warn(
+                    "PartyQuestRuntime canonical evidence suppressed: transaction={} verifiedCampaign={:016X}{:016X} inboxCampaign={:016X}{:016X}",
+                    acUpdate.TransactionId,
+                    campaignId.High,
+                    campaignId.Low,
+                    m_partyQuestRuntimeCanonicalInbox.GetCampaignId().High,
+                    m_partyQuestRuntimeCanonicalInbox.GetCampaignId().Low);
+            }
+        }
+
         const auto ready = m_partyQuestSubmissions.Complete(
             acUpdate.TransactionId,
             acUpdate.CanonicalSnapshot);

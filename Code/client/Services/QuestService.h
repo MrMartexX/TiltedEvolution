@@ -4,6 +4,7 @@
 #include <Events/EventDispatcher.h>
 #include <Games/Events.h>
 #include <Structs/Skyrim/PartyQuestProtocol.h>
+#include <Structs/Skyrim/PartyQuestRuntimeCanonicalInbox.h>
 
 #include <optional>
 #include <unordered_map>
@@ -64,6 +65,7 @@ private:
     PartyQuestClientIdAllocator m_partyQuestIds;
     std::optional<PartyQuestClientSession> m_partyQuestSession;
     PartyQuestClientSubmissionQueue m_partyQuestSubmissions;
+    PartyQuestRuntimeCanonicalInbox m_partyQuestRuntimeCanonicalInbox;
     std::unordered_map<uint64_t, uint64_t> m_requestTransactions;
     std::unordered_map<GameId, PartyQuestSyncFacts> m_partyQuestSyncFacts;
     bool m_partyQuestProtocolVerified{};
