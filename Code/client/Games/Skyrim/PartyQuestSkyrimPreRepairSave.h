@@ -13,6 +13,7 @@ enum class PartyQuestSkyrimPreRepairSaveStatus : uint8_t
 {
     Ready,
     InvalidRuntimeState,
+    ProcessOwnerMismatch,
     GuardMismatch,
     CaptureEpochMismatch,
     InvalidIdentity,
@@ -56,7 +57,8 @@ struct PartyQuestSkyrimPreRepairSaveResult
 
 /**
  * Creates a new engine-generated core save source for a PreRepair checkpoint
- * while the runtime transaction owns the physical process save guard.
+ * while the exact process runtime owner owns the guarded session and its
+ * physical process SaveGuard.
  *
  * Every capture attempt uses a unique name. Existing files are never trusted as
  * proof that a prior engine save completed: a crash/failure may have left a
@@ -81,7 +83,8 @@ public:
     /**
      * Legacy diagnostic capture. It produces an epochless core authorization;
      * PartyQuestRuntimePreRepairCheckpointAssembler intentionally rejects that
-     * authorization on the production publication path.
+     * authorization on the production publication path. Even this diagnostic
+     * capture is process-owner fenced because it enters Skyrim's save pipeline.
      *
      * Must be invoked from Skyrim's normal game thread/save-safe runtime
      * context. The helper does not marshal work to another thread.

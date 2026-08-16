@@ -4,6 +4,7 @@
 #include <PartyQuestSkyrimSavePathScope.h>
 #include <SaveLoad.h>
 #include <Structs/Skyrim/PartyQuestPreRepairCaptureAttemptPolicy.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 #include <array>
 #include <atomic>
@@ -166,6 +167,20 @@ PartyQuestSkyrimPreRepairSave::CaptureCoreSource(
 
     try
     {
+        // INV-LIFECYCLE-001: entering Skyrim's save pipeline is an external
+        // process side effect. Sharing the physical SaveGuard alone is not
+        // sufficient authority; the exact guarded session must be the one owned
+        // by the process runtime owner that receives LoadGame/disconnect/
+        // campaign-switch/shutdown fencing.
+        auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+        if (!runtimeOwner.IsBound() ||
+            runtimeOwner.GetGuardedSession() != &aGuardedSession)
+        {
+            result.Status =
+                PartyQuestSkyrimPreRepairSaveStatus::ProcessOwnerMismatch;
+            return result;
+        }
+
         auto& runtimeSession = aGuardedSession.GetRuntimeSession();
         const auto* active = runtimeSession.GetCoordinator().GetActive();
         if (!active ||
