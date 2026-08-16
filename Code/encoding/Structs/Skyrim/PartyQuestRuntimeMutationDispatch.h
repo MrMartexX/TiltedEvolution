@@ -12,6 +12,7 @@ enum class PartyQuestRuntimeMutationDispatchStatus : uint8_t
     Dispatched,
     InvalidRequest,
     InvalidRuntimeState,
+    ProcessOwnerMismatch,
     GuardMismatch,
     ObservationUnavailable,
     CompatibilityRejected,
@@ -53,6 +54,12 @@ struct PartyQuestRuntimeMutationDispatchResult
  * lease pins that generation, so a concurrent lifecycle/resolver invalidation
  * cannot silently cross the observation-to-dispatch boundary.
  *
+ * The production entrypoint additionally requires the exact guarded session
+ * owned by PartyQuestRuntimeSessionOwner::GetProcessOwner(). This prevents an
+ * otherwise valid private/test session from becoming a parallel mutation
+ * authority outside the lifecycle owner that receives LoadGame, disconnect,
+ * campaign-switch and shutdown fencing.
+ *
  * The generation is deliberately process-local and is never durable authority.
  * No reusable dispatch token escapes this call.
  */
@@ -65,7 +72,9 @@ public:
 
     /**
      * Production entrypoint. It always uses the shared process generation fence
-     * that lifecycle/load-order integration invalidates.
+     * and requires the exact shared process-owned guarded session that lifecycle
+     * integration fences. If production bootstrap has not bound that owner, the
+     * call fails closed before observation or durable mutation arming.
      */
     [[nodiscard]] static PartyQuestRuntimeMutationDispatchResult Dispatch(
         PartyQuestRuntimeGuardedSession& aGuardedSession,
@@ -76,8 +85,8 @@ public:
 
     /**
      * Explicit-fence seam for deterministic unit tests. Production integration
-     * should use the overload above so it cannot accidentally create an
-     * unrelated generation domain.
+     * must use the overload above: this seam deliberately does not consult the
+     * process owner because local test sessions are not production authority.
      */
     [[nodiscard]] static PartyQuestRuntimeMutationDispatchResult Dispatch(
         PartyQuestRuntimeGuardedSession& aGuardedSession,

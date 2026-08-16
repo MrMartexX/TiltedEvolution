@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeMutationDispatch.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 namespace
 {
@@ -82,6 +83,21 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
     const CompatibilityObserver& acObserver,
     const MutationExecutor& acExecutor)
 {
+    PartyQuestRuntimeMutationDispatchResult result;
+    result.ArmResult.TransactionId = acCurrentRequest.TransactionId;
+
+    // INV-LIFECYCLE-001: production mutation authority belongs to the exact
+    // process runtime owner that participates in LoadGame/disconnect/campaign
+    // switch/shutdown fencing. A private hydrated session may be useful for
+    // tests, but it must never become a parallel production mutation authority.
+    auto& processOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    if (!processOwner.IsBound() ||
+        processOwner.GetGuardedSession() != &aGuardedSession)
+    {
+        result.Status = PartyQuestRuntimeMutationDispatchStatus::ProcessOwnerMismatch;
+        return result;
+    }
+
     return Dispatch(
         aGuardedSession,
         acCurrentRequest,
