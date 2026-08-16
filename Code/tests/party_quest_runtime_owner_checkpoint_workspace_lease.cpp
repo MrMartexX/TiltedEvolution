@@ -3,6 +3,7 @@
 
 #include <party_quest_pre_repair_checkpoint_test_access.h>
 #include <party_quest_runtime_safety_test_access.h>
+#include <party_quest_runtime_session_owner_test_access.h>
 
 #include <catch2/catch.hpp>
 
@@ -127,9 +128,11 @@ TEST_CASE("Runtime owner reuses its exact workspace lease for PreRepair publicat
 {
     OwnerCheckpointSandbox sandbox;
     const auto paths = BuildOwnerCheckpointPaths(sandbox);
+
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
     REQUIRE_FALSE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
 
-    PartyQuestRuntimeSessionOwner owner;
     const auto bound = owner.Bind(
         kOwnerCheckpointCampaign,
         kOwnerCheckpointPlayer,
@@ -159,8 +162,8 @@ TEST_CASE("Runtime owner reuses its exact workspace lease for PreRepair publicat
             plan);
     REQUIRE(coverage.IsVerified());
 
-    // The RuntimeSessionOwner already holds the workspace kernel lease. This
-    // call must therefore use the exact session-bound publication capability;
+    // The shared RuntimeSessionOwner already holds the workspace kernel lease.
+    // This call must therefore use the exact session-bound publication capability;
     // a second standalone Acquire would return WorkspaceBusy.
     const auto checkpoint = guarded->EnsurePreRepairCheckpoint(
         paths,
