@@ -13,6 +13,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeReferenceReadiness.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
+#include <party_quest_runtime_session_owner_test_access.h>
 #include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
@@ -130,6 +131,7 @@ PartyQuestRuntimeGuardedSession& BindDeferredConsumeOwner(
 {
     auto& owner = ResetProcessOwner();
     aPaths = BuildDeferredConsumePaths(aSandbox.Root);
+    PartyQuestRuntimeSessionOwnerTestAccess::AuthorizeNextDirectProcessBindForTesting();
     const auto bound = owner.Bind(
         kDeferredConsumeCampaign,
         kDeferredConsumePlayer,

@@ -19,6 +19,12 @@ public:
         owner.m_allowNextDirectProcessBindForTesting = true;
     }
 
+    static void AuthorizeNextDirectProcessBindForTesting() noexcept
+    {
+        PartyQuestRuntimeSessionOwner::GetProcessOwner()
+            .m_allowNextDirectProcessBindForTesting = true;
+    }
+
     static void RevokeDirectProcessBindForTesting() noexcept
     {
         PartyQuestRuntimeSessionOwner::GetProcessOwner()
