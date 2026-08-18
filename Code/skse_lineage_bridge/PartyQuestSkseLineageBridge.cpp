@@ -29,7 +29,9 @@ constexpr UInt32 FourCC(char a, char b, char c, char d) noexcept
 }
 
 constexpr UInt32 kSerializationUid = FourCC('P', 'Q', 'L', 'B');
-constexpr UInt32 kRecordType = FourCC('L', 'N', 'G', '1');
+// This record binds the canonical local PlayerProfileId to one exact SKSE
+// co-save lineage. It does not create a second lineage-identity namespace.
+constexpr UInt32 kRecordType = FourCC('P', 'F', 'B', '1');
 
 struct PluginInfo
 {
@@ -111,7 +113,7 @@ enum class EvidenceState : UInt32
     Invalid = 3u
 };
 
-struct LineageId
+struct ProfileId
 {
     UInt64 High{};
     UInt64 Low{};
@@ -122,7 +124,7 @@ struct LineageId
     }
 };
 
-struct LineageRecordV1
+struct ProfileBindingRecordV1
 {
     UInt64 High{};
     UInt64 Low{};
@@ -140,15 +142,15 @@ struct PartyQuestLineageBridgeSnapshot
     UInt64 ProfileLow{};
 };
 
-static_assert(sizeof(LineageRecordV1) == 24u);
+static_assert(sizeof(ProfileBindingRecordV1) == 24u);
 static_assert(sizeof(PartyQuestLineageBridgeSnapshot) == 40u);
 
-constexpr UInt32 kRecordSize = static_cast<UInt32>(sizeof(LineageRecordV1));
+constexpr UInt32 kRecordSize = static_cast<UInt32>(sizeof(ProfileBindingRecordV1));
 constexpr UInt32 kSnapshotSize = static_cast<UInt32>(sizeof(PartyQuestLineageBridgeSnapshot));
 
 std::mutex g_stateMutex;
 EvidenceState g_state = EvidenceState::Unavailable;
-LineageId g_lineage{};
+ProfileId g_profileId{};
 UInt64 g_sequence = 1u;
 
 void AdvanceSequenceLocked() noexcept
@@ -158,15 +160,15 @@ void AdvanceSequenceLocked() noexcept
         ++g_sequence;
 }
 
-void Publish(EvidenceState aState, LineageId aLineage = {}) noexcept
+void Publish(EvidenceState aState, ProfileId aProfileId = {}) noexcept
 {
     std::lock_guard lock(g_stateMutex);
     g_state = aState;
-    g_lineage = aLineage;
+    g_profileId = aProfileId;
     AdvanceSequenceLocked();
 }
 
-UInt64 ComputeChecksum(const LineageId& acLineage) noexcept
+UInt64 ComputeChecksum(const ProfileId& acProfileId) noexcept
 {
     // This checksum detects accidental corruption only. It is deterministic and
     // deliberately carries no authentication, trust or issuer semantics.
@@ -175,7 +177,7 @@ UInt64 ComputeChecksum(const LineageId& acLineage) noexcept
     constexpr UInt64 kDomain = 0x3156474E4C515450ull;
 
     UInt64 value = kFnvOffset;
-    const UInt64 words[] = {kDomain, acLineage.High, acLineage.Low};
+    const UInt64 words[] = {kDomain, acProfileId.High, acProfileId.Low};
     for (const UInt64 word : words)
     {
         for (UInt32 shift = 0u; shift < 64u; shift += 8u)
@@ -187,17 +189,17 @@ UInt64 ComputeChecksum(const LineageId& acLineage) noexcept
     return value;
 }
 
-bool IsValidRecord(const LineageRecordV1& acRecord) noexcept
+bool IsValidRecord(const ProfileBindingRecordV1& acRecord) noexcept
 {
-    const LineageId lineage{acRecord.High, acRecord.Low};
-    return lineage.IsValid() && acRecord.Checksum == ComputeChecksum(lineage);
+    const ProfileId profileId{acRecord.High, acRecord.Low};
+    return profileId.IsValid() && acRecord.Checksum == ComputeChecksum(profileId);
 }
 
-bool GenerateLineage(LineageId& aLineage) noexcept
+bool GenerateProfileId(ProfileId& aProfileId) noexcept
 {
     for (int attempt = 0; attempt < 2; ++attempt)
     {
-        LineageId candidate{};
+        ProfileId candidate{};
         const NTSTATUS status = BCryptGenRandom(
             nullptr,
             reinterpret_cast<PUCHAR>(&candidate),
@@ -205,24 +207,27 @@ bool GenerateLineage(LineageId& aLineage) noexcept
             BCRYPT_USE_SYSTEM_PREFERRED_RNG);
         if (status >= 0 && candidate.IsValid())
         {
-            aLineage = candidate;
+            aProfileId = candidate;
             return true;
         }
     }
 
-    aLineage = {};
+    aProfileId = {};
     return false;
 }
 
 void PublishNewGameCandidate() noexcept
 {
-    LineageId candidate{};
-    if (!GenerateLineage(candidate))
+    ProfileId candidate{};
+    if (!GenerateProfileId(candidate))
     {
         Publish(EvidenceState::Invalid);
         return;
     }
 
+    // This is the canonical PlayerProfileId candidate for a newly-created
+    // character. It is data only until that exact id survives a co-save write
+    // and a later readback from the same character's co-save.
     Publish(EvidenceState::CandidateUnpersisted, candidate);
 }
 
@@ -237,23 +242,23 @@ void OnSerializationSave(SKSESerializationInterface* apSerialization)
         return;
 
     EvidenceState state{};
-    LineageId lineage{};
+    ProfileId profileId{};
     {
         std::lock_guard lock(g_stateMutex);
         state = g_state;
-        lineage = g_lineage;
+        profileId = g_profileId;
     }
 
     if ((state != EvidenceState::CandidateUnpersisted && state != EvidenceState::Persisted) ||
-        !lineage.IsValid())
+        !profileId.IsValid())
     {
         return;
     }
 
-    const LineageRecordV1 record{
-        lineage.High,
-        lineage.Low,
-        ComputeChecksum(lineage)};
+    const ProfileBindingRecordV1 record{
+        profileId.High,
+        profileId.Low,
+        ComputeChecksum(profileId)};
 
     // SKSE accepts this bounded record for the in-progress co-save before the
     // complete Skyrim save result is known. Do not promote a new candidate to
@@ -275,7 +280,7 @@ void OnSerializationLoad(SKSESerializationInterface* apSerialization)
 
     bool found = false;
     bool invalid = false;
-    LineageRecordV1 loaded{};
+    ProfileBindingRecordV1 loaded{};
 
     UInt32 type = 0u;
     UInt32 version = 0u;
@@ -288,7 +293,7 @@ void OnSerializationLoad(SKSESerializationInterface* apSerialization)
             break;
         }
 
-        LineageRecordV1 candidate{};
+        ProfileBindingRecordV1 candidate{};
         if (apSerialization->ReadRecordData(&candidate, kRecordSize) != kRecordSize)
         {
             invalid = true;
@@ -332,13 +337,24 @@ void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
         Publish(EvidenceState::Unavailable);
         break;
     case SKSEMessagingInterface::kMessagePostLoadGame:
-        // SKSE 2.0.20 dispatches false as a null pointer value.
-        if (apMessage->data == nullptr)
+    {
+        // SKSE 2.0.20 encodes the one-byte bool result directly in the void*
+        // value. Reject any other shape rather than guessing success semantics.
+        const auto result = reinterpret_cast<uintptr_t>(apMessage->data);
+        if (apMessage->dataLen != 1u || result > 1u)
+        {
+            Publish(EvidenceState::Invalid);
+        }
+        else if (result == 0u)
+        {
             Publish(EvidenceState::Unavailable);
+        }
         break;
+    }
     case SKSEMessagingInterface::kMessageNewGame:
-        // A new lineage exists in memory, but it is not authorization until the
-        // record has survived a save and a later exact co-save load.
+        // This SKSE message is post-NewGame_Internal. It is sufficient to issue
+        // a new unpersisted profile candidate, but NOT to serve as STR's
+        // pre-transition runtime-owner/generation fence.
         PublishNewGameCandidate();
         break;
     default:
@@ -360,8 +376,8 @@ extern "C" __declspec(dllexport) bool PartyQuestLineageBridge_GetSnapshot(
     snapshot.StructSize = kSnapshotSize;
     snapshot.Sequence = g_sequence;
     snapshot.State = static_cast<UInt32>(g_state);
-    snapshot.ProfileHigh = g_lineage.High;
-    snapshot.ProfileLow = g_lineage.Low;
+    snapshot.ProfileHigh = g_profileId.High;
+    snapshot.ProfileLow = g_profileId.Low;
     std::memcpy(apSnapshot, &snapshot, sizeof(snapshot));
     return true;
 }
