@@ -74,11 +74,19 @@ TEST_CASE("stable-storage file flush works without claiming cross-platform direc
 
     REQUIRE(PartyQuestStableStorage::FlushFile(path) ==
         PartyQuestStableStorageStatus::Success);
+    REQUIRE(PartyQuestStableStorage::FlushFile(root) !=
+        PartyQuestStableStorageStatus::Success);
 #ifdef _WIN32
     REQUIRE(PartyQuestStableStorage::FlushParentDirectory(path) ==
         PartyQuestStableStorageStatus::Unsupported);
 #else
     REQUIRE(PartyQuestStableStorage::FlushParentDirectory(path) ==
+        PartyQuestStableStorageStatus::Success);
+
+    const auto link = root / "barrier-link.bin";
+    std::filesystem::create_symlink(path, link, ec);
+    REQUIRE_FALSE(ec);
+    REQUIRE(PartyQuestStableStorage::FlushFile(link) !=
         PartyQuestStableStorageStatus::Success);
 #endif
 
