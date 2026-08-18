@@ -130,3 +130,53 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::FlushParentDirectory(
         return PartyQuestStableStorageStatus::InvalidPath;
     }
 }
+
+PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
+    const std::filesystem::path& acSource,
+    const std::filesystem::path& acDestination) noexcept
+{
+    if (acSource.empty() || acDestination.empty())
+        return PartyQuestStableStorageStatus::InvalidPath;
+
+#ifdef _WIN32
+    // P0-H deliberately has no Windows publication claim yet. File-level
+    // FlushFileBuffers alone is not treated as proof that the destination
+    // directory entry is durably published.
+    return PartyQuestStableStorageStatus::Unsupported;
+#else
+    try
+    {
+        std::error_code ec;
+        const auto source = std::filesystem::absolute(acSource, ec).lexically_normal();
+        if (ec || source.empty() || source.parent_path().empty())
+            return PartyQuestStableStorageStatus::InvalidPath;
+
+        ec.clear();
+        const auto destination =
+            std::filesystem::absolute(acDestination, ec).lexically_normal();
+        if (ec || destination.empty() || destination.parent_path().empty())
+            return PartyQuestStableStorageStatus::InvalidPath;
+
+        if (source == destination || source.parent_path() != destination.parent_path())
+            return PartyQuestStableStorageStatus::CrossDirectoryRename;
+
+        const auto fileFlush = FlushFile(source);
+        if (fileFlush != PartyQuestStableStorageStatus::Success)
+            return fileFlush;
+
+        ec.clear();
+        std::filesystem::rename(source, destination, ec);
+        if (ec)
+            return PartyQuestStableStorageStatus::RenameFailed;
+
+        // Once rename has succeeded a failed directory fsync is an uncertain
+        // publication, not a reason to pretend the old namespace is restored.
+        // The caller must keep transaction/recovery authority and fail closed.
+        return FlushDirectory(destination.parent_path());
+    }
+    catch (...)
+    {
+        return PartyQuestStableStorageStatus::InvalidPath;
+    }
+#endif
+}
