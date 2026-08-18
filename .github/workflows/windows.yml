@@ -120,6 +120,23 @@ jobs:
           xmake install -o distrib
           cp -Force -Recurse distrib/bin/* ${{ env.STR_BUILD_DIR }}
 
+      - name: Stage SKSE lineage bridge
+        if: steps.scope.outputs.full == 'true'
+        shell: pwsh
+        run: |
+          $plugin = Join-Path $env:STR_BUILD_DIR "SkyrimTogetherLineageBridge.dll"
+          $pluginDir = "GameFiles/Skyrim/SKSE/Plugins"
+          if (-not (Test-Path -LiteralPath $plugin -PathType Leaf)) {
+            throw "Missing built SKSE lineage bridge: $plugin"
+          }
+
+          New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
+          Move-Item -LiteralPath $plugin -Destination (Join-Path $pluginDir "SkyrimTogetherLineageBridge.dll") -Force
+
+          if (-not (Test-Path -LiteralPath (Join-Path $pluginDir "SkyrimTogetherLineageBridge.dll") -PathType Leaf)) {
+            throw "Failed to stage SKSE lineage bridge in Data-relative plugin layout"
+          }
+
       # Building the Together UI
       - name: Setup pnpm
         if: steps.scope.outputs.full == 'true'
