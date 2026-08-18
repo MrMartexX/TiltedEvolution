@@ -123,3 +123,29 @@ PartyQuestRuntimeCanonicalInbox::FindLatest(
     const auto it = m_pendingByQuest.find(acQuestId);
     return it != m_pendingByQuest.end() ? &it->second : nullptr;
 }
+
+std::optional<PartyQuestRuntimeCanonicalAuthorization>
+PartyQuestRuntimeCanonicalInbox::TryAuthorizeLatest(
+    const GameId& acQuestId,
+    const PartyQuestReplica& acPublishedReplica) const noexcept
+{
+    if (!m_campaignId.IsValid() || !acQuestId)
+        return std::nullopt;
+
+    const auto it = m_pendingByQuest.find(acQuestId);
+    if (it == m_pendingByQuest.end())
+        return std::nullopt;
+
+    const auto& candidate = it->second;
+    if (candidate.CampaignId != m_campaignId ||
+        !MatchesPublishedReplicaHead(candidate, acPublishedReplica))
+    {
+        return std::nullopt;
+    }
+
+    PartyQuestRuntimeCanonicalAuthorization authorization(candidate);
+    if (!authorization.IsVerified())
+        return std::nullopt;
+
+    return authorization;
+}
