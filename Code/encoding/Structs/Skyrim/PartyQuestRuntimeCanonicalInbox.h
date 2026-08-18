@@ -126,8 +126,7 @@ private:
               acCandidate.TransactionId != 0 &&
               acCandidate.WorldRevision != 0 &&
               static_cast<bool>(acCandidate.CanonicalSnapshot.QuestId) &&
-              acCandidate.CanonicalSnapshot.Revision != 0 &&
-              m_canonicalDigest != 0)
+              acCandidate.CanonicalSnapshot.Revision != 0)
     {
     }
 
