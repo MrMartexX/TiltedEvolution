@@ -117,7 +117,6 @@ jobs:
           $needsFull = ("${{ github.event_name }}" -ne "pull_request") -or ("${{ github.event.action }}" -ne "synchronize") -or [string]::IsNullOrWhiteSpace("${{ github.event.before }}") -or [string]::IsNullOrWhiteSpace("${{ github.event.after }}")
           if ($needsFull) {
             "full=true" >> $env:GITHUB_OUTPUT
-            "tests=true" >> $env:GITHUB_OUTPUT
             Write-Host "Full validation: non-synchronize event or missing push range."
             exit 0
           }
@@ -126,23 +125,18 @@ jobs:
           $after = "${{ github.event.after }}"
           $files = @(git diff --name-only $before $after)
           $isolated = $files.Count -gt 0
-          $hasPartyQuestTests = $false
 
           foreach ($file in $files) {
             $isPartyQuest = ($file -match '^Code/encoding/Structs/Skyrim/PartyQuest') -or ($file -match '^Code/tests/party_quest_')
             if (-not $isPartyQuest) {
               $isolated = $false
             }
-            if ($file -match '^Code/tests/party_quest_') {
-              $hasPartyQuestTests = $true
-            }
           }
 
           $full = (-not $isolated).ToString().ToLowerInvariant()
           "full=$full" >> $env:GITHUB_OUTPUT
-          "tests=$($hasPartyQuestTests.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
           Write-Host "PartyQuest-only pushed range: $isolated"
-          Write-Host "PartyQuest tests changed: $hasPartyQuestTests"
+          Write-Host "Windows TPTests are unconditional for every diagnostics run."
 
       - name: Checkout submodules
         run: |
@@ -167,12 +161,14 @@ jobs:
       - name: Build Windows validation target and capture diagnostics
         shell: pwsh
         run: |
+          # TPTests are intentionally unconditional. A sequence of synchronized
+          # pushes may cancel the run that contained a test-file change; using
+          # only the latest push range to decide whether to run tests could then
+          # produce a false validation signal for the current PR HEAD.
           $targets = if ("${{ steps.scope.outputs.full }}" -eq "true") {
             @("SkyrimTogetherClient", "TPTests")
-          } elseif ("${{ steps.scope.outputs.tests }}" -eq "true") {
-            @("TPTests")
           } else {
-            @("SkyrimEncoding")
+            @("TPTests")
           }
 
           Set-Content poc-windows-build.log ""
@@ -186,7 +182,7 @@ jobs:
             }
           }
 
-          if ($status -eq 0 -and $targets -contains "TPTests") {
+          if ($status -eq 0) {
             Write-Host "Running Windows TPTests"
             $testTemp = Join-Path $env:RUNNER_TEMP "tpq"
             New-Item -ItemType Directory -Force -Path $testTemp | Out-Null
