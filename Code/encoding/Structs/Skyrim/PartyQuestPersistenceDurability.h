@@ -17,6 +17,13 @@ enum class PartyQuestPersistenceGuarantee : uint8_t
  * does not issue OS/file/device and parent-directory durable flushes, so it
  * must never be advertised as power-loss durable.
  *
+ * P0-H now has narrow OS-level stable-storage primitives for file flushes and,
+ * on Linux, directory fsync. Those primitives are evidence only until every
+ * authoritative metadata/data publication path adopts the required ordering.
+ * The Windows parent-directory publication barrier also remains deliberately
+ * unsupported rather than inferred from undocumented or administrator-only
+ * mechanisms. Therefore their existence does not upgrade CurrentLocalGuarantee.
+ *
  * Terminology rule: legacy identifiers/comments that use "durable" describe
  * persisted transaction/recovery ordering only within CurrentLocalGuarantee
  * unless they explicitly require PowerLossDurable. Such naming is not evidence
