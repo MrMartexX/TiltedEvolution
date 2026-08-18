@@ -20,12 +20,12 @@ enum class PartyQuestStableStorageStatus : uint8_t
  * These calls provide evidence about an individual flush operation only. They
  * do not authorize a filesystem path, do not make a multi-file transaction
  * atomic and do not by themselves upgrade PartyQuestPersistenceDurabilityPolicy.
- * Callers must retain their existing path confinement, verification and
- * recovery ordering.
+ * Callers must retain their existing path confinement, ancestor/topology
+ * validation, verification and recovery ordering.
  *
- * FlushFile rejects symlink/reparse and non-regular-file nodes rather than
- * following them. That makes a later durability barrier fail closed if the
- * namespace changes between a caller's path validation and the OS flush.
+ * FlushFile rejects a symlink/reparse final node and non-regular-file nodes
+ * rather than intentionally following them. This is only final-node hardening;
+ * it is not a replacement for the caller's confined namespace proof.
  */
 struct PartyQuestStableStorage
 {
