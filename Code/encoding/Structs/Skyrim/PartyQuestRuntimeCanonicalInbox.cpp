@@ -147,5 +147,6 @@ PartyQuestRuntimeCanonicalInbox::TryAuthorizeLatest(
     if (!authorization.IsVerified())
         return std::nullopt;
 
-    return authorization;
+    return std::optional<PartyQuestRuntimeCanonicalAuthorization>{
+        std::move(authorization)};
 }
