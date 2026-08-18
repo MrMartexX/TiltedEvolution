@@ -126,7 +126,7 @@ struct LineageRecordV1
 {
     UInt64 High{};
     UInt64 Low{};
-    UInt64 Integrity{};
+    UInt64 Checksum{};
 };
 
 struct PartyQuestLineageBridgeSnapshot
@@ -166,8 +166,10 @@ void Publish(EvidenceState aState, LineageId aLineage = {}) noexcept
     AdvanceSequenceLocked();
 }
 
-UInt64 ComputeIntegrity(const LineageId& acLineage) noexcept
+UInt64 ComputeChecksum(const LineageId& acLineage) noexcept
 {
+    // This checksum detects accidental corruption only. It is deterministic and
+    // deliberately carries no authentication, trust or issuer semantics.
     constexpr UInt64 kFnvOffset = 14695981039346656037ull;
     constexpr UInt64 kFnvPrime = 1099511628211ull;
     constexpr UInt64 kDomain = 0x3156474E4C515450ull;
@@ -188,7 +190,7 @@ UInt64 ComputeIntegrity(const LineageId& acLineage) noexcept
 bool IsValidRecord(const LineageRecordV1& acRecord) noexcept
 {
     const LineageId lineage{acRecord.High, acRecord.Low};
-    return lineage.IsValid() && acRecord.Integrity == ComputeIntegrity(lineage);
+    return lineage.IsValid() && acRecord.Checksum == ComputeChecksum(lineage);
 }
 
 bool GenerateLineage(LineageId& aLineage) noexcept
@@ -251,7 +253,7 @@ void OnSerializationSave(SKSESerializationInterface* apSerialization)
     const LineageRecordV1 record{
         lineage.High,
         lineage.Low,
-        ComputeIntegrity(lineage)};
+        ComputeChecksum(lineage)};
 
     // SKSE accepts this bounded record for the in-progress co-save before the
     // complete Skyrim save result is known. Do not promote a new candidate to
