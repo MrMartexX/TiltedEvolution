@@ -3,6 +3,33 @@
 #include <utility>
 
 PartyQuestRuntimeRequestPlanResult PartyQuestRuntimeRequestPlanner::Build(
+    PartyQuestRuntimeCanonicalCandidate aCandidate,
+    PartyQuestRuntimeCanonicalAuthorization&& aCanonicalAuthorization,
+    const PartyQuestSyncFacts& acLocalSyncFacts,
+    const PartyQuestRuntimeCompatibilityRequirement& acCompatibilityRequirement,
+    const PartyQuestRuntimeCompatibilityFacts& acLocalCompatibilityFacts,
+    const PartyQuestCheckpointSidecarManifest& acSidecarManifest)
+{
+    PartyQuestRuntimeRequestPlanResult result;
+
+    aCandidate.CanonicalSnapshot.Canonicalize();
+    if (!aCanonicalAuthorization.Consume(aCandidate))
+    {
+        result.Status = PartyQuestRuntimeRequestPlanStatus::CanonicalProvenanceRejected;
+        return result;
+    }
+
+    return BuildDiagnostic(
+        aCandidate.TransactionId,
+        aCandidate.WorldRevision,
+        std::move(aCandidate.CanonicalSnapshot),
+        acLocalSyncFacts,
+        acCompatibilityRequirement,
+        acLocalCompatibilityFacts,
+        acSidecarManifest);
+}
+
+PartyQuestRuntimeRequestPlanResult PartyQuestRuntimeRequestPlanner::BuildDiagnostic(
     uint64_t aTransactionId,
     uint64_t aTargetWorldRevision,
     QuestSnapshot aCanonicalSnapshot,
