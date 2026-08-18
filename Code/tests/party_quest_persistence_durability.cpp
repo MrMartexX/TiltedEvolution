@@ -123,6 +123,10 @@ TEST_CASE("stable rename publication is same-directory and fail-closed by platfo
         REQUIRE(file.good());
     }
 
+    REQUIRE(PartyQuestStableStorage::PublishFileRename(source, source) ==
+        PartyQuestStableStorageStatus::CrossDirectoryRename);
+    REQUIRE(std::filesystem::exists(source));
+
     REQUIRE(PartyQuestStableStorage::PublishFileRename(
         source,
         crossDirectoryDestination) ==
