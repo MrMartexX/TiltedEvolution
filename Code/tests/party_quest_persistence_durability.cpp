@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <string>
 
 TEST_CASE("PoC durability policy explicitly stops below power-loss durability", "[quest.party-state.durability]")
 {
