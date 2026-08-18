@@ -143,6 +143,9 @@ struct PartyQuestLineageBridgeSnapshot
 static_assert(sizeof(LineageRecordV1) == 24u);
 static_assert(sizeof(PartyQuestLineageBridgeSnapshot) == 40u);
 
+constexpr UInt32 kRecordSize = static_cast<UInt32>(sizeof(LineageRecordV1));
+constexpr UInt32 kSnapshotSize = static_cast<UInt32>(sizeof(PartyQuestLineageBridgeSnapshot));
+
 std::mutex g_stateMutex;
 EvidenceState g_state = EvidenceState::Unavailable;
 LineageId g_lineage{};
@@ -167,7 +170,7 @@ UInt64 ComputeIntegrity(const LineageId& acLineage) noexcept
 {
     constexpr UInt64 kFnvOffset = 14695981039346656037ull;
     constexpr UInt64 kFnvPrime = 1099511628211ull;
-    constexpr UInt64 kDomain = 0x3156474E4C515450ull; // "PTQLNGV1" domain marker.
+    constexpr UInt64 kDomain = 0x3156474E4C515450ull;
 
     UInt64 value = kFnvOffset;
     const UInt64 words[] = {kDomain, acLineage.High, acLineage.Low};
@@ -250,16 +253,14 @@ void OnSerializationSave(SKSESerializationInterface* apSerialization)
         lineage.Low,
         ComputeIntegrity(lineage)};
 
-    // WriteRecord success only proves that SKSE accepted this bounded record for
-    // the in-progress co-save. It is deliberately NOT promoted to Persisted here:
-    // SKSE's save message/callback occurs before the complete Skyrim save pipeline
-    // is known to have succeeded. Persisted evidence is issued only after a later
-    // load reads the exact record back from that character's co-save.
+    // SKSE accepts this bounded record for the in-progress co-save before the
+    // complete Skyrim save result is known. Do not promote a new candidate to
+    // Persisted here; only a later exact co-save load can issue that evidence.
     apSerialization->WriteRecord(
         kRecordType,
         kRecordVersion,
         &record,
-        static_cast<UInt32>(sizeof(record)));
+        kRecordSize);
 }
 
 void OnSerializationLoad(SKSESerializationInterface* apSerialization)
@@ -279,14 +280,14 @@ void OnSerializationLoad(SKSESerializationInterface* apSerialization)
     UInt32 length = 0u;
     while (apSerialization->GetNextRecordInfo(&type, &version, &length))
     {
-        if (found || type != kRecordType || version != kRecordVersion || length != sizeof(LineageRecordV1))
+        if (found || type != kRecordType || version != kRecordVersion || length != kRecordSize)
         {
             invalid = true;
             break;
         }
 
         LineageRecordV1 candidate{};
-        if (apSerialization->ReadRecordData(&candidate, static_cast<UInt32>(sizeof(candidate))) != sizeof(candidate))
+        if (apSerialization->ReadRecordData(&candidate, kRecordSize) != kRecordSize)
         {
             invalid = true;
             break;
@@ -329,7 +330,7 @@ void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
         Publish(EvidenceState::Unavailable);
         break;
     case SKSEMessagingInterface::kMessagePostLoadGame:
-        // SKSE 2.0.20 dispatches the load result as a null/non-null pointer value.
+        // SKSE 2.0.20 dispatches false as a null pointer value.
         if (apMessage->data == nullptr)
             Publish(EvidenceState::Unavailable);
         break;
@@ -348,13 +349,13 @@ extern "C" __declspec(dllexport) bool PartyQuestLineageBridge_GetSnapshot(
     PartyQuestLineageBridgeSnapshot* apSnapshot,
     uint32_t aSnapshotSize)
 {
-    if (!apSnapshot || aSnapshotSize != sizeof(PartyQuestLineageBridgeSnapshot))
+    if (!apSnapshot || aSnapshotSize != kSnapshotSize)
         return false;
 
     std::lock_guard lock(g_stateMutex);
     PartyQuestLineageBridgeSnapshot snapshot{};
     snapshot.AbiVersion = kSnapshotAbiVersion;
-    snapshot.StructSize = static_cast<UInt32>(sizeof(snapshot));
+    snapshot.StructSize = kSnapshotSize;
     snapshot.Sequence = g_sequence;
     snapshot.State = static_cast<UInt32>(g_state);
     snapshot.ProfileHigh = g_lineage.High;
