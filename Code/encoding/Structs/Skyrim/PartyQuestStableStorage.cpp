@@ -9,6 +9,7 @@
 #include <Windows.h>
 #else
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
@@ -22,13 +23,21 @@ PartyQuestStableStorageStatus FlushPosixPath(
     if (acPath.empty())
         return PartyQuestStableStorageStatus::InvalidPath;
 
-    int flags = O_RDONLY | O_CLOEXEC;
+    int flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW;
     if (aDirectory)
         flags |= O_DIRECTORY;
 
     const int descriptor = ::open(acPath.c_str(), flags);
     if (descriptor < 0)
         return PartyQuestStableStorageStatus::OpenFailed;
+
+    struct stat status{};
+    if (::fstat(descriptor, &status) != 0 ||
+        (aDirectory ? !S_ISDIR(status.st_mode) : !S_ISREG(status.st_mode)))
+    {
+        ::close(descriptor);
+        return PartyQuestStableStorageStatus::NodeValidationFailed;
+    }
 
     if (::fsync(descriptor) != 0)
     {
@@ -57,10 +66,19 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::FlushFile(
         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
         nullptr,
         OPEN_EXISTING,
-        FILE_ATTRIBUTE_NORMAL,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
         nullptr);
     if (file == INVALID_HANDLE_VALUE)
         return PartyQuestStableStorageStatus::OpenFailed;
+
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!::GetFileInformationByHandle(file, &information) ||
+        (information.dwFileAttributes &
+            (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0)
+    {
+        ::CloseHandle(file);
+        return PartyQuestStableStorageStatus::NodeValidationFailed;
+    }
 
     if (!::FlushFileBuffers(file))
     {
