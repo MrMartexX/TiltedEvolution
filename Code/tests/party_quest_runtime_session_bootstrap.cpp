@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionBootstrap.h>
 
 #include <party_quest_runtime_session_owner_test_access.h>
@@ -25,6 +26,23 @@ public:
             aExactCharacterLineage,
             aPersistedWithCharacterLineage,
             aFilenameIndependent);
+    }
+};
+
+class PartyQuestRuntimeSessionBootstrapTestAccess final
+{
+public:
+    [[nodiscard]] static PartyQuestRuntimeSessionBootstrapResult
+    BindIgnoringLifecycleCoverage(
+        const std::filesystem::path& acCoopReplicaRoot,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileLineageAuthorization& acPlayerProfile) noexcept
+    {
+        return PartyQuestRuntimeSessionBootstrap::BindProcessOwnerInternal(
+            acCoopReplicaRoot,
+            acCampaignId,
+            acPlayerProfile,
+            false);
     }
 };
 
@@ -120,7 +138,36 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Runtime bootstrap binds exact profile layout under the current generation lease",
+    "Production runtime bootstrap remains blocked until all character identity transitions are fenced",
+    "[quest.party-state.runtime-bootstrap][identity][lifecycle]")
+{
+    BootstrapSandbox sandbox;
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+
+    STATIC_REQUIRE(PartyQuestRuntimeLifecycleIntegrationPolicy::
+        HasVerifiedPreTransitionHook(PartyQuestRuntimeLifecycleEvent::LoadGame));
+    STATIC_REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
+        HasVerifiedPreTransitionHook(PartyQuestRuntimeLifecycleEvent::NewGame));
+    STATIC_REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
+        HasVerifiedPreTransitionHook(PartyQuestRuntimeLifecycleEvent::MainMenu));
+    STATIC_REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
+        HasCompleteCharacterIdentityCoverage());
+
+    const auto authorization = IssueForCurrentGeneration();
+    REQUIRE(authorization.IsVerified());
+    const auto blocked = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
+        sandbox.CoopRoot,
+        kBootstrapCampaign,
+        authorization);
+    REQUIRE(blocked.Status ==
+        PartyQuestRuntimeSessionBootstrapStatus::LifecycleCoverageIncomplete);
+    REQUIRE_FALSE(blocked.IsBound());
+    REQUIRE_FALSE(owner.IsBound());
+}
+
+TEST_CASE(
+    "Runtime bootstrap test seam binds exact profile layout under the current generation lease",
     "[quest.party-state.runtime-bootstrap][identity][generation]")
 {
     BootstrapSandbox sandbox;
@@ -131,10 +178,11 @@ TEST_CASE(
     const auto authorization = IssueForCurrentGeneration();
     REQUIRE(authorization.IsVerified());
 
-    const auto bound = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
-        sandbox.CoopRoot,
-        kBootstrapCampaign,
-        authorization);
+    const auto bound =
+        PartyQuestRuntimeSessionBootstrapTestAccess::BindIgnoringLifecycleCoverage(
+            sandbox.CoopRoot,
+            kBootstrapCampaign,
+            authorization);
     REQUIRE(bound.Status == PartyQuestRuntimeSessionBootstrapStatus::Bound);
     REQUIRE(bound.IsBound());
     REQUIRE(bound.Owner.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
@@ -151,10 +199,11 @@ TEST_CASE(
     REQUIRE(owner.GetPaths() != nullptr);
     REQUIRE(*owner.GetPaths() == *expectedPaths);
 
-    const auto duplicate = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
-        sandbox.CoopRoot,
-        kBootstrapCampaign,
-        authorization);
+    const auto duplicate =
+        PartyQuestRuntimeSessionBootstrapTestAccess::BindIgnoringLifecycleCoverage(
+            sandbox.CoopRoot,
+            kBootstrapCampaign,
+            authorization);
     REQUIRE(duplicate.Status == PartyQuestRuntimeSessionBootstrapStatus::Bound);
     REQUIRE(duplicate.Owner.Status ==
         PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound);
