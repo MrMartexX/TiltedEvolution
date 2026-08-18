@@ -5,7 +5,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
+#include <utility>
 
 class PartyQuestReplica;
 
@@ -30,6 +32,114 @@ struct PartyQuestRuntimeCanonicalCandidate
     QuestSnapshot CanonicalSnapshot;
 
     bool operator==(const PartyQuestRuntimeCanonicalCandidate&) const noexcept = default;
+};
+
+/**
+ * One-shot process-local proof that an exact runtime candidate passed the
+ * canonical inbox and was still the current published replica head when the
+ * capability was issued.
+ *
+ * This is provenance authority, not authentication. The network/protocol layer
+ * is still responsible for admitting only verified server canonical deliveries
+ * into PartyQuestRuntimeCanonicalInbox. Public callers cannot construct a
+ * verified token, and a token is consumed by runtime request planning so it
+ * cannot authorize a second locally reconstructed request.
+ */
+class PartyQuestRuntimeCanonicalAuthorization final
+{
+public:
+    PartyQuestRuntimeCanonicalAuthorization() noexcept = default;
+    PartyQuestRuntimeCanonicalAuthorization(
+        const PartyQuestRuntimeCanonicalAuthorization&) = delete;
+    PartyQuestRuntimeCanonicalAuthorization& operator=(
+        const PartyQuestRuntimeCanonicalAuthorization&) = delete;
+
+    PartyQuestRuntimeCanonicalAuthorization(
+        PartyQuestRuntimeCanonicalAuthorization&& aOther) noexcept
+    {
+        *this = std::move(aOther);
+    }
+
+    PartyQuestRuntimeCanonicalAuthorization& operator=(
+        PartyQuestRuntimeCanonicalAuthorization&& aOther) noexcept
+    {
+        if (this == &aOther)
+            return *this;
+
+        m_campaignId = aOther.m_campaignId;
+        m_transactionId = aOther.m_transactionId;
+        m_worldRevision = aOther.m_worldRevision;
+        m_questId = aOther.m_questId;
+        m_questRevision = aOther.m_questRevision;
+        m_canonicalDigest = aOther.m_canonicalDigest;
+        m_issued = aOther.m_issued;
+
+        aOther.m_campaignId = {};
+        aOther.m_transactionId = 0;
+        aOther.m_worldRevision = 0;
+        aOther.m_questId = {};
+        aOther.m_questRevision = 0;
+        aOther.m_canonicalDigest = 0;
+        aOther.m_issued = false;
+        return *this;
+    }
+
+    [[nodiscard]] bool IsVerified() const noexcept
+    {
+        return m_issued;
+    }
+
+    [[nodiscard]] bool Matches(
+        const PartyQuestRuntimeCanonicalCandidate& acCandidate) const noexcept
+    {
+        return m_issued &&
+            acCandidate.CampaignId == m_campaignId &&
+            acCandidate.TransactionId == m_transactionId &&
+            acCandidate.WorldRevision == m_worldRevision &&
+            acCandidate.CanonicalSnapshot.QuestId == m_questId &&
+            acCandidate.CanonicalSnapshot.Revision == m_questRevision &&
+            acCandidate.CanonicalSnapshot.ComputeDigest() == m_canonicalDigest;
+    }
+
+    /** Consumes this capability only when the exact candidate still matches. */
+    [[nodiscard]] bool Consume(
+        const PartyQuestRuntimeCanonicalCandidate& acCandidate) noexcept
+    {
+        if (!Matches(acCandidate))
+            return false;
+
+        m_issued = false;
+        return true;
+    }
+
+private:
+    explicit PartyQuestRuntimeCanonicalAuthorization(
+        const PartyQuestRuntimeCanonicalCandidate& acCandidate) noexcept
+        : m_campaignId(acCandidate.CampaignId)
+        , m_transactionId(acCandidate.TransactionId)
+        , m_worldRevision(acCandidate.WorldRevision)
+        , m_questId(acCandidate.CanonicalSnapshot.QuestId)
+        , m_questRevision(acCandidate.CanonicalSnapshot.Revision)
+        , m_canonicalDigest(acCandidate.CanonicalSnapshot.ComputeDigest())
+        , m_issued(
+              acCandidate.CampaignId.IsValid() &&
+              acCandidate.TransactionId != 0 &&
+              acCandidate.WorldRevision != 0 &&
+              static_cast<bool>(acCandidate.CanonicalSnapshot.QuestId) &&
+              acCandidate.CanonicalSnapshot.Revision != 0 &&
+              m_canonicalDigest != 0)
+    {
+    }
+
+    PartyQuestCampaignId m_campaignId;
+    uint64_t m_transactionId{};
+    uint64_t m_worldRevision{};
+    GameId m_questId{};
+    uint64_t m_questRevision{};
+    uint64_t m_canonicalDigest{};
+    bool m_issued{};
+
+    friend class PartyQuestRuntimeCanonicalInbox;
 };
 
 /**
@@ -68,6 +178,16 @@ public:
 
     [[nodiscard]] const PartyQuestRuntimeCanonicalCandidate* FindLatest(
         const GameId& acQuestId) const noexcept;
+
+    /**
+     * Issues one process-local planning capability only if the remembered latest
+     * candidate is still the exact currently published replica head. A repair or
+     * canonical advance therefore invalidates issuance even before Reset().
+     */
+    [[nodiscard]] std::optional<PartyQuestRuntimeCanonicalAuthorization>
+    TryAuthorizeLatest(
+        const GameId& acQuestId,
+        const PartyQuestReplica& acPublishedReplica) const noexcept;
 
     [[nodiscard]] const PartyQuestCampaignId& GetCampaignId() const noexcept
     {
