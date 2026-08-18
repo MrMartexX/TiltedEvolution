@@ -9,6 +9,7 @@ enum class PartyQuestStableStorageStatus : uint8_t
     Unsupported,
     InvalidPath,
     OpenFailed,
+    NodeValidationFailed,
     FlushFailed,
     CloseFailed
 };
@@ -21,6 +22,10 @@ enum class PartyQuestStableStorageStatus : uint8_t
  * atomic and do not by themselves upgrade PartyQuestPersistenceDurabilityPolicy.
  * Callers must retain their existing path confinement, verification and
  * recovery ordering.
+ *
+ * FlushFile rejects symlink/reparse and non-regular-file nodes rather than
+ * following them. That makes a later durability barrier fail closed if the
+ * namespace changes between a caller's path validation and the OS flush.
  */
 struct PartyQuestStableStorage
 {
