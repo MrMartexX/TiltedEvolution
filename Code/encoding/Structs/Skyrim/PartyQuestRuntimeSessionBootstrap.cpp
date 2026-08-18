@@ -2,12 +2,27 @@
 
 #include <Structs/Skyrim/PartyQuestCoopSaveLayout.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
 
 PartyQuestRuntimeSessionBootstrapResult
 PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
     const std::filesystem::path& acCoopReplicaRoot,
     const PartyQuestCampaignId& acCampaignId,
     const PartyQuestPlayerProfileLineageAuthorization& acPlayerProfile) noexcept
+{
+    return BindProcessOwnerInternal(
+        acCoopReplicaRoot,
+        acCampaignId,
+        acPlayerProfile,
+        true);
+}
+
+PartyQuestRuntimeSessionBootstrapResult
+PartyQuestRuntimeSessionBootstrap::BindProcessOwnerInternal(
+    const std::filesystem::path& acCoopReplicaRoot,
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileLineageAuthorization& acPlayerProfile,
+    bool aRequireCompleteLifecycleCoverage) noexcept
 {
     PartyQuestRuntimeSessionBootstrapResult result;
 
@@ -54,6 +69,19 @@ PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
                 acPlayerProfile.GetProfileId()))
         {
             result.Status = PartyQuestRuntimeSessionBootstrapStatus::InvalidLayout;
+            return result;
+        }
+
+        // P0-C: a correct lineage token is not enough while identity-changing
+        // engine transitions can bypass the owner/generation fence. Keep this
+        // check immediately before publication so all ordinary input/generation
+        // validation still fails with its more specific status.
+        if (aRequireCompleteLifecycleCoverage &&
+            !PartyQuestRuntimeLifecycleIntegrationPolicy::
+                HasCompleteCharacterIdentityCoverage())
+        {
+            result.Status =
+                PartyQuestRuntimeSessionBootstrapStatus::LifecycleCoverageIncomplete;
             return result;
         }
 
