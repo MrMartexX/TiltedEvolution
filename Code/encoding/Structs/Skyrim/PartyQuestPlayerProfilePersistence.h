@@ -31,6 +31,11 @@ struct PartyQuestPlayerProfilePersistenceResult
  *
  * The profile id is immutable metadata. Unlike the runtime side-effect journal,
  * falling back to its previous identical identity backup is safe.
+ *
+ * GenerateProfileId() creates an identity value only. It does not prove that the
+ * value belongs to the currently loaded Skyrim character/save lineage and must
+ * never be used to manufacture PartyQuestPlayerProfileLineageAuthorization.
+ * The live Skyrim path requires independent filename-free lineage evidence.
  */
 class PartyQuestPlayerProfilePersistence final
 {
