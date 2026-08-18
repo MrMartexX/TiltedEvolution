@@ -6,6 +6,8 @@
 #include <cstdint>
 #include <filesystem>
 
+class PartyQuestRuntimeSessionBootstrapTestAccess;
+
 /**
  * Fail-closed result for binding the shared process runtime owner from a proven
  * current-character profile identity.
@@ -18,6 +20,7 @@ enum class PartyQuestRuntimeSessionBootstrapStatus : uint8_t
     RuntimeGenerationUnavailable,
     InvalidReplicaRoot,
     InvalidLayout,
+    LifecycleCoverageIncomplete,
     OwnerRejected
 };
 
@@ -37,11 +40,16 @@ struct PartyQuestRuntimeSessionBootstrapResult
 /**
  * Production bootstrap authority for the shared process runtime owner.
  *
- * This is intentionally narrower than PartyQuestRuntimeSessionOwner::Bind(),
- * which remains a low-level/testable lifetime primitive. Production integration
- * must arrive here with an unforgeable character-lineage authorization. The
- * exact runtime generation is pinned for the complete layout + owner bind so a
- * lifecycle transition cannot race profile verification and session hydration.
+ * Production integration must arrive here with an unforgeable character-lineage
+ * authorization and complete verified pre-transition coverage for Load Game,
+ * New Game and return-to-Main-Menu. The exact runtime generation is pinned for
+ * the complete layout + owner bind so a lifecycle transition cannot race
+ * profile verification and session hydration.
+ *
+ * Until New Game and Main Menu have real pre-transition hooks the production
+ * entrypoint returns LifecycleCoverageIncomplete even for otherwise valid
+ * lineage evidence. Unit tests have a private friend seam to exercise the lower
+ * binding mechanism without weakening this production gate.
  *
  * This class does not discover a Skyrim character identity, generate a profile
  * id, infer identity from a save filename, or hook any engine lifecycle source.
@@ -53,4 +61,14 @@ public:
         const std::filesystem::path& acCoopReplicaRoot,
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestPlayerProfileLineageAuthorization& acPlayerProfile) noexcept;
+
+private:
+    [[nodiscard]] static PartyQuestRuntimeSessionBootstrapResult BindProcessOwnerInternal(
+        const std::filesystem::path& acCoopReplicaRoot,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileLineageAuthorization& acPlayerProfile,
+        bool aRequireCompleteLifecycleCoverage) noexcept;
+
+    // Defined only in Code/tests; no production implementation/API exists.
+    friend class PartyQuestRuntimeSessionBootstrapTestAccess;
 };
