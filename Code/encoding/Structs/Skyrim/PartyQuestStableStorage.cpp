@@ -138,12 +138,6 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
     if (acSource.empty() || acDestination.empty())
         return PartyQuestStableStorageStatus::InvalidPath;
 
-#ifdef _WIN32
-    // P0-H deliberately has no Windows publication claim yet. File-level
-    // FlushFileBuffers alone is not treated as proof that the destination
-    // directory entry is durably published.
-    return PartyQuestStableStorageStatus::Unsupported;
-#else
     try
     {
         std::error_code ec;
@@ -160,6 +154,12 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
         if (source == destination || source.parent_path() != destination.parent_path())
             return PartyQuestStableStorageStatus::CrossDirectoryRename;
 
+#ifdef _WIN32
+        // P0-H deliberately has no Windows publication claim yet. File-level
+        // FlushFileBuffers alone is not treated as proof that the destination
+        // directory entry is durably published.
+        return PartyQuestStableStorageStatus::Unsupported;
+#else
         const auto fileFlush = FlushFile(source);
         if (fileFlush != PartyQuestStableStorageStatus::Success)
             return fileFlush;
@@ -173,10 +173,10 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
         // publication, not a reason to pretend the old namespace is restored.
         // The caller must keep transaction/recovery authority and fail closed.
         return FlushDirectory(destination.parent_path());
+#endif
     }
     catch (...)
     {
         return PartyQuestStableStorageStatus::InvalidPath;
     }
-#endif
 }
