@@ -32,8 +32,10 @@ TEST_CASE("stable-storage primitives keep the platform publication boundary expl
     REQUIRE(PartyQuestStableStorage::HasDocumentedFileFlushPrimitive());
 #ifdef _WIN32
     REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedParentDirectoryFlushPrimitive());
+    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedAtomicFilePublicationPrimitive());
 #else
     REQUIRE(PartyQuestStableStorage::HasDocumentedParentDirectoryFlushPrimitive());
+    REQUIRE(PartyQuestStableStorage::HasDocumentedAtomicFilePublicationPrimitive());
 #endif
 
     REQUIRE(PartyQuestStableStorage::FlushFile({}) ==
@@ -41,6 +43,8 @@ TEST_CASE("stable-storage primitives keep the platform publication boundary expl
     REQUIRE(PartyQuestStableStorage::FlushDirectory({}) ==
         PartyQuestStableStorageStatus::InvalidPath);
     REQUIRE(PartyQuestStableStorage::FlushParentDirectory({}) ==
+        PartyQuestStableStorageStatus::InvalidPath);
+    REQUIRE(PartyQuestStableStorage::PublishFileRename({}, {}) ==
         PartyQuestStableStorageStatus::InvalidPath);
 
     // Adding OS primitives is evidence only; it must not silently upgrade the
@@ -93,5 +97,58 @@ TEST_CASE("stable-storage file flush works without claiming cross-platform direc
     std::filesystem::remove_all(root, ec);
     REQUIRE_FALSE(ec);
 
+    REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
+}
+
+TEST_CASE("stable rename publication is same-directory and fail-closed by platform", "[quest.party-state.durability][publication]")
+{
+    const auto nonce = static_cast<uint64_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    const auto root = std::filesystem::temp_directory_path() /
+        ("tilted_party_quest_publish_" + std::to_string(nonce));
+    const auto source = root / "state.tmp";
+    const auto destination = root / "state.bin";
+    const auto otherRoot = root / "other";
+    const auto crossDirectoryDestination = otherRoot / "state.bin";
+
+    std::error_code ec;
+    std::filesystem::create_directories(otherRoot, ec);
+    REQUIRE_FALSE(ec);
+
+    {
+        std::ofstream file(source, std::ios::binary | std::ios::trunc);
+        REQUIRE(file.is_open());
+        file.write("durable-state", 13);
+        file.flush();
+        REQUIRE(file.good());
+    }
+
+    REQUIRE(PartyQuestStableStorage::PublishFileRename(
+        source,
+        crossDirectoryDestination) ==
+        PartyQuestStableStorageStatus::CrossDirectoryRename);
+    REQUIRE(std::filesystem::exists(source));
+    REQUIRE_FALSE(std::filesystem::exists(crossDirectoryDestination));
+
+#ifdef _WIN32
+    REQUIRE(PartyQuestStableStorage::PublishFileRename(source, destination) ==
+        PartyQuestStableStorageStatus::Unsupported);
+    REQUIRE(std::filesystem::exists(source));
+    REQUIRE_FALSE(std::filesystem::exists(destination));
+#else
+    REQUIRE(PartyQuestStableStorage::PublishFileRename(source, destination) ==
+        PartyQuestStableStorageStatus::Success);
+    REQUIRE_FALSE(std::filesystem::exists(source));
+    REQUIRE(std::filesystem::exists(destination));
+    REQUIRE(PartyQuestStableStorage::FlushFile(destination) ==
+        PartyQuestStableStorageStatus::Success);
+#endif
+
+    std::filesystem::remove_all(root, ec);
+    REQUIRE_FALSE(ec);
+
+    // One proven publication primitive is not an end-to-end persistence proof.
+    REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
 }
