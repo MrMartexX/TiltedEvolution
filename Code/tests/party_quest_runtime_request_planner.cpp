@@ -1,12 +1,39 @@
+#include <Structs/Skyrim/PartyQuestRepair.h>
 #include <Structs/Skyrim/PartyQuestRuntimeRequestPlanner.h>
 
 #include <catch2/catch.hpp>
+
+class PartyQuestRuntimeRequestPlannerTestAccess final
+{
+public:
+    [[nodiscard]] static PartyQuestRuntimeRequestPlanResult BuildDiagnostic(
+        uint64_t aTransactionId,
+        uint64_t aTargetWorldRevision,
+        QuestSnapshot aCanonicalSnapshot,
+        const PartyQuestSyncFacts& acLocalSyncFacts,
+        const PartyQuestRuntimeCompatibilityRequirement& acCompatibilityRequirement,
+        const PartyQuestRuntimeCompatibilityFacts& acLocalCompatibilityFacts,
+        const PartyQuestCheckpointSidecarManifest& acSidecarManifest)
+    {
+        return PartyQuestRuntimeRequestPlanner::BuildDiagnostic(
+            aTransactionId,
+            aTargetWorldRevision,
+            std::move(aCanonicalSnapshot),
+            acLocalSyncFacts,
+            acCompatibilityRequirement,
+            acLocalCompatibilityFacts,
+            acSidecarManifest);
+    }
+};
 
 namespace
 {
 constexpr uint64_t kTransactionId = 41001;
 constexpr uint64_t kWorldRevision = 51001;
 const GameId kQuestId(101, 0xB100);
+const PartyQuestCampaignId kCampaignId{
+    0xB001B002B003B004ull,
+    0xB005B006B007B008ull};
 
 QuestSnapshot BuildCanonicalSnapshot()
 {
@@ -20,6 +47,25 @@ QuestSnapshot BuildCanonicalSnapshot()
     snapshot.Objectives = {{40, QuestObjectiveState::Displayed}};
     snapshot.Canonicalize();
     return snapshot;
+}
+
+PartyQuestRuntimeCanonicalCandidate BuildCanonicalCandidate()
+{
+    PartyQuestRuntimeCanonicalCandidate candidate;
+    candidate.CampaignId = kCampaignId;
+    candidate.TransactionId = kTransactionId;
+    candidate.WorldRevision = kWorldRevision;
+    candidate.CanonicalSnapshot = BuildCanonicalSnapshot();
+    return candidate;
+}
+
+PartyQuestReplica BuildPublishedReplica(
+    const PartyQuestRuntimeCanonicalCandidate& acCandidate)
+{
+    PartyQuestReplica replica;
+    replica.ObserveLocalSnapshot(acCandidate.CanonicalSnapshot);
+    replica.SetObservedWorldRevision(acCandidate.WorldRevision);
+    return replica;
 }
 
 PartyQuestSyncFacts BuildAdmittedLocalFacts()
@@ -71,7 +117,121 @@ PartyQuestRuntimeCompatibilityFacts BuildFacts(
 } // namespace
 
 TEST_CASE(
-    "Runtime request planner requires independent local authority before producing a request",
+    "Production runtime request planner requires one-shot canonical inbox provenance",
+    "[quest.party-state.runtime-request-planner][runtime-authority][provenance]")
+{
+    const auto candidate = BuildCanonicalCandidate();
+    const auto publishedReplica = BuildPublishedReplica(candidate);
+    const auto localFacts = BuildAdmittedLocalFacts();
+    const auto requirement = BuildRequirement();
+    const auto compatibilityFacts = BuildFacts(requirement);
+    const PartyQuestCheckpointSidecarManifest sidecars;
+
+    PartyQuestRuntimeCanonicalInbox inbox;
+    REQUIRE(inbox.BindCampaign(kCampaignId));
+    REQUIRE(inbox.Observe(candidate, publishedReplica) ==
+        PartyQuestRuntimeCanonicalObserveStatus::Accepted);
+
+    auto authorization = inbox.TryAuthorizeLatest(kQuestId, publishedReplica);
+    REQUIRE(authorization.has_value());
+    REQUIRE(authorization->IsVerified());
+
+    const auto result = PartyQuestRuntimeRequestPlanner::Build(
+        candidate,
+        std::move(*authorization),
+        localFacts,
+        requirement,
+        compatibilityFacts,
+        sidecars);
+
+    REQUIRE(result.IsPlanned());
+    REQUIRE_FALSE(authorization->IsVerified());
+    REQUIRE(result.Request->TransactionId == kTransactionId);
+    REQUIRE(result.Request->TargetWorldRevision == kWorldRevision);
+    REQUIRE(result.Request->CanonicalSnapshot == candidate.CanonicalSnapshot);
+
+    const auto replay = PartyQuestRuntimeRequestPlanner::Build(
+        candidate,
+        std::move(*authorization),
+        localFacts,
+        requirement,
+        compatibilityFacts,
+        sidecars);
+    REQUIRE_FALSE(replay.IsPlanned());
+    REQUIRE(replay.Status ==
+        PartyQuestRuntimeRequestPlanStatus::CanonicalProvenanceRejected);
+}
+
+TEST_CASE(
+    "Runtime request provenance cannot be forged or retargeted",
+    "[quest.party-state.runtime-request-planner][runtime-authority][provenance]")
+{
+    const auto candidate = BuildCanonicalCandidate();
+    const auto publishedReplica = BuildPublishedReplica(candidate);
+    const auto requirement = BuildRequirement();
+    const auto compatibilityFacts = BuildFacts(requirement);
+
+    SECTION("default capability")
+    {
+        PartyQuestRuntimeCanonicalAuthorization authorization;
+        const auto result = PartyQuestRuntimeRequestPlanner::Build(
+            candidate,
+            std::move(authorization),
+            BuildAdmittedLocalFacts(),
+            requirement,
+            compatibilityFacts,
+            PartyQuestCheckpointSidecarManifest{});
+        REQUIRE(result.Status ==
+            PartyQuestRuntimeRequestPlanStatus::CanonicalProvenanceRejected);
+        REQUIRE_FALSE(result.Request.has_value());
+    }
+
+    SECTION("authorized transaction cannot be retargeted")
+    {
+        PartyQuestRuntimeCanonicalInbox inbox;
+        REQUIRE(inbox.BindCampaign(kCampaignId));
+        REQUIRE(inbox.Observe(candidate, publishedReplica) ==
+            PartyQuestRuntimeCanonicalObserveStatus::Accepted);
+        auto authorization = inbox.TryAuthorizeLatest(kQuestId, publishedReplica);
+        REQUIRE(authorization.has_value());
+
+        auto tampered = candidate;
+        ++tampered.WorldRevision;
+        const auto result = PartyQuestRuntimeRequestPlanner::Build(
+            tampered,
+            std::move(*authorization),
+            BuildAdmittedLocalFacts(),
+            requirement,
+            compatibilityFacts,
+            PartyQuestCheckpointSidecarManifest{});
+        REQUIRE(result.Status ==
+            PartyQuestRuntimeRequestPlanStatus::CanonicalProvenanceRejected);
+        REQUIRE_FALSE(result.Request.has_value());
+        REQUIRE(authorization->IsVerified());
+    }
+
+    SECTION("authority is not issued after the published head advances")
+    {
+        PartyQuestRuntimeCanonicalInbox inbox;
+        REQUIRE(inbox.BindCampaign(kCampaignId));
+        REQUIRE(inbox.Observe(candidate, publishedReplica) ==
+            PartyQuestRuntimeCanonicalObserveStatus::Accepted);
+
+        auto advanced = candidate;
+        advanced.TransactionId += 1;
+        advanced.WorldRevision += 1;
+        advanced.CanonicalSnapshot.Revision += 1;
+        advanced.CanonicalSnapshot.CurrentStage = 50;
+        advanced.CanonicalSnapshot.CompletedStages.push_back(50);
+        advanced.CanonicalSnapshot.Canonicalize();
+        const auto advancedReplica = BuildPublishedReplica(advanced);
+
+        REQUIRE_FALSE(inbox.TryAuthorizeLatest(kQuestId, advancedReplica).has_value());
+    }
+}
+
+TEST_CASE(
+    "Runtime request planner diagnostic seam requires independent local authority before producing a request",
     "[quest.party-state.runtime-request-planner][runtime-authority]")
 {
     const auto snapshot = BuildCanonicalSnapshot();
@@ -80,7 +240,7 @@ TEST_CASE(
     const auto compatibilityFacts = BuildFacts(requirement);
     const PartyQuestCheckpointSidecarManifest sidecars;
 
-    const auto result = PartyQuestRuntimeRequestPlanner::Build(
+    const auto result = PartyQuestRuntimeRequestPlannerTestAccess::BuildDiagnostic(
         kTransactionId,
         kWorldRevision,
         snapshot,
@@ -113,7 +273,7 @@ TEST_CASE(
     const auto requirement = BuildRequirement();
     const auto compatibilityFacts = BuildFacts(requirement);
 
-    const auto result = PartyQuestRuntimeRequestPlanner::Build(
+    const auto result = PartyQuestRuntimeRequestPlannerTestAccess::BuildDiagnostic(
         kTransactionId,
         kWorldRevision,
         BuildCanonicalSnapshot(),
@@ -137,7 +297,7 @@ TEST_CASE(
     auto compatibilityFacts = BuildFacts(requirement);
     ++compatibilityFacts.ScriptFingerprint;
 
-    const auto result = PartyQuestRuntimeRequestPlanner::Build(
+    const auto result = PartyQuestRuntimeRequestPlannerTestAccess::BuildDiagnostic(
         kTransactionId,
         kWorldRevision,
         BuildCanonicalSnapshot(),
@@ -154,7 +314,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Runtime request planner rejects invalid transaction provenance before authority evaluation",
+    "Runtime request planner diagnostic seam rejects invalid transaction provenance before authority evaluation",
     "[quest.party-state.runtime-request-planner][runtime-authority]")
 {
     const auto requirement = BuildRequirement();
@@ -162,7 +322,7 @@ TEST_CASE(
 
     SECTION("zero transaction")
     {
-        const auto result = PartyQuestRuntimeRequestPlanner::Build(
+        const auto result = PartyQuestRuntimeRequestPlannerTestAccess::BuildDiagnostic(
             0,
             kWorldRevision,
             BuildCanonicalSnapshot(),
@@ -178,7 +338,7 @@ TEST_CASE(
     {
         auto snapshot = BuildCanonicalSnapshot();
         snapshot.Revision = 0;
-        const auto result = PartyQuestRuntimeRequestPlanner::Build(
+        const auto result = PartyQuestRuntimeRequestPlannerTestAccess::BuildDiagnostic(
             kTransactionId,
             kWorldRevision,
             snapshot,
@@ -194,7 +354,7 @@ TEST_CASE(
     {
         auto mismatchedRequirement = requirement;
         mismatchedRequirement.QuestId = GameId(101, 0xB101);
-        const auto result = PartyQuestRuntimeRequestPlanner::Build(
+        const auto result = PartyQuestRuntimeRequestPlannerTestAccess::BuildDiagnostic(
             kTransactionId,
             kWorldRevision,
             BuildCanonicalSnapshot(),
