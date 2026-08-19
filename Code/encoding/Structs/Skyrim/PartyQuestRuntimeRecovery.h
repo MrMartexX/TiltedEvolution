@@ -1,10 +1,12 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestReplicaDurableRestoreExecutor.h>
 #include <Structs/Skyrim/PartyQuestReplicaRestoreExecutor.h>
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 
 class PartyQuestRuntimeGuardedSession;
 class PartyQuestRuntimeRecoveryCoordinatorTestAccess;
@@ -29,6 +31,13 @@ enum class PartyQuestRuntimeRecoveryStatus : uint8_t
     RuntimeStatePersistenceFailed
 };
 
+enum class PartyQuestRuntimeRestoreDurabilityDomain : uint8_t
+{
+    None,
+    ProcessCrashResilient,
+    PowerLossDurable
+};
+
 struct PartyQuestRuntimeRecoveryResult
 {
     PartyQuestRuntimeRecoveryStatus Status{
@@ -41,11 +50,16 @@ struct PartyQuestRuntimeRecoveryResult
         PartyQuestReplicaRestorePlanStatus::InvalidIdentity};
     PartyQuestReplicaRestoreExecutionStatus RestoreStatus{
         PartyQuestReplicaRestoreExecutionStatus::InvalidPlan};
+    std::optional<PartyQuestReplicaDurableRestoreStatus> DurableRestoreStatus;
+    PartyQuestRuntimeRestoreDurabilityDomain RestoreDomain{
+        PartyQuestRuntimeRestoreDurabilityDomain::None};
     PartyQuestRuntimeDurableTransitionStatus RuntimeTransition{
         PartyQuestRuntimeDurableTransitionStatus::InvalidState};
     uint64_t TransactionId{};
     uint64_t TargetWorldRevision{};
-    uint64_t RestoreId{}; // Always equals TransactionId for a valid exact recovery.
+    // Legacy v3 recovery uses TransactionId. Strong recovery reports the exact
+    // local RestoreId persisted for the current (TransactionId, attempt ordinal).
+    uint64_t RestoreId{};
     std::filesystem::path ManifestPath;
     std::filesystem::path RestoreJournalPath;
 
@@ -63,9 +77,11 @@ struct PartyQuestRuntimeRecoveryResult
  * PreRepair/Revision_<TargetWorldRevision> checkpoint recorded by the runtime
  * transaction. It does not guess a LastKnownGood fallback.
  *
- * RestoreId is deterministically the runtime TransactionId. A caller cannot
- * accidentally fork one quest transaction into multiple filesystem restore
- * journals by choosing a different id on retry.
+ * Runtime TransactionId remains the stable higher-level repair identity. Legacy
+ * v3 restore journals still use RestoreId == TransactionId. The Linux strong
+ * route instead persists a local attempt ordinal and a collision-free allocated
+ * RestoreId; terminal RolledBack attempts remain permanent tombstones and a
+ * retry advances to a new persisted attempt rather than reusing that id.
  *
  * Ordering is fail-closed:
  *
@@ -73,19 +89,26 @@ struct PartyQuestRuntimeRecoveryResult
  *  2. load and verify the exact PreRepair revision manifest and bytes;
  *  3. build a confined restore plan;
  *  4. prove an exact kernel-backed workspace lease/capability;
- *  5. resume the transaction-id-bound durable restore journal when it exists,
- *     otherwise start a new crash-resumable restore;
- *  6. while still holding that exact workspace capability, independently
+ *  5. preserve an existing explicit v3 legacy transaction when present;
+ *  6. otherwise, on the supported strong platform, resume/create the persisted
+ *     runtime restore attempt and accept only explicit v4 strong evidence;
+ *  7. while still holding that exact workspace capability, independently
  *     reverify the live replica against the exact restore plan;
- *  7. clear the runtime barrier only when checkpoint bytes are proven present
+ *  8. clear the runtime barrier only when checkpoint bytes are proven present
  *     in the live co-op replica at that instant;
- *  8. persist that cleared runtime state before releasing workspace authority
+ *  9. persist that cleared runtime state before releasing workspace authority
  *     or exposing recovery as resolved.
+ *
+ * Existing ambiguous v1/v2 or wrong-domain evidence is never migrated or
+ * overwritten. Existing strong attempt evidence is never downgraded through the
+ * legacy executor. Windows continues the legacy process-crash path for a fresh
+ * recovery until its strong directory/delete durability contract is accepted,
+ * but fails closed if a strong attempt record is already present.
  *
  * ResolveCrashRecovery() consumes a persisted crash barrier. ResolveLiveRecovery()
  * consumes the still-active post-mutation transaction after a live fail-closed
- * condition such as a terminal Papyrus monitor outcome. Both use the same exact
- * PreRepair revision and deterministic RestoreId contract.
+ * condition such as a terminal Papyrus monitor outcome. Strong live routing is
+ * wired separately so each production boundary can be proved independently.
  *
  * SaveGuard and the replica workspace lease protect different boundaries and
  * neither substitutes for the other. PartyQuestRuntimeGuardedSession proves or
@@ -104,7 +127,8 @@ struct PartyQuestRuntimeRecoveryResult
  *
  * A recovered rollback is deliberately not success: the old replica bytes are
  * safe again, but the requested checkpoint still has to be restored by a later
- * call. No Skyrim/Papyrus/save hook is invoked here.
+ * call. Strong rollback additionally persists/advances local attempt identity
+ * before reporting RetryRequired.
  */
 class PartyQuestRuntimeRecoveryCoordinator final
 {
