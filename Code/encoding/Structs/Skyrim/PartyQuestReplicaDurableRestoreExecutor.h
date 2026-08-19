@@ -1,11 +1,15 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestReplicaRestoreJournal.h>
+#include <Structs/Skyrim/PartyQuestReplicaWorkspaceLease.h>
 
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+
+class PartyQuestRuntimeRecoveryCoordinator;
+class PartyQuestReplicaDurableRestoreExecutorTestAccess;
 
 enum class PartyQuestReplicaDurableRestoreStatus : uint8_t
 {
@@ -119,6 +123,13 @@ struct PartyQuestReplicaDurableRestoreReport
  * publishes MutationStarted. Only after that journal barrier may same-directory
  * durable rename replace protected co-op replica files.
  *
+ * Runtime crash/live recovery can already own that exact kernel lease through a
+ * hydrated runtime session owner. The private capability-bearing entry points
+ * reuse that held lease without a release/reacquire TOCTOU window. They accept
+ * only an exact root/campaign/player publication capability whose native lease
+ * remains pinned for the whole synchronous operation. Public callers cannot
+ * reach those entry points.
+ *
  * Forward ordering is:
  *
  *   MutationStarted durable
@@ -169,4 +180,25 @@ public:
         const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
         const std::filesystem::path& acJournalPath,
         PartyQuestReplicaDurableRestoreHooks aHooks = {}) noexcept;
+
+private:
+    [[nodiscard]] static PartyQuestReplicaDurableRestoreReport ContinueAuthorized(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestCampaignId& acExpectedCampaignId,
+        const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
+        const std::filesystem::path& acJournalPath,
+        const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
+        PartyQuestReplicaDurableRestoreHooks aHooks = {}) noexcept;
+
+    [[nodiscard]] static PartyQuestReplicaDurableRestoreReport RecoverAuthorized(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestCampaignId& acExpectedCampaignId,
+        const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
+        const std::filesystem::path& acJournalPath,
+        const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
+        PartyQuestReplicaDurableRestoreHooks aHooks = {}) noexcept;
+
+    friend class PartyQuestRuntimeRecoveryCoordinator;
+    // Defined only in Code/tests for exact held-capability acceptance tests.
+    friend class PartyQuestReplicaDurableRestoreExecutorTestAccess;
 };
