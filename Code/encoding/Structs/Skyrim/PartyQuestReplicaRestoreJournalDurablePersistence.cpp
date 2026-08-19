@@ -106,6 +106,42 @@ PartyQuestReplicaRestoreJournalPersistenceResult LoadArchiveExact(
         return result;
     }
 }
+
+PartyQuestReplicaRestoreJournalPersistenceResult RequirePowerLossArchive(
+    PartyQuestReplicaRestoreJournalPersistenceResult aResult) noexcept
+{
+    if (aResult.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+        return aResult;
+    if (!aResult.State)
+    {
+        aResult.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
+        return aResult;
+    }
+    if (aResult.ArchiveDurability ==
+        PartyQuestReplicaRestoreJournalArchiveDurability::AmbiguousLegacyEncoding)
+    {
+        aResult.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::DurabilityAmbiguous;
+        return aResult;
+    }
+    if (aResult.ArchiveDurability !=
+        PartyQuestReplicaRestoreJournalArchiveDurability::PowerLossDurable)
+    {
+        aResult.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::DurabilityMismatch;
+        return aResult;
+    }
+    return aResult;
+}
+
+PartyQuestReplicaRestoreJournalPersistenceStatus ValidateExistingStrongEvidence(
+    const std::filesystem::path& acPath) noexcept
+{
+    const auto decoded = LoadArchiveExact(acPath);
+    if (decoded.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
+        return PartyQuestReplicaRestoreJournalPersistenceStatus::Success;
+    if (decoded.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+        return PartyQuestReplicaRestoreJournalPersistenceStatus::Success;
+    return RequirePowerLossArchive(decoded).Status;
+}
 } // namespace
 
 PartyQuestReplicaRestoreJournalPersistenceStatus
@@ -119,7 +155,9 @@ PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
     if (!PartyQuestDurableResourcePolicy::IsMutableFilesystemPathWithinBudget(acPath))
         return PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded;
 
-    const auto encoded = Encode(acState);
+    const auto encoded = EncodeForArchiveDurability(
+        acState,
+        PartyQuestReplicaRestoreJournalArchiveDurability::PowerLossDurable);
     if (encoded.empty())
         return PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
 
@@ -155,6 +193,13 @@ PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
         return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
     }
 
+    for (const auto& evidence : {path, temporary, backup})
+    {
+        const auto domainStatus = ValidateExistingStrongEvidence(evidence);
+        if (domainStatus != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+            return domainStatus;
+    }
+
     auto stable = PartyQuestStableStorage::WriteFileDurably(
         temporary,
         encoded.data(),
@@ -166,11 +211,13 @@ PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
     if (!ReadArchive(temporary, verifiedBytes))
         return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
 
-    const auto verified = Decode(verifiedBytes);
+    const auto verified = RequirePowerLossArchive(Decode(verifiedBytes));
     if (verified.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success ||
         !verified.State || *verified.State != acState)
     {
-        return PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
+        return verified.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success
+            ? PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData
+            : verified.Status;
     }
 
     if (aHooks.Invoke(
@@ -243,7 +290,7 @@ PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
 
     auto primary = LoadArchiveExact(path);
     if (primary.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
-        return primary;
+        return RequirePowerLossArchive(std::move(primary));
 
     auto temporaryPath = path;
     temporaryPath += ".tmp";
@@ -255,6 +302,10 @@ PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
     auto temporary = LoadArchiveExact(temporaryPath);
     if (temporary.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
     {
+        temporary = RequirePowerLossArchive(std::move(temporary));
+        if (temporary.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+            return temporary;
+
         // A present but invalid primary is conflicting recovery evidence. Never
         // overwrite it merely because a newer-looking temporary also decodes.
         if (primary.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
@@ -273,11 +324,15 @@ PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
             return result;
         }
 
-        auto promoted = LoadArchiveExact(path);
+        auto promoted = RequirePowerLossArchive(LoadArchiveExact(path));
         if (promoted.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
         {
-            promoted.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
-            promoted.State.reset();
+            if (promoted.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::DurabilityAmbiguous &&
+                promoted.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::DurabilityMismatch)
+            {
+                promoted.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+                promoted.State.reset();
+            }
             return promoted;
         }
         promoted.UsedTemporary = true;
@@ -294,6 +349,9 @@ PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
     auto backup = LoadArchiveExact(backupPath);
     if (backup.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
     {
+        backup = RequirePowerLossArchive(std::move(backup));
+        if (backup.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+            return backup;
         backup.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired;
         return backup;
     }
