@@ -10,11 +10,12 @@
 
 enum class PartyQuestReplicaRestoreJournalPhase : uint8_t
 {
-    Prepared,
-    BackupsReady,
-    MutationStarted,
-    Restored,
-    Committed
+    Prepared = 0,
+    BackupsReady = 1,
+    MutationStarted = 2,
+    Restored = 3,
+    Committed = 4,
+    RolledBack = 5
 };
 
 enum class PartyQuestReplicaRestoreJournalStatus : uint8_t
@@ -28,6 +29,7 @@ enum class PartyQuestReplicaRestoreJournalStatus : uint8_t
     DestinationUnsafe,
     BackupVerificationFailed,
     RestoredVerificationFailed,
+    OriginalVerificationFailed,
     InvalidTransition
 };
 
@@ -37,6 +39,7 @@ enum class PartyQuestReplicaRestoreRecoveryDisposition : uint8_t
     RollbackRequired,
     VerifyThenCommit,
     Clean,
+    RolledBackClean,
     InvalidState
 };
 
@@ -81,10 +84,13 @@ struct PartyQuestReplicaRestoreJournalResult
 };
 
 /**
- * Crash-safety state machine for a future destructive restore of an isolated
- * co-op replica. This type deliberately does not replace or delete live save
- * files. It records/verifies the prerequisites that an executor must durably
- * persist before crossing the mutation barrier.
+ * Crash-safety state machine for destructive restore of an isolated co-op
+ * replica. The journal is filesystem authority only. It does not authorize
+ * Skyrim/Papyrus/native world mutation.
+ *
+ * Persisted phase numeric values 0..4 are frozen for compatibility with v1
+ * archives. RolledBack is the v2 terminal rollback tombstone and is only
+ * reachable after the exact pre-mutation destination state is verified.
  */
 class PartyQuestReplicaRestoreJournal final
 {
@@ -103,6 +109,9 @@ public:
     [[nodiscard]] static bool VerifyRestoredTargets(
         const PartyQuestReplicaRestoreJournalState& acState) noexcept;
 
+    [[nodiscard]] static bool VerifyOriginalTargets(
+        const PartyQuestReplicaRestoreJournalState& acState) noexcept;
+
     [[nodiscard]] static PartyQuestReplicaRestoreJournalStatus MarkBackupsReady(
         PartyQuestReplicaRestoreJournalState& aState) noexcept;
 
@@ -113,6 +122,9 @@ public:
         PartyQuestReplicaRestoreJournalState& aState) noexcept;
 
     [[nodiscard]] static PartyQuestReplicaRestoreJournalStatus MarkCommitted(
+        PartyQuestReplicaRestoreJournalState& aState) noexcept;
+
+    [[nodiscard]] static PartyQuestReplicaRestoreJournalStatus MarkRolledBack(
         PartyQuestReplicaRestoreJournalState& aState) noexcept;
 
     [[nodiscard]] static PartyQuestReplicaRestoreRecoveryDisposition GetRecoveryDisposition(
@@ -181,6 +193,10 @@ struct PartyQuestReplicaRestoreJournalPersistenceHooks
 
 /**
  * Restore journal persistence.
+ *
+ * Encode writes v2. Decode remains backward-compatible with v1, whose phase
+ * values 0..4 retain their original meaning. v1 cannot represent RolledBack and
+ * a forged v1 archive carrying phase 5 is rejected fail-closed.
  *
  * SaveAtomically/Load retain the original process-crash recovery protocol.
  * SavePowerLossDurably uses stable staged writes plus stable same-directory
