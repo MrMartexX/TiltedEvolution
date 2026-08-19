@@ -25,6 +25,7 @@ struct PartyQuestPlayerProfilePersistenceResult
     PartyQuestPlayerProfilePersistenceStatus Status{PartyQuestPlayerProfilePersistenceStatus::InvalidData};
     std::optional<PartyQuestPlayerProfileId> ProfileId;
     bool UsedBackup{};
+    bool UsedTemporary{};
 };
 
 enum class PartyQuestPlayerProfilePersistenceBoundary : uint8_t
@@ -73,6 +74,10 @@ struct PartyQuestPlayerProfilePersistenceHooks
  * SavePowerLossDurably is the stronger metadata publication path. Its parent
  * directory must already exist and already satisfy the caller's namespace
  * durability contract; this method only proves the archive file/rename sequence.
+ * LoadPowerLossDurably also observes a verified durable `.tmp`, including the
+ * first-publication crash case where no primary/backup identity exists yet. It
+ * never renames recovery evidence and rejects a temporary whose identity
+ * conflicts with a valid immutable backup.
  */
 class PartyQuestPlayerProfilePersistence final
 {
@@ -95,5 +100,8 @@ public:
         PartyQuestPlayerProfilePersistenceHooks aHooks = {});
 
     [[nodiscard]] static PartyQuestPlayerProfilePersistenceResult Load(
+        const std::filesystem::path& acPath);
+
+    [[nodiscard]] static PartyQuestPlayerProfilePersistenceResult LoadPowerLossDurably(
         const std::filesystem::path& acPath);
 };
