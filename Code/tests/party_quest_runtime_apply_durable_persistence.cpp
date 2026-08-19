@@ -18,6 +18,9 @@ const PartyQuestPlayerProfileId kOldProfileId{
 const PartyQuestPlayerProfileId kNewProfileId{
     0x1011121314151617ull,
     0x3132333435363738ull};
+const PartyQuestPlayerProfileId kNewestProfileId{
+    0x1011121314151617ull,
+    0x4142434445464748ull};
 
 PartyQuestRuntimeRecoveryState BuildState(
     const PartyQuestPlayerProfileId& acProfileId)
@@ -88,12 +91,13 @@ void RequireLoadedState(
 }
 
 TEST_CASE(
-    "power-loss durable runtime apply writer publishes and rotates exact recovery authority",
+    "power-loss durable runtime apply writer publishes and repeatedly rotates exact recovery authority",
     "[quest.party-state.runtime-apply.persistence][durability][publication]")
 {
     DurablePersistenceSandbox sandbox;
     const auto oldState = BuildState(kOldProfileId);
     const auto newState = BuildState(kNewProfileId);
+    const auto newestState = BuildState(kNewestProfileId);
 
     REQUIRE(PartyQuestRuntimeApplyPersistence::SavePowerLossDurably(
                 sandbox.Journal,
@@ -105,12 +109,18 @@ TEST_CASE(
     REQUIRE(PartyQuestRuntimeApplyPersistence::SavePowerLossDurably(
                 sandbox.Journal,
                 newState) == PartyQuestRuntimeApplyPersistenceStatus::Success);
-
     RequireLoadedState(sandbox.Journal, newState);
     RequireLoadedState(WithSuffix(sandbox.Journal, ".bak"), oldState);
     REQUIRE_FALSE(std::filesystem::exists(WithSuffix(sandbox.Journal, ".tmp")));
 
-    // Proving this writer does not upgrade unrelated metadata/data paths.
+    // A normal third update exercises replace-existing publication for .bak.
+    REQUIRE(PartyQuestRuntimeApplyPersistence::SavePowerLossDurably(
+                sandbox.Journal,
+                newestState) == PartyQuestRuntimeApplyPersistenceStatus::Success);
+    RequireLoadedState(sandbox.Journal, newestState);
+    RequireLoadedState(WithSuffix(sandbox.Journal, ".bak"), newState);
+    REQUIRE_FALSE(std::filesystem::exists(WithSuffix(sandbox.Journal, ".tmp")));
+
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
