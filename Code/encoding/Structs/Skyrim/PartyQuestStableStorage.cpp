@@ -156,9 +156,6 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::FlushDirectory(
         return PartyQuestStableStorageStatus::InvalidPath;
 
 #ifdef _WIN32
-    // No generic documented non-admin Win32 equivalent to POSIX directory fsync
-    // is accepted as a P0-H proof primitive. NTFS creation/rename durability uses
-    // the narrower FILE_FLAG_WRITE_THROUGH paths instead.
     return PartyQuestStableStorageStatus::Unsupported;
 #else
     return FlushPosixPath(acDirectory, true);
@@ -202,8 +199,6 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::WriteFileDurably(
             return PartyQuestStableStorageStatus::InvalidPath;
 
 #ifdef _WIN32
-        // Validate the existing parent before creating/truncating anything so an
-        // unsupported filesystem cannot receive even a staged mutation.
         const HANDLE parent = ::CreateFileW(
             path.parent_path().c_str(),
             FILE_READ_ATTRIBUTES,
@@ -231,10 +226,6 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::WriteFileDurably(
         if (!::CloseHandle(parent))
             return PartyQuestStableStorageStatus::CloseFailed;
 
-        // OPEN_ALWAYS lets us validate the exact final node before truncating it.
-        // FILE_FLAG_OPEN_REPARSE_POINT therefore fails closed for a pre-existing
-        // reparse point rather than mutating its target or truncating before the
-        // post-open validation has run.
         const HANDLE file = ::CreateFileW(
             path.c_str(),
             GENERIC_WRITE,
@@ -366,9 +357,6 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
             return PartyQuestStableStorageStatus::CrossDirectoryRename;
 
 #ifdef _WIN32
-        // Use one exact source handle for validation, data flush and rename. This
-        // avoids proving durability for one path node and then renaming a later
-        // replacement of that node.
         const HANDLE file = ::CreateFileW(
             source.c_str(),
             GENERIC_WRITE | DELETE,
@@ -389,9 +377,6 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
             return validation;
         }
 
-        // The accepted Windows proof is intentionally NTFS-specific. Microsoft
-        // documents write-through metadata flushing for NTFS rename operations;
-        // no equivalent claim is made here for ReFS/FAT/network filesystems.
         if (!IsWindowsNtfsHandle(file))
         {
             ::CloseHandle(file);
@@ -404,12 +389,9 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
             return PartyQuestStableStorageStatus::FlushFailed;
         }
 
-        // The primitive already proves source/destination share one directory.
-        // FILE_RENAME_INFORMATION explicitly defines a simple name with a null
-        // RootDirectory as a rename within the source file's current directory.
-        // Use only that basename rather than asking the filesystem to resolve an
-        // absolute DOS path through the lower-level rename information buffer.
-        const auto& destinationName = destination.filename().native();
+        // Own the basename string. Referencing native() through the temporary
+        // destination.filename() path would leave a dangling subobject reference.
+        const auto destinationName = destination.filename().native();
         const size_t destinationBytes =
             destinationName.size() * sizeof(std::filesystem::path::value_type);
         if (destinationName.empty() ||
@@ -448,9 +430,6 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
             return PartyQuestStableStorageStatus::RenameFailed;
         }
 
-        // FILE_FLAG_WRITE_THROUGH is the authority for NTFS rename metadata.
-        // FlushFileBuffers after the rename is an additional exact-handle barrier;
-        // failure means publication is uncertain even though the name may exist.
         if (!::FlushFileBuffers(file))
         {
             ::CloseHandle(file);
@@ -479,9 +458,6 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
         if (ec)
             return PartyQuestStableStorageStatus::RenameFailed;
 
-        // Once rename has succeeded a failed directory fsync is an uncertain
-        // publication, not a reason to pretend the old namespace is restored.
-        // The caller must keep transaction/recovery authority and fail closed.
         return FlushDirectory(destination.parent_path());
 #endif
     }
@@ -505,9 +481,6 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::RemoveFileDurably(
             return PartyQuestStableStorageStatus::InvalidPath;
 
 #ifdef _WIN32
-        // Delete disposition commonly becomes a namespace removal on handle
-        // close. Until that close-time metadata durability is documented to the
-        // same standard as NTFS write-through rename, fail closed.
         return PartyQuestStableStorageStatus::Unsupported;
 #else
         struct stat status{};
@@ -519,9 +492,6 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::RemoveFileDurably(
         if (::unlink(path.c_str()) != 0)
             return PartyQuestStableStorageStatus::RemoveFailed;
 
-        // A failed parent fsync after unlink means deletion durability is
-        // uncertain. Do not report success merely because the name disappeared
-        // from the current process view.
         return FlushDirectory(path.parent_path());
 #endif
     }
