@@ -16,7 +16,9 @@ enum class PartyQuestReplicaDurableSnapshotStatus : uint8_t
     FileVerificationFailed,
     StableStorageFailure,
     ManifestPersistenceFailed,
-    WorkspaceCapabilityRequired
+    WorkspaceCapabilityRequired,
+    WorkspaceBusy,
+    WorkspaceLeaseFailure
 };
 
 struct PartyQuestReplicaDurableSnapshotResult
@@ -49,12 +51,11 @@ struct PartyQuestReplicaDurableSnapshotResult
  * this proof. Windows fails closed until durable directory creation/promotion is
  * proven independently; NTFS durable file rename alone is insufficient.
  *
- * The capability-bearing entry point is the production/runtime surface. Its
- * exact workspace capability must remain alive for the complete promotion so
- * another well-behaved replica writer cannot cross the data-flush/manifest
- * authority ordering window. The original entry point remains available for
- * isolated/offline durability construction and tests; it does not itself grant
- * runtime publication authority.
+ * The standalone entry point acquires the exact campaign/player kernel-backed
+ * workspace lease for the complete promotion. Runtime callers that already own
+ * that lease must use the capability-bearing entry point instead of releasing
+ * and reacquiring it. The capability pins the exact native lease state through
+ * the data-flush/manifest-authority ordering window.
  */
 class PartyQuestReplicaDurableSnapshot final
 {
