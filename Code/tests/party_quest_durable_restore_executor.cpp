@@ -293,12 +293,13 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "durable MutationStarted cut recovers exact pre-mutation replica idempotently",
+    "durable MutationStarted cut reaches compact RolledBack tombstone idempotently",
     "[quest.party-state.replica-restore][durability][rollback][fault]")
 {
 #ifndef _WIN32
     Sandbox sandbox;
-    auto fixture = PrepareFixture(sandbox, 0x61010002);
+    constexpr uint64_t restoreId = 0x61010002;
+    auto fixture = PrepareFixture(sandbox, restoreId);
 
     FaultCut fault{PartyQuestReplicaDurableRestoreBoundary::MutationStartedDurable};
     const auto cut = PartyQuestReplicaDurableRestoreExecutor::Continue(
@@ -319,20 +320,37 @@ TEST_CASE(
         kPlayer,
         fixture.Prepared.JournalPath);
     REQUIRE(recovered.Status == PartyQuestReplicaDurableRestoreStatus::RecoveredRollback);
+    REQUIRE(recovered.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
     REQUIRE(recovered.RollbackPerformed);
-    REQUIRE(recovered.CleanupPending);
+    REQUIRE_FALSE(recovered.CleanupPending);
     REQUIRE_FALSE(recovered.RequiresRecovery);
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
+
+    const auto terminal = LoadStrongJournal(fixture.Prepared.JournalPath);
+    REQUIRE(terminal.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
+    REQUIRE(PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(terminal) ==
+        PartyQuestReplicaRestoreRecoveryDisposition::RolledBackClean);
+    for (const auto& operation : terminal.Operations)
+        REQUIRE_FALSE(std::filesystem::exists(operation.RollbackPath));
 
     const auto repeated = PartyQuestReplicaDurableRestoreExecutor::Recover(
         fixture.Paths,
         kCampaign,
         kPlayer,
         fixture.Prepared.JournalPath);
-    REQUIRE(repeated.Status == PartyQuestReplicaDurableRestoreStatus::RecoveredRollback);
+    REQUIRE(repeated.Status == PartyQuestReplicaDurableRestoreStatus::AlreadyRolledBack);
+    REQUIRE(repeated.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
+    REQUIRE_FALSE(repeated.CleanupPending);
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
+
+    const auto duplicate = PartyQuestReplicaDurableRestorePreparation::Prepare(
+        fixture.Paths,
+        fixture.Plan,
+        restoreId);
+    REQUIRE(duplicate.Status ==
+        PartyQuestReplicaDurableRestorePreparationStatus::RestoreIdConflict);
 #endif
 
     RequireGlobalMutationGateClosed();
@@ -366,7 +384,9 @@ TEST_CASE(
         kPlayer,
         fixture.Prepared.JournalPath);
     REQUIRE(recovered.Status == PartyQuestReplicaDurableRestoreStatus::RecoveredRollback);
+    REQUIRE(recovered.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
     REQUIRE(recovered.RollbackPerformed);
+    REQUIRE_FALSE(recovered.CleanupPending);
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
 #endif
@@ -408,6 +428,114 @@ TEST_CASE(
     REQUIRE(committed.Phase == PartyQuestReplicaRestoreJournalPhase::Committed);
     for (const auto& operation : committed.Operations)
         REQUIRE_FALSE(std::filesystem::exists(operation.RollbackPath));
+#endif
+
+    RequireGlobalMutationGateClosed();
+}
+
+TEST_CASE(
+    "corrupted Restored state rolls back and terminates RolledBack",
+    "[quest.party-state.replica-restore][durability][recover-rollback][restored]")
+{
+#ifndef _WIN32
+    Sandbox sandbox;
+    auto fixture = PrepareFixture(sandbox, 0x61010009);
+
+    FaultCut fault{PartyQuestReplicaDurableRestoreBoundary::RestoredDurable};
+    const auto cut = PartyQuestReplicaDurableRestoreExecutor::Continue(
+        fixture.Paths,
+        kCampaign,
+        kPlayer,
+        fixture.Prepared.JournalPath,
+        {FailOnceAt, &fault});
+    REQUIRE(cut.Status == PartyQuestReplicaDurableRestoreStatus::FaultInjected);
+    REQUIRE(cut.Phase == PartyQuestReplicaRestoreJournalPhase::Restored);
+
+    WriteText(fixture.Paths.SavesDirectory / "Hero.ess", "POST_RESTORE_CORRUPTION");
+
+    const auto recovered = PartyQuestReplicaDurableRestoreExecutor::Recover(
+        fixture.Paths,
+        kCampaign,
+        kPlayer,
+        fixture.Prepared.JournalPath);
+    REQUIRE(recovered.Status == PartyQuestReplicaDurableRestoreStatus::RecoveredRollback);
+    REQUIRE(recovered.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
+    REQUIRE(recovered.RollbackPerformed);
+    REQUIRE_FALSE(recovered.CleanupPending);
+    REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
+    REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
+
+    const auto terminal = LoadStrongJournal(fixture.Prepared.JournalPath);
+    REQUIRE(terminal.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
+#endif
+
+    RequireGlobalMutationGateClosed();
+}
+
+TEST_CASE(
+    "durable RolledBack cut resumes only compaction and keeps restore id tombstone",
+    "[quest.party-state.replica-restore][durability][rollback-terminal][fault]")
+{
+#ifndef _WIN32
+    Sandbox sandbox;
+    constexpr uint64_t restoreId = 0x6101000A;
+    auto fixture = PrepareFixture(sandbox, restoreId);
+
+    FaultCut mutationCut{PartyQuestReplicaDurableRestoreBoundary::MutationStartedDurable};
+    const auto cut = PartyQuestReplicaDurableRestoreExecutor::Continue(
+        fixture.Paths,
+        kCampaign,
+        kPlayer,
+        fixture.Prepared.JournalPath,
+        {FailOnceAt, &mutationCut});
+    REQUIRE(cut.Status == PartyQuestReplicaDurableRestoreStatus::FaultInjected);
+
+    FaultCut terminalCut{PartyQuestReplicaDurableRestoreBoundary::RolledBackDurable};
+    const auto firstRecovery = PartyQuestReplicaDurableRestoreExecutor::Recover(
+        fixture.Paths,
+        kCampaign,
+        kPlayer,
+        fixture.Prepared.JournalPath,
+        {FailOnceAt, &terminalCut});
+    REQUIRE(firstRecovery.Status == PartyQuestReplicaDurableRestoreStatus::FaultInjected);
+    REQUIRE(firstRecovery.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
+    REQUIRE(firstRecovery.RollbackPerformed);
+    REQUIRE(firstRecovery.CleanupPending);
+    REQUIRE(firstRecovery.RequiresRecovery);
+
+    const auto terminalBeforeCleanup = LoadStrongJournal(fixture.Prepared.JournalPath);
+    REQUIRE(terminalBeforeCleanup.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
+    size_t existingBackups = 0;
+    for (const auto& operation : terminalBeforeCleanup.Operations)
+    {
+        if (operation.DestinationExisted && std::filesystem::exists(operation.RollbackPath))
+            ++existingBackups;
+    }
+    REQUIRE(existingBackups > 0);
+
+    const auto recovered = PartyQuestReplicaDurableRestoreExecutor::Recover(
+        fixture.Paths,
+        kCampaign,
+        kPlayer,
+        fixture.Prepared.JournalPath);
+    REQUIRE(recovered.Status == PartyQuestReplicaDurableRestoreStatus::AlreadyRolledBack);
+    REQUIRE(recovered.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
+    REQUIRE_FALSE(recovered.CleanupPending);
+    REQUIRE_FALSE(recovered.RequiresRecovery);
+
+    const auto terminal = LoadStrongJournal(fixture.Prepared.JournalPath);
+    REQUIRE(terminal.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
+    REQUIRE(std::filesystem::exists(terminal.TransactionDirectory));
+    REQUIRE(std::filesystem::exists(fixture.Prepared.JournalPath));
+    for (const auto& operation : terminal.Operations)
+        REQUIRE_FALSE(std::filesystem::exists(operation.RollbackPath));
+
+    const auto duplicate = PartyQuestReplicaDurableRestorePreparation::Prepare(
+        fixture.Paths,
+        fixture.Plan,
+        restoreId);
+    REQUIRE(duplicate.Status ==
+        PartyQuestReplicaDurableRestorePreparationStatus::RestoreIdConflict);
 #endif
 
     RequireGlobalMutationGateClosed();
@@ -545,7 +673,9 @@ TEST_CASE(
         kPlayer,
         fixture.Prepared.JournalPath);
     REQUIRE(recovered.Status == PartyQuestReplicaDurableRestoreStatus::RecoveredRollback);
+    REQUIRE(recovered.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
     REQUIRE(recovered.RollbackPerformed);
+    REQUIRE_FALSE(recovered.CleanupPending);
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
     REQUIRE_FALSE(std::filesystem::exists(fixture.Paths.SavesDirectory / "Hero.skse"));
 #endif
