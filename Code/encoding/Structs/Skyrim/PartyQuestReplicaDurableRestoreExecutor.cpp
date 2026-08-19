@@ -311,6 +311,27 @@ bool MatchesOriginal(
     return InspectNode(acOperation.ReplicaDestinationPath) == NodeState::Missing;
 }
 
+bool EnsureOriginalDurableAndMatches(
+    const PartyQuestReplicaRestoreJournalOperation& acOperation) noexcept
+{
+    if (acOperation.DestinationExisted)
+    {
+        return EnsureFileDurableAndMatches(
+            acOperation.ReplicaDestinationPath,
+            acOperation.OriginalSize,
+            acOperation.OriginalDigest);
+    }
+
+    if (InspectNode(acOperation.ReplicaDestinationPath) != NodeState::Missing ||
+        PartyQuestStableStorage::FlushDirectory(
+            acOperation.ReplicaDestinationPath.parent_path()) !=
+            PartyQuestStableStorageStatus::Success)
+    {
+        return false;
+    }
+    return InspectNode(acOperation.ReplicaDestinationPath) == NodeState::Missing;
+}
+
 bool MatchesCheckpoint(
     const PartyQuestReplicaRestoreJournalOperation& acOperation) noexcept
 {
@@ -328,7 +349,18 @@ bool VerifyAllOriginals(
         if (!MatchesOriginal(operation))
             return false;
     }
-    return true;
+    return PartyQuestReplicaRestoreJournal::VerifyOriginalTargets(acState);
+}
+
+bool VerifyAllOriginalsDurably(
+    const PartyQuestReplicaRestoreJournalState& acState) noexcept
+{
+    for (const auto& operation : acState.Operations)
+    {
+        if (!EnsureOriginalDurableAndMatches(operation))
+            return false;
+    }
+    return PartyQuestReplicaRestoreJournal::VerifyOriginalTargets(acState);
 }
 
 bool VerifyAllRestoredDurably(
@@ -628,15 +660,18 @@ bool CleanupStagesDurably(
     return success;
 }
 
-bool CompactCommittedTransaction(
+bool CompactTerminalTransaction(
     const PartyQuestReplicaRestoreJournalState& acState,
     const std::filesystem::path& acJournalPath) noexcept
 {
-    if (acState.Phase != PartyQuestReplicaRestoreJournalPhase::Committed ||
-        !VerifyAllRestoredDurably(acState))
-    {
+    const bool committed =
+        acState.Phase == PartyQuestReplicaRestoreJournalPhase::Committed &&
+        VerifyAllRestoredDurably(acState);
+    const bool rolledBack =
+        acState.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack &&
+        VerifyAllOriginalsDurably(acState);
+    if (!committed && !rolledBack)
         return false;
-    }
 
     bool success = CleanupStagesDurably(acState, true);
 
@@ -684,7 +719,7 @@ bool CompactCommittedTransaction(
         success = false;
     }
 
-    // The primary Committed journal and transaction directory deliberately stay
+    // The primary terminal journal and transaction directory deliberately stay
     // as a compact RestoreId tombstone. Do not rmdir the transaction root here.
     return success;
 }
@@ -828,18 +863,41 @@ PartyQuestReplicaDurableRestoreReport RollbackFromDurableBarrier(
         }
     }
 
-    if (!VerifyAllOriginals(acState))
+    if (!VerifyAllOriginalsDurably(acState))
     {
         report.Status = PartyQuestReplicaDurableRestoreStatus::RollbackFailed;
         report.RequiresRecovery = true;
         return report;
     }
 
+    auto rolledBack = acState;
+    if (PartyQuestReplicaRestoreJournal::MarkRolledBack(rolledBack) !=
+            PartyQuestReplicaRestoreJournalStatus::Ready ||
+        PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
+            acJournalPath,
+            rolledBack) != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+    {
+        report.Status = PartyQuestReplicaDurableRestoreStatus::JournalPersistenceFailed;
+        report.Phase = rolledBack.Phase;
+        report.RollbackPerformed = true;
+        report.CleanupPending = true;
+        report.RequiresRecovery = true;
+        return report;
+    }
+
+    report.Phase = rolledBack.Phase;
     report.RollbackPerformed = true;
-    (void)CleanupStagesDurably(acState, true);
-    // The current schema has no terminal RolledBack phase, so retain journal and
-    // rollback evidence as conservative recovery authority.
-    report.CleanupPending = true;
+    if (aHooks.Invoke(
+            PartyQuestReplicaDurableRestoreBoundary::RolledBackDurable) ==
+        PartyQuestReplicaDurableRestoreDirective::FailClosed)
+    {
+        report.Status = PartyQuestReplicaDurableRestoreStatus::FaultInjected;
+        report.CleanupPending = true;
+        report.RequiresRecovery = true;
+        return report;
+    }
+
+    report.CleanupPending = !CompactTerminalTransaction(rolledBack, acJournalPath);
     report.RequiresRecovery = false;
     return report;
 }
@@ -1172,7 +1230,7 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::C
             acJournalPath,
             &state);
         report.CompletedOperations = completed;
-        report.CleanupPending = !CompactCommittedTransaction(state, acJournalPath);
+        report.CleanupPending = !CompactTerminalTransaction(state, acJournalPath);
         return report;
     }
     catch (...)
@@ -1310,7 +1368,7 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::R
                 acJournalPath,
                 &state);
             report.CompletedOperations = state.Operations.size();
-            report.CleanupPending = !CompactCommittedTransaction(state, acJournalPath);
+            report.CleanupPending = !CompactTerminalTransaction(state, acJournalPath);
             return report;
         }
 
@@ -1329,7 +1387,27 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::R
                 acJournalPath,
                 &state);
             report.CompletedOperations = state.Operations.size();
-            report.CleanupPending = !CompactCommittedTransaction(state, acJournalPath);
+            report.CleanupPending = !CompactTerminalTransaction(state, acJournalPath);
+            return report;
+        }
+
+        case PartyQuestReplicaRestoreJournalPhase::RolledBack:
+        {
+            if (!VerifyAllOriginalsDurably(state))
+            {
+                return MakeReport(
+                    PartyQuestReplicaDurableRestoreStatus::RolledBackVerificationFailed,
+                    acJournalPath,
+                    &state);
+            }
+
+            auto report = MakeReport(
+                PartyQuestReplicaDurableRestoreStatus::AlreadyRolledBack,
+                acJournalPath,
+                &state);
+            report.CompletedOperations = state.Operations.size();
+            report.RollbackPerformed = true;
+            report.CleanupPending = !CompactTerminalTransaction(state, acJournalPath);
             return report;
         }
         }
