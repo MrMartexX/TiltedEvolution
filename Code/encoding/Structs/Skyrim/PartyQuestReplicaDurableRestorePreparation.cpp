@@ -227,12 +227,14 @@ PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(
             PartyQuestReplicaDurableRestorePreparationStatus::WorkspaceLeaseFailure);
     }
 
-    const auto promotion = PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
-        acPaths,
-        acPlan.CampaignId,
-        acPlan.PlayerProfileId,
-        acPlan.CheckpointKind,
-        acPlan.CampaignWorldRevision);
+    const auto promotion =
+        PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpointAuthorized(
+            acPaths,
+            acPlan.CampaignId,
+            acPlan.PlayerProfileId,
+            acPlan.CheckpointKind,
+            acPlan.CampaignWorldRevision,
+            acWorkspaceCapability);
     if (!promotion.IsPromoted())
     {
         return Failure(
