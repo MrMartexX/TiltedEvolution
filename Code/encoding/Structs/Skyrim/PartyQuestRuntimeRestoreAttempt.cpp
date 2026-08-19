@@ -7,7 +7,6 @@
 #include <array>
 #include <fstream>
 #include <iomanip>
-#include <limits>
 #include <sstream>
 #include <system_error>
 #include <type_traits>
@@ -505,7 +504,7 @@ PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
     const PartyQuestCampaignId& acCampaignId,
     const PartyQuestPlayerProfileId& acPlayerProfileId,
     uint64_t aTransactionId,
-    const PartyQuestReplicaRestoreJournalState& acRolledBackJournal,
+    uint32_t aRolledBackOrdinal,
     const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept
 {
     if (!HasValidContext(acPaths, acCampaignId, acPlayerProfileId, aTransactionId))
@@ -515,6 +514,13 @@ PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
         if (aTransactionId == 0)
             return MakeResult(PartyQuestRuntimeRestoreAttemptStatus::InvalidTransactionId, acPaths, aTransactionId);
         return MakeResult(PartyQuestRuntimeRestoreAttemptStatus::InvalidLayout, acPaths, aTransactionId);
+    }
+    if (aRolledBackOrdinal >= MaxAttemptsPerTransaction)
+    {
+        return MakeResult(
+            PartyQuestRuntimeRestoreAttemptStatus::InvalidOrdinal,
+            acPaths,
+            aTransactionId);
     }
     if (!acWorkspaceCapability.Protects(
             acPaths, acCampaignId, acPlayerProfileId))
@@ -526,48 +532,51 @@ PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
     }
 
 #ifdef _WIN32
-    (void)acRolledBackJournal;
     return MakeResult(
         PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform,
         acPaths,
         aTransactionId);
 #else
-    if (acRolledBackJournal.RestoreId == 0 ||
-        acRolledBackJournal.RestoreId > MaxAttemptsPerTransaction)
-    {
-        return MakeResult(
-            PartyQuestRuntimeRestoreAttemptStatus::JournalMismatch,
-            acPaths,
-            aTransactionId);
-    }
-
-    const uint32_t journalOrdinal =
-        static_cast<uint32_t>(acRolledBackJournal.RestoreId - 1);
-    if (!JournalMatchesAttempt(
-            acPaths,
-            acCampaignId,
-            acPlayerProfileId,
-            aTransactionId,
-            journalOrdinal,
-            acRolledBackJournal))
-    {
-        return MakeResult(
-            PartyQuestRuntimeRestoreAttemptStatus::JournalMismatch,
-            acPaths,
-            aTransactionId);
-    }
-
     auto loaded = Load(acPaths, acCampaignId, acPlayerProfileId, aTransactionId);
     if (loaded.Status != PartyQuestRuntimeRestoreAttemptStatus::Success || !loaded.State)
         return loaded;
 
+    const auto journalPath = GetJournalPath(
+        acPaths, aTransactionId, aRolledBackOrdinal);
+    const auto journal =
+        PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(journalPath);
+    if (journal.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
+    {
+        return MakeResult(
+            PartyQuestRuntimeRestoreAttemptStatus::FileNotFound,
+            acPaths,
+            aTransactionId,
+            &*loaded.State);
+    }
+    if (journal.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success ||
+        !journal.State ||
+        !JournalMatchesAttempt(
+            acPaths,
+            acCampaignId,
+            acPlayerProfileId,
+            aTransactionId,
+            aRolledBackOrdinal,
+            *journal.State))
+    {
+        return MakeResult(
+            PartyQuestRuntimeRestoreAttemptStatus::JournalMismatch,
+            acPaths,
+            aTransactionId,
+            &*loaded.State);
+    }
+
     const uint32_t current = loaded.State->CurrentOrdinal;
-    if (current == journalOrdinal + 1)
+    if (current == aRolledBackOrdinal + 1)
     {
         loaded.Status = PartyQuestRuntimeRestoreAttemptStatus::AlreadyAdvanced;
         return loaded;
     }
-    if (current > journalOrdinal + 1)
+    if (current > aRolledBackOrdinal + 1)
     {
         return MakeResult(
             PartyQuestRuntimeRestoreAttemptStatus::StaleJournal,
@@ -575,7 +584,7 @@ PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
             aTransactionId,
             &*loaded.State);
     }
-    if (current != journalOrdinal)
+    if (current != aRolledBackOrdinal)
     {
         return MakeResult(
             PartyQuestRuntimeRestoreAttemptStatus::JournalMismatch,
