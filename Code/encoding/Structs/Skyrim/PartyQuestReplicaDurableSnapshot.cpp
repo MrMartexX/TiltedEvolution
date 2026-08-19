@@ -50,10 +50,23 @@ PartyQuestReplicaDurableSnapshotResult StableFailure(
         : PartyQuestReplicaDurableSnapshotStatus::StableStorageFailure;
     return result;
 }
-} // namespace
 
-PartyQuestReplicaDurableSnapshotResult
-PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+PartyQuestReplicaDurableSnapshotResult InvalidPreflight(
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acPlayerProfileId,
+    uint64_t aCampaignWorldRevision) noexcept
+{
+    PartyQuestReplicaDurableSnapshotResult result;
+    if (!acCampaignId.IsValid() || !acPlayerProfileId.IsValid())
+        result.Status = PartyQuestReplicaDurableSnapshotStatus::InvalidIdentity;
+    else if (aCampaignWorldRevision == 0)
+        result.Status = PartyQuestReplicaDurableSnapshotStatus::InvalidRevision;
+    else
+        result.Status = PartyQuestReplicaDurableSnapshotStatus::Promoted;
+    return result;
+}
+
+PartyQuestReplicaDurableSnapshotResult PromoteProtected(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestCampaignId& acCampaignId,
     const PartyQuestPlayerProfileId& acPlayerProfileId,
@@ -61,16 +74,12 @@ PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
     uint64_t aCampaignWorldRevision) noexcept
 {
     PartyQuestReplicaDurableSnapshotResult result;
-    if (!acCampaignId.IsValid() || !acPlayerProfileId.IsValid())
-    {
-        result.Status = PartyQuestReplicaDurableSnapshotStatus::InvalidIdentity;
-        return result;
-    }
-    if (aCampaignWorldRevision == 0)
-    {
-        result.Status = PartyQuestReplicaDurableSnapshotStatus::InvalidRevision;
-        return result;
-    }
+    const auto preflight = InvalidPreflight(
+        acCampaignId,
+        acPlayerProfileId,
+        aCampaignWorldRevision);
+    if (preflight.Status != PartyQuestReplicaDurableSnapshotStatus::Promoted)
+        return preflight;
 
 #ifndef _WIN32
     try
@@ -144,9 +153,6 @@ PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
             if (stable != PartyQuestStableStorageStatus::Success)
                 return StableFailure(stable);
 
-            // The existing copy executor may have used ordinary stream/copy and
-            // rename operations. These barriers promote the exact final bytes
-            // and namespace before manifest authority is republished.
             stable = PartyQuestStableStorage::FlushFile(*candidate);
             if (stable != PartyQuestStableStorageStatus::Success)
                 return StableFailure(stable);
@@ -219,6 +225,70 @@ PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
     return result;
 #endif
 }
+} // namespace
+
+PartyQuestReplicaDurableSnapshotResult
+PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acPlayerProfileId,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision) noexcept
+{
+    const auto preflight = InvalidPreflight(
+        acCampaignId,
+        acPlayerProfileId,
+        aCampaignWorldRevision);
+    if (preflight.Status != PartyQuestReplicaDurableSnapshotStatus::Promoted)
+        return preflight;
+
+    PartyQuestReplicaWorkspaceLease lease;
+    switch (lease.Acquire(acPaths, acCampaignId, acPlayerProfileId))
+    {
+    case PartyQuestReplicaWorkspaceLeaseStatus::Acquired:
+        break;
+    case PartyQuestReplicaWorkspaceLeaseStatus::Busy:
+    {
+        PartyQuestReplicaDurableSnapshotResult result;
+        result.Status = PartyQuestReplicaDurableSnapshotStatus::WorkspaceBusy;
+        return result;
+    }
+    case PartyQuestReplicaWorkspaceLeaseStatus::InvalidIdentity:
+    {
+        PartyQuestReplicaDurableSnapshotResult result;
+        result.Status = PartyQuestReplicaDurableSnapshotStatus::InvalidIdentity;
+        return result;
+    }
+    case PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted:
+    case PartyQuestReplicaWorkspaceLeaseStatus::InvalidLayout:
+    case PartyQuestReplicaWorkspaceLeaseStatus::InvalidNamespace:
+    case PartyQuestReplicaWorkspaceLeaseStatus::IoError:
+    {
+        PartyQuestReplicaDurableSnapshotResult result;
+        result.Status = PartyQuestReplicaDurableSnapshotStatus::WorkspaceLeaseFailure;
+        return result;
+    }
+    }
+
+    const auto capability = lease.CreatePublicationCapability(
+        acPaths,
+        acCampaignId,
+        acPlayerProfileId);
+    if (!capability.IsVerified())
+    {
+        PartyQuestReplicaDurableSnapshotResult result;
+        result.Status = PartyQuestReplicaDurableSnapshotStatus::WorkspaceLeaseFailure;
+        return result;
+    }
+
+    return PromoteRevisionCheckpointAuthorized(
+        acPaths,
+        acCampaignId,
+        acPlayerProfileId,
+        aKind,
+        aCampaignWorldRevision,
+        capability);
+}
 
 PartyQuestReplicaDurableSnapshotResult
 PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpointAuthorized(
@@ -229,6 +299,13 @@ PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpointAuthorized(
     uint64_t aCampaignWorldRevision,
     const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept
 {
+    const auto preflight = InvalidPreflight(
+        acCampaignId,
+        acPlayerProfileId,
+        aCampaignWorldRevision);
+    if (preflight.Status != PartyQuestReplicaDurableSnapshotStatus::Promoted)
+        return preflight;
+
     if (!acWorkspaceCapability.Protects(
             acPaths,
             acCampaignId,
@@ -240,10 +317,7 @@ PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpointAuthorized(
         return result;
     }
 
-    // Keep the exact capability argument alive for the complete synchronous
-    // promotion. Its pinned native lease state is the runtime publication
-    // authority; promotion itself does not release/reacquire the workspace.
-    return PromoteRevisionCheckpoint(
+    return PromoteProtected(
         acPaths,
         acCampaignId,
         acPlayerProfileId,
