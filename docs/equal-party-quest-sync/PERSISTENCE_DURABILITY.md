@@ -7,9 +7,11 @@ The current implementation still advertises only `ProcessCrashResilient` through
 `PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee`.
 
 This document is an ordering inventory and closure checklist. It is not evidence
-that P0-H is closed. `PartyQuestStableStorage` provides narrow OS flush
-primitives only; no caller currently gains mutation authority merely because
-those primitives exist.
+that P0-H is closed. `PartyQuestStableStorage` now provides reviewed staged-file
+write and same-directory rename-publication primitives, and
+`PartyQuestRuntimeApplyPersistence::SavePowerLossDurably` is the first metadata
+writer migrated to that stronger ordering. No caller gains native mutation
+authority merely because this one writer can use those primitives.
 
 ## Authoritative persistence graph
 
@@ -18,8 +20,7 @@ names contain `Persistence`.
 
 ### Canonical/runtime metadata
 
-The following stores currently use complete temporary files plus verification
-and rename/backup publication:
+The authoritative metadata stores are:
 
 - `PartyQuestCampaignPersistence`
 - `PartyQuestPlayerProfilePersistence`
@@ -28,9 +29,29 @@ and rename/backup publication:
 - `PartyQuestReplicaManifestStore`
 - `PartyQuestReplicaRestoreJournalPersistence`
 
-Their existing protocols provide process-crash recovery semantics. Stream flush
-and a successful rename are not, by themselves, the project's
-`PowerLossDurable` proof.
+Their legacy `SaveAtomically`-style protocols provide process-crash recovery
+semantics. Stream flush and a successful rename are not, by themselves, the
+project's `PowerLossDurable` proof.
+
+`PartyQuestRuntimeApplyPersistence` additionally exposes
+`SavePowerLossDurably`. Its stronger path requires the destination directory to
+already exist and applies this ordering:
+
+1. encode the complete candidate journal;
+2. durably create/truncate and write `.tmp`;
+3. re-read and decode `.tmp` and verify exact state equality;
+4. if a primary exists, durably rename primary to `.bak`, replacing an older
+   backup when necessary;
+5. durably rename the verified `.tmp` to the primary name;
+6. never perform an unproven rollback rename after a failed durable boundary.
+
+After step 4, failure deliberately preserves the old durable state as `.bak`
+and the new durable candidate as `.tmp`. After step 5, a later reported failure
+must treat the new primary as potentially/durably published rather than pretend
+publication did not occur.
+
+This is one migrated writer only. The other authoritative metadata stores still
+require equivalent migration and fault proof before P0-H can close.
 
 ### Replica/checkpoint data files
 
@@ -45,9 +66,9 @@ complete snapshot. A power-loss-safe implementation must preserve the stronger
 ordering:
 
 1. write/copy every staged data file;
-2. force each staged file's bytes to stable storage;
+2. force each staged file's bytes and staged namespace entry to stable storage;
 3. publish each final data-file directory entry;
-4. force the affected directory metadata required to make those publications
+4. force the platform-specific metadata required to make those publications
    persistent;
 5. only then write, verify and durably publish the manifest;
 6. only then treat the snapshot as authoritative.
@@ -90,19 +111,47 @@ that original state has been restored.
 
 ## OS primitive boundary
 
-`PartyQuestStableStorage::FlushFile` supplies an explicit file flush primitive:
+`PartyQuestStableStorage::FlushFile` supplies an explicit existing-file flush:
 
-- Windows: `FlushFileBuffers` on an existing file handle opened for write;
-- Linux: `fsync` on an opened file descriptor.
+- Windows: `FlushFileBuffers` on an existing regular non-reparse file handle;
+- Linux: `fsync` on an opened regular-file descriptor with `O_NOFOLLOW`.
 
-`PartyQuestStableStorage::FlushDirectory` / `FlushParentDirectory` currently:
+`PartyQuestStableStorage::WriteFileDurably` supplies durable staged-file write:
 
-- Linux: use `fsync` on a directory descriptor;
-- Windows: return `Unsupported` deliberately.
+- Linux: open/write `O_NOFOLLOW`, `fsync(file)`, close, then `fsync(parent)` so
+  both data and a newly created staged name cross the durability barrier;
+- Windows: validate an existing non-reparse parent, require the filesystem to
+  identify as NTFS, open/create the exact final node with
+  `FILE_FLAG_WRITE_THROUGH`, validate it as regular/non-reparse before
+  truncation, write all bytes, `FlushFileBuffers`, then close.
 
-The Windows result is fail-closed. The project does not infer a POSIX-style
-parent-directory durability contract from undocumented behavior or from a
-mechanism that would require running Skyrim elevated.
+`PartyQuestStableStorage::PublishFileRename` supplies same-directory publication:
+
+- Linux: `fsync(source)`, rename, then `fsync(parent)`;
+- Windows: open the exact regular non-reparse source with `DELETE` and
+  `FILE_FLAG_WRITE_THROUGH`, require NTFS by handle, `FlushFileBuffers`, issue
+  `SetFileInformationByHandle(FileRenameInfo)`, then apply an additional
+  exact-handle flush before close. The Windows claim is intentionally NTFS-only;
+  other filesystems fail closed.
+
+`PartyQuestStableStorage::FlushDirectory` / `FlushParentDirectory` remain:
+
+- Linux: `fsync` on a directory descriptor;
+- Windows: `Unsupported` as a generic primitive.
+
+That Windows result is still intentional: the project does not infer a generic
+POSIX-style parent-directory contract from undocumented behavior. The narrower
+NTFS write-through creation/rename primitives are used where Microsoft provides
+specific metadata semantics.
+
+`PartyQuestStableStorage::RemoveFileDurably` currently:
+
+- Linux: validates a regular final node, `unlink`, then `fsync(parent)`;
+- Windows: `Unsupported` until delete/disposition plus handle-close metadata
+  durability is documented and accepted to the same standard.
+
+Therefore durable cleanup/delete is still a Windows P0-H gap even though staged
+write and rename publication now have an NTFS-gated implementation.
 
 ## P0-H closure conditions
 
@@ -119,11 +168,10 @@ following are true:
    downgrading it after a crash;
 5. Linux file + directory ordering is covered by deterministic failure/fault
    tests at every durable boundary;
-6. a documented, non-admin Windows publication protocol provides equivalent
-   required guarantees, or Windows remains explicitly unable to satisfy the
-   production mutation gate;
+6. Windows NTFS staged-write/rename assumptions and any required durable delete/
+   cleanup semantics are covered without administrator-only volume flushing;
 7. cross-platform CI is green and the final live validation matrix records the
-   exact tested SHA and filesystem/runtime assumptions.
+   exact tested SHA, filesystem and runtime assumptions.
 
 Until then, `AllowsNativeRuntimeMutation()` must remain false and canonical
 Skyrim mutation must remain disabled.
