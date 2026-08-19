@@ -235,59 +235,16 @@ PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
     PartyQuestCheckpointKind aKind,
     uint64_t aCampaignWorldRevision) noexcept
 {
-    const auto preflight = InvalidPreflight(
-        acCampaignId,
-        acPlayerProfileId,
-        aCampaignWorldRevision);
-    if (preflight.Status != PartyQuestReplicaDurableSnapshotStatus::Promoted)
-        return preflight;
-
-    PartyQuestReplicaWorkspaceLease lease;
-    switch (lease.Acquire(acPaths, acCampaignId, acPlayerProfileId))
-    {
-    case PartyQuestReplicaWorkspaceLeaseStatus::Acquired:
-        break;
-    case PartyQuestReplicaWorkspaceLeaseStatus::Busy:
-    {
-        PartyQuestReplicaDurableSnapshotResult result;
-        result.Status = PartyQuestReplicaDurableSnapshotStatus::WorkspaceBusy;
-        return result;
-    }
-    case PartyQuestReplicaWorkspaceLeaseStatus::InvalidIdentity:
-    {
-        PartyQuestReplicaDurableSnapshotResult result;
-        result.Status = PartyQuestReplicaDurableSnapshotStatus::InvalidIdentity;
-        return result;
-    }
-    case PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted:
-    case PartyQuestReplicaWorkspaceLeaseStatus::InvalidLayout:
-    case PartyQuestReplicaWorkspaceLeaseStatus::InvalidNamespace:
-    case PartyQuestReplicaWorkspaceLeaseStatus::IoError:
-    {
-        PartyQuestReplicaDurableSnapshotResult result;
-        result.Status = PartyQuestReplicaDurableSnapshotStatus::WorkspaceLeaseFailure;
-        return result;
-    }
-    }
-
-    const auto capability = lease.CreatePublicationCapability(
-        acPaths,
-        acCampaignId,
-        acPlayerProfileId);
-    if (!capability.IsVerified())
-    {
-        PartyQuestReplicaDurableSnapshotResult result;
-        result.Status = PartyQuestReplicaDurableSnapshotStatus::WorkspaceLeaseFailure;
-        return result;
-    }
-
-    return PromoteRevisionCheckpointAuthorized(
+    // Retained caller-serialized/offline seam. Production runtime restore paths
+    // already hold an exact workspace lease and use the capability-bearing
+    // entry point. Do not acquire a second lease here: that would make a correct
+    // authorized call fail as a recursive WorkspaceBusy operation.
+    return PromoteProtected(
         acPaths,
         acCampaignId,
         acPlayerProfileId,
         aKind,
-        aCampaignWorldRevision,
-        capability);
+        aCampaignWorldRevision);
 }
 
 PartyQuestReplicaDurableSnapshotResult
