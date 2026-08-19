@@ -130,7 +130,8 @@ enum class PartyQuestReplicaRestoreJournalPersistenceStatus : uint8_t
     ChecksumMismatch,
     InvalidData,
     BackupRecoveryRequired,
-    ResourceLimitExceeded
+    ResourceLimitExceeded,
+    PowerLossDurabilityUnsupported
 };
 
 struct PartyQuestReplicaRestoreJournalPersistenceResult
@@ -179,10 +180,14 @@ struct PartyQuestReplicaRestoreJournalPersistenceHooks
 };
 
 /**
- * Durable restore journal. A valid .tmp may be promoted because it represents
- * a completely written newer state. A stale .bak is never silently accepted:
- * forgetting that the mutation barrier was crossed could make crash recovery
- * overwrite the wrong side of the transaction.
+ * Restore journal persistence.
+ *
+ * SaveAtomically retains the original process-crash recovery protocol.
+ * SavePowerLossDurably uses stable staged writes plus stable same-directory
+ * primary/backup publication and never performs an unproved rollback after a
+ * durable namespace transition. Its parent directory must already exist; the
+ * caller remains responsible for proving that directory and every filesystem
+ * prerequisite for a journal phase are durable before publishing that phase.
  */
 class PartyQuestReplicaRestoreJournalPersistence final
 {
@@ -194,6 +199,11 @@ public:
         const std::vector<uint8_t>& acBytes);
 
     [[nodiscard]] static PartyQuestReplicaRestoreJournalPersistenceStatus SaveAtomically(
+        const std::filesystem::path& acPath,
+        const PartyQuestReplicaRestoreJournalState& acState,
+        PartyQuestReplicaRestoreJournalPersistenceHooks aHooks = {});
+
+    [[nodiscard]] static PartyQuestReplicaRestoreJournalPersistenceStatus SavePowerLossDurably(
         const std::filesystem::path& acPath,
         const PartyQuestReplicaRestoreJournalState& acState,
         PartyQuestReplicaRestoreJournalPersistenceHooks aHooks = {});
