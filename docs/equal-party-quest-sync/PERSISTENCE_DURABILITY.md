@@ -32,9 +32,11 @@ pipeline split into two surfaces:
 
 `PartyQuestReplicaDurableRestoreExecutor::Recover` is the recovery partner for
 post-barrier failures. It does not cross a new mutation barrier from
-`Prepared`/`BackupsReady`; `MutationStarted` is rolled back to exact original
-replica bytes, `Restored` is verified before commit, and `Committed` is verified
-before cleanup is resumed.
+`Prepared`/`BackupsReady`; `MutationStarted` restores exact original replica
+state and durably publishes terminal `RolledBack`; `Restored` is verified before
+commit and falls back to the same exact rollback path if verification fails;
+`Committed` and `RolledBack` are terminal tombstones whose postconditions are
+reverified before cleanup is resumed.
 
 This remains a filesystem proof surface, not production native-mutation
 activation. Existing runtime/server callers are not automatically converted
@@ -108,6 +110,13 @@ recovery partner for the strong restore-journal writer:
   preserved fail-closed;
 - an older valid `.bak` remains `BackupRecoveryRequired`, never normal current
   truth.
+
+The restore-journal archive format is now version 2. Persisted phase values
+`Prepared=0` through `Committed=4` are frozen and keep their v1 meanings.
+`RolledBack=5` is a v2-only terminal phase. The decoder accepts legitimate v1
+archives, while a v1 archive claiming phase 5 is rejected as invalid historical
+evidence. New writes use v2. This prevents the new terminal state from silently
+changing the meaning of any already-persisted restore transaction.
 
 ### Production wiring still open
 
@@ -221,8 +230,8 @@ stable namespace contract merely because NTFS write-through file rename exists.
 
 The legacy `PartyQuestReplicaRestoreExecutor` remains a separate
 process-crash-resilient path. The Linux strong path now covers the complete
-filesystem phase sequence from an already verified checkpoint to terminal
-commit.
+filesystem phase sequence from an already verified checkpoint to either terminal
+`Committed` or terminal `RolledBack`.
 
 ### Strong pre-mutation preparation
 
@@ -285,39 +294,53 @@ rollback set rather than depending on another transient generation.
 - `MutationStarted`: restore original destinations in reverse operation order;
   destinations that did not originally exist are durably removed, while existing
   destinations are recreated from exact durable rollback bytes via durable
-  sibling staging + atomic replacement; verify the complete original state;
+  sibling staging + atomic replacement; establish durable original postconditions,
+  mark and durably publish `RolledBack`, then compact recovery evidence;
 - `Restored`: durably verify all restored destinations, then publish `Committed`;
-  if restored verification fails, take the exact rollback path;
+  if restored verification fails, take the exact rollback path and terminate in
+  durable `RolledBack`;
 - `Committed`: durably verify final restored destinations and resume only terminal
-  compaction, never rollback a successfully committed transaction.
+  compaction, never rollback a successfully committed transaction;
+- `RolledBack`: durably verify the exact original-state postcondition and resume
+  only terminal compaction; it never re-enters the destructive forward path.
+
+For an originally existing destination, terminal rollback proof includes exact
+size/digest verification, `fsync(file)`, `fsync(parent)` and re-verification. For
+an originally absent destination, terminal rollback proof requires confirmed
+absence, `fsync(parent)` and confirmed absence again. `MarkRolledBack` itself is
+only valid from `MutationStarted` or `Restored` and independently verifies the
+complete original target set before changing journal phase.
 
 Fault tests cover cuts immediately after durable `MutationStarted`, after one
-partial destination publication, after durable `Restored`, and after durable
-`Committed`.
+partial destination publication, after durable `Restored`, after durable
+`Committed`, and immediately after durable `RolledBack` but before compaction.
+Tests also cover a corrupted `Restored` postcondition falling back to rollback,
+an originally absent destination, repeated restart recovery, v1/v2 archive
+compatibility and duplicate RestoreId rejection after either terminal outcome.
 
 ### Terminal transaction identity and compaction
 
-A successful committed transaction is not fully deleted. Doing so would make the
+Neither successful terminal outcome is fully deleted. Doing so would make the
 same `RestoreId` reusable after cleanup and weaken transaction identity.
 
-After durable `Committed`, compaction may durably remove:
+Only after a terminal primary journal is durable and its corresponding target
+postcondition is reverified may compaction durably remove:
 
 - forward/rollback staging files;
 - rollback backup files;
 - obsolete journal `.tmp` and `.bak` files;
 - now-empty rollback subdirectories.
 
-The primary `Committed` journal and transaction directory remain as a compact
-durable tombstone. This keeps the completed restore id occupied and lets later
-`Recover` reverify final postconditions without reconstructing history from
-filenames or timestamps.
+The primary `Committed` or `RolledBack` journal and transaction directory remain
+as a compact durable tombstone. This keeps the completed restore id occupied and
+lets later `Recover` reverify the appropriate final postcondition without
+reconstructing history from filenames or timestamps.
 
-A rolled-back `MutationStarted` transaction is intentionally more conservative.
-The current durable schema has no terminal `RolledBack` phase, so recovery keeps
-the `MutationStarted` primary journal and rollback evidence after exact original
-state is restored. Repeated recovery is idempotent. Adding a durable rolled-back
-terminal state, and only then compacting that recovery evidence, remains open
-P0-H work.
+A crash or injected cut after `RolledBack` publication but before compaction
+therefore leaves both terminal authority and rollback evidence. The next recovery
+recognizes `RolledBack`, verifies originals, finishes compaction and still retains
+the terminal tombstone. Evidence is never compacted first and explained by a
+later journal transition.
 
 ## OS primitive boundary
 
@@ -363,20 +386,20 @@ following are true:
    writer only after its parent namespace is durably established;
 2. the production checkpoint path requires successful data-before-manifest
    durability promotion rather than merely exposing the promotion helper;
-3. the production restore path requires the reviewed strong preparation and
-   destructive continuation instead of the legacy crash-resilient executor;
-4. rolled-back post-barrier transactions have an explicit durable terminal state
-   if their retained rollback evidence is to be compacted safely;
-5. recovery/adoption paths use the same durability contract rather than silently
-   downgrading it after a crash;
-6. Linux file + directory ordering is covered by deterministic boundary faults
+3. the production restore path requires the reviewed strong preparation,
+   destructive continuation and v2 terminal recovery semantics instead of the
+   legacy crash-resilient executor;
+4. recovery/adoption paths use the same durability contract rather than silently
+   downgrading it after a crash or bypassing terminal `Committed`/`RolledBack`
+   postcondition verification;
+5. Linux file + directory ordering is covered by deterministic boundary faults
    and by filesystem/device power-loss validation under documented assumptions;
-7. Windows has a reviewed durable directory-creation/promotion/removal contract
+6. Windows has a reviewed durable directory-creation/promotion/removal contract
    for the checkpoint/restore tree or remains explicitly unable to satisfy the
    production gate;
-8. Windows durable delete/cleanup semantics required by restore/recovery are
+7. Windows durable delete/cleanup semantics required by restore/recovery are
    proved without administrator-only volume flushing;
-9. cross-platform CI is green and the final live validation matrix records the
+8. cross-platform CI is green and the final live validation matrix records the
    exact tested SHA, filesystem and runtime assumptions.
 
 Until then, `AllowsNativeRuntimeMutation()` must remain false and canonical
