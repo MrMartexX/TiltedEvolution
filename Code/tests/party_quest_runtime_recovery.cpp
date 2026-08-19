@@ -232,9 +232,23 @@ TEST_CASE("Crash recovery restores exact PreRepair revision before clearing runt
     REQUIRE(result.Status == PartyQuestRuntimeRecoveryStatus::Restored);
     REQUIRE(result.IsResolved());
     REQUIRE(result.TransactionId == kTransactionId);
-    REQUIRE(result.RestoreId == kTransactionId);
     REQUIRE(result.TargetWorldRevision == kWorldRevision);
     REQUIRE(result.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
+#ifdef _WIN32
+    REQUIRE(result.RestoreId == kTransactionId);
+    REQUIRE(result.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
+    REQUIRE_FALSE(result.DurableRestoreStatus.has_value());
+#else
+    REQUIRE(result.RestoreId != 0);
+    REQUIRE(result.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
+    REQUIRE(result.RestoreAttemptStatus.has_value());
+    REQUIRE(result.DurablePreparationStatus ==
+        PartyQuestReplicaDurableRestorePreparationStatus::BackupsReady);
+    REQUIRE(result.DurableRestoreStatus ==
+        PartyQuestReplicaDurableRestoreStatus::Success);
+#endif
     REQUIRE(result.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1600");
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
@@ -290,8 +304,17 @@ TEST_CASE("Durable barrier clear can be retried after checkpoint restore already
         session,
         paths);
     REQUIRE(first.Status == PartyQuestRuntimeRecoveryStatus::RuntimeStatePersistenceFailed);
-    REQUIRE(first.RestoreId == kTransactionId);
     REQUIRE(first.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
+#ifdef _WIN32
+    REQUIRE(first.RestoreId == kTransactionId);
+    REQUIRE(first.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
+#else
+    REQUIRE(first.RestoreId != 0);
+    REQUIRE(first.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
+    REQUIRE(first.DurableRestoreStatus == PartyQuestReplicaDurableRestoreStatus::Success);
+#endif
     REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1620");
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
 
@@ -300,14 +323,24 @@ TEST_CASE("Durable barrier clear can be retried after checkpoint restore already
         session,
         paths);
     REQUIRE(second.Status == PartyQuestRuntimeRecoveryStatus::AlreadyRestored);
-    REQUIRE(second.RestoreId == kTransactionId);
     REQUIRE(second.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted);
+#ifdef _WIN32
+    REQUIRE(second.RestoreId == kTransactionId);
+    REQUIRE(second.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
+#else
+    REQUIRE(second.RestoreId == first.RestoreId);
+    REQUIRE(second.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
+    REQUIRE(second.DurableRestoreStatus ==
+        PartyQuestReplicaDurableRestoreStatus::AlreadyCommitted);
+#endif
     REQUIRE(second.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
     REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1620");
 }
 
-TEST_CASE("Interrupted restore rollback keeps runtime barrier until a later exact restore completes", "[quest.party-state.runtime-recovery]")
+TEST_CASE("Interrupted legacy restore rollback keeps runtime barrier until a later exact restore completes", "[quest.party-state.runtime-recovery]")
 {
     RecoverySandbox sandbox;
     const auto paths = BuildRecoveryPaths(sandbox);
@@ -360,6 +393,8 @@ TEST_CASE("Interrupted restore rollback keeps runtime barrier until a later exac
     REQUIRE(rollback.Status ==
         PartyQuestRuntimeRecoveryStatus::RollbackRecoveredRetryRequired);
     REQUIRE(rollback.RestoreId == kTransactionId);
+    REQUIRE(rollback.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
     REQUIRE(rollback.RestoreStatus ==
         PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback);
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
@@ -370,8 +405,140 @@ TEST_CASE("Interrupted restore rollback keeps runtime barrier until a later exac
         session,
         paths);
     REQUIRE(retried.Status == PartyQuestRuntimeRecoveryStatus::Restored);
-    REQUIRE(retried.RestoreId == kTransactionId);
     REQUIRE(retried.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
+#ifdef _WIN32
+    REQUIRE(retried.RestoreId == kTransactionId);
+    REQUIRE(retried.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
+#else
+    REQUIRE(retried.RestoreId != kTransactionId);
+    REQUIRE(retried.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
+    REQUIRE(retried.DurableRestoreStatus == PartyQuestReplicaDurableRestoreStatus::Success);
+#endif
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
     REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1630");
+}
+
+TEST_CASE("Strong terminal rollback advances one persisted attempt and retries without reusing its tombstone", "[quest.party-state.runtime-recovery][durability][retry]")
+{
+    RecoverySandbox sandbox;
+    const auto paths = BuildRecoveryPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 1640;
+    constexpr uint64_t kTransactionId = 21005;
+
+    PublishCheckpoint(
+        paths,
+        PartyQuestCheckpointKind::PreRepair,
+        kWorldRevision,
+        "PRE_REPAIR_1640");
+    WriteRecoveryBytes(paths.SavesDirectory / "Hero.ess", "MUTATED_1640");
+
+#ifdef _WIN32
+    PartyQuestReplicaWorkspaceLease lease;
+    REQUIRE(lease.Acquire(paths, kRecoveryCampaign, kRecoveryPlayer) ==
+        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    const auto capability = lease.CreatePublicationCapability(
+        paths, kRecoveryCampaign, kRecoveryPlayer);
+    const auto unsupported =
+        PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
+            paths,
+            kRecoveryCampaign,
+            kRecoveryPlayer,
+            kTransactionId,
+            capability);
+    REQUIRE(unsupported.Status ==
+        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
+#else
+    uint64_t firstRestoreId{};
+    {
+        PartyQuestReplicaWorkspaceLease lease;
+        REQUIRE(lease.Acquire(paths, kRecoveryCampaign, kRecoveryPlayer) ==
+            PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+        const auto capability = lease.CreatePublicationCapability(
+            paths, kRecoveryCampaign, kRecoveryPlayer);
+        REQUIRE(capability.Protects(paths, kRecoveryCampaign, kRecoveryPlayer));
+        const auto attempt =
+            PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
+                paths,
+                kRecoveryCampaign,
+                kRecoveryPlayer,
+                kTransactionId,
+                capability);
+        REQUIRE(attempt.IsUsable());
+        REQUIRE(attempt.State.has_value());
+        firstRestoreId = attempt.State->CurrentRestoreId;
+    }
+
+    const auto restorePlan = LoadExactPreRepairRestorePlan(paths, kWorldRevision);
+    const auto prepared = PartyQuestReplicaDurableRestorePreparation::Prepare(
+        paths,
+        restorePlan,
+        firstRestoreId);
+    REQUIRE(prepared.IsBackupsReady());
+    REQUIRE(prepared.State.has_value());
+
+    auto mutationStarted = *prepared.State;
+    REQUIRE(PartyQuestReplicaRestoreJournal::MarkMutationStarted(mutationStarted) ==
+        PartyQuestReplicaRestoreJournalStatus::Ready);
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
+                prepared.JournalPath,
+                mutationStarted) ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+
+    RecoveryDurableCapture capture;
+    auto session = BuildBlockedSession(capture, kTransactionId, kWorldRevision);
+    const auto rollback = PartyQuestRuntimeRecoveryCoordinatorTestAccess::ResolveCrashRecovery(
+        session,
+        paths);
+    REQUIRE(rollback.Status ==
+        PartyQuestRuntimeRecoveryStatus::RollbackRecoveredRetryRequired);
+    REQUIRE(rollback.RestoreId == firstRestoreId);
+    REQUIRE(rollback.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
+    REQUIRE(rollback.DurableRestoreStatus ==
+        PartyQuestReplicaDurableRestoreStatus::RecoveredRollback);
+    REQUIRE(rollback.RestoreAttemptStatus ==
+        PartyQuestRuntimeRestoreAttemptStatus::Success);
+    REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
+    REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "MUTATED_1640");
+
+    const auto terminal =
+        PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
+            prepared.JournalPath);
+    REQUIRE(terminal.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(terminal.State.has_value());
+    REQUIRE(terminal.State->Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
+
+    const auto advanced = PartyQuestRuntimeRestoreAttemptStore::Load(
+        paths,
+        kRecoveryCampaign,
+        kRecoveryPlayer,
+        kTransactionId);
+    REQUIRE(advanced.Status == PartyQuestRuntimeRestoreAttemptStatus::Success);
+    REQUIRE(advanced.State.has_value());
+    REQUIRE(advanced.State->CurrentOrdinal == 1);
+    REQUIRE(advanced.State->LastRolledBackRestoreId == firstRestoreId);
+    REQUIRE(advanced.State->CurrentRestoreId != firstRestoreId);
+    const uint64_t secondRestoreId = advanced.State->CurrentRestoreId;
+
+    const auto retried = PartyQuestRuntimeRecoveryCoordinatorTestAccess::ResolveCrashRecovery(
+        session,
+        paths);
+    REQUIRE(retried.Status == PartyQuestRuntimeRecoveryStatus::Restored);
+    REQUIRE(retried.RestoreId == secondRestoreId);
+    REQUIRE(retried.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
+    REQUIRE(retried.DurableRestoreStatus == PartyQuestReplicaDurableRestoreStatus::Success);
+    REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
+    REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1640");
+
+    const auto oldTerminal =
+        PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
+            prepared.JournalPath);
+    REQUIRE(oldTerminal.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(oldTerminal.State.has_value());
+    REQUIRE(oldTerminal.State->Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
+    REQUIRE(std::filesystem::exists(oldTerminal.State->TransactionDirectory));
+#endif
 }
