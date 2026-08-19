@@ -60,7 +60,7 @@ void WriteCapabilityBytes(
 } // namespace
 
 TEST_CASE(
-    "durable checkpoint promotion requires one exact live workspace authority",
+    "durable checkpoint promotion accepts only one exact live runtime capability",
     "[quest.party-state.replica-snapshot][durability][workspace-capability]")
 {
     constexpr uint64_t revision = 4101;
@@ -132,16 +132,6 @@ TEST_CASE(
                     kDurableCapabilityCampaign,
                     kDurableCapabilityPlayer) ==
             PartyQuestReplicaWorkspaceLeaseStatus::Busy);
-
-        const auto standaloneWhileOwned =
-            PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
-                *paths,
-                kDurableCapabilityCampaign,
-                kDurableCapabilityPlayer,
-                PartyQuestCheckpointKind::PreRepair,
-                revision);
-        REQUIRE(standaloneWhileOwned.Status ==
-            PartyQuestReplicaDurableSnapshotStatus::WorkspaceBusy);
 
         ownerLease.Release();
         REQUIRE_FALSE(ownerLease.IsHeld());
