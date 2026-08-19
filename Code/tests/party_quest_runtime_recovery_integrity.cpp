@@ -132,12 +132,23 @@ TEST_CASE("Committed restore journal cannot clear runtime barrier after live rep
         session,
         *paths);
     REQUIRE(first.Status == PartyQuestRuntimeRecoveryStatus::RuntimeStatePersistenceFailed);
-    REQUIRE(first.RestoreId == kIntegrityTransactionId);
+    REQUIRE(first.TransactionId == kIntegrityTransactionId);
+    REQUIRE(first.RestoreId != 0);
+#ifdef _WIN32
+    REQUIRE(first.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
+#else
+    REQUIRE(first.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
+#endif
     REQUIRE(first.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
+    const uint64_t firstRestoreId = first.RestoreId;
 
     // The restore transaction is committed, but an external actor changes the
     // live replica before the runtime recovery barrier can be durably cleared.
+    // Recovery must keep the same server transaction and exact local restore
+    // attempt while revalidating the committed checkpoint bytes.
     WriteIntegrityBytes(liveSave, "CHANGED_AFTER_RESTORE_COMMIT");
     allowPersistence = true;
 
@@ -145,7 +156,9 @@ TEST_CASE("Committed restore journal cannot clear runtime barrier after live rep
         session,
         *paths);
     REQUIRE(retry.Status == PartyQuestRuntimeRecoveryStatus::RestoreFailed);
-    REQUIRE(retry.RestoreId == kIntegrityTransactionId);
+    REQUIRE(retry.TransactionId == kIntegrityTransactionId);
+    REQUIRE(retry.RestoreId == firstRestoreId);
+    REQUIRE(retry.RestoreDomain == first.RestoreDomain);
     REQUIRE(retry.RestoreStatus ==
         PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed);
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
