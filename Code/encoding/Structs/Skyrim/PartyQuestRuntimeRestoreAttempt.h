@@ -65,7 +65,7 @@ struct PartyQuestRuntimeRestoreAttemptResult
  * is the exact structural pair (TransactionId, ordinal). The filesystem layout
  * therefore remains collision-free without assuming unused TransactionId bits:
  *
- *   metadata/runtime_restore_attempts/Transaction_<TransactionId>.bin
+ *   metadata/runtime_restore_attempts/RuntimeTransaction_<TransactionId>.bin
  *   metadata/restore/RuntimeTransaction_<TransactionId>/Attempt_<ordinal>/journal.bin
  *
  * RestoreId inside the generic restore journal is ordinal + 1. It is only unique
@@ -77,10 +77,11 @@ struct PartyQuestRuntimeRestoreAttemptResult
  * publication. Windows fails closed because the reviewed durable directory-tree
  * contract required by the strong restore path is still unavailable there.
  *
- * Advancing an attempt requires the exact terminal RolledBack journal for the
- * current ordinal plus an exact live workspace capability. Repeating the same
- * advance after a crash is idempotent: ordinal N can advance to N+1 once, and a
- * replay of the same RolledBack evidence returns AlreadyAdvanced rather than N+2.
+ * Advancing an attempt requires the exact persisted PowerLossDurable terminal
+ * RolledBack journal for the named ordinal plus an exact live workspace
+ * capability. Repeating the same advance after a crash is idempotent: ordinal N
+ * can advance to N+1 once, and replaying the same RolledBack evidence returns
+ * AlreadyAdvanced rather than N+2.
  */
 class PartyQuestRuntimeRestoreAttemptStore final
 {
@@ -105,7 +106,7 @@ public:
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestPlayerProfileId& acPlayerProfileId,
         uint64_t aTransactionId,
-        const PartyQuestReplicaRestoreJournalState& acRolledBackJournal,
+        uint32_t aRolledBackOrdinal,
         const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept;
 
     [[nodiscard]] static std::filesystem::path GetStatePath(
