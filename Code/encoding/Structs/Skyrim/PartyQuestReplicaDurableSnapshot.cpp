@@ -219,3 +219,34 @@ PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
     return result;
 #endif
 }
+
+PartyQuestReplicaDurableSnapshotResult
+PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpointAuthorized(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acPlayerProfileId,
+    PartyQuestCheckpointKind aKind,
+    uint64_t aCampaignWorldRevision,
+    const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept
+{
+    if (!acWorkspaceCapability.Protects(
+            acPaths,
+            acCampaignId,
+            acPlayerProfileId))
+    {
+        PartyQuestReplicaDurableSnapshotResult result;
+        result.Status =
+            PartyQuestReplicaDurableSnapshotStatus::WorkspaceCapabilityRequired;
+        return result;
+    }
+
+    // Keep the exact capability argument alive for the complete synchronous
+    // promotion. Its pinned native lease state is the runtime publication
+    // authority; promotion itself does not release/reacquire the workspace.
+    return PromoteRevisionCheckpoint(
+        acPaths,
+        acCampaignId,
+        acPlayerProfileId,
+        aKind,
+        aCampaignWorldRevision);
+}
