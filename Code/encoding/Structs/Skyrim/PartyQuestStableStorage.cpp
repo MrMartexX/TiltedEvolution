@@ -202,8 +202,8 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::WriteFileDurably(
             return PartyQuestStableStorageStatus::InvalidPath;
 
 #ifdef _WIN32
-        // Query and validate the existing parent before CREATE_ALWAYS so an
-        // unsupported filesystem cannot cause even a staged-file truncation.
+        // Validate the existing parent before creating/truncating anything so an
+        // unsupported filesystem cannot receive even a staged mutation.
         const HANDLE parent = ::CreateFileW(
             path.parent_path().c_str(),
             FILE_READ_ATTRIBUTES,
@@ -231,12 +231,16 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::WriteFileDurably(
         if (!::CloseHandle(parent))
             return PartyQuestStableStorageStatus::CloseFailed;
 
+        // OPEN_ALWAYS lets us validate the exact final node before truncating it.
+        // FILE_FLAG_OPEN_REPARSE_POINT therefore fails closed for a pre-existing
+        // reparse point rather than mutating its target or truncating before the
+        // post-open validation has run.
         const HANDLE file = ::CreateFileW(
             path.c_str(),
             GENERIC_WRITE,
             FILE_SHARE_READ | FILE_SHARE_DELETE,
             nullptr,
-            CREATE_ALWAYS,
+            OPEN_ALWAYS,
             FILE_ATTRIBUTE_NORMAL |
                 FILE_FLAG_OPEN_REPARSE_POINT |
                 FILE_FLAG_WRITE_THROUGH,
@@ -249,6 +253,14 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::WriteFileDurably(
         {
             ::CloseHandle(file);
             return validation;
+        }
+
+        LARGE_INTEGER beginning{};
+        if (!::SetFilePointerEx(file, beginning, nullptr, FILE_BEGIN) ||
+            !::SetEndOfFile(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::WriteFailed;
         }
 
         const auto* pBytes = static_cast<const uint8_t*>(apData);
