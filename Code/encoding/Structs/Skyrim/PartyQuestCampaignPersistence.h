@@ -16,7 +16,8 @@ enum class PartyQuestCampaignPersistenceStatus : uint8_t
     UnsupportedVersion,
     Truncated,
     ChecksumMismatch,
-    InvalidData
+    InvalidData,
+    PowerLossDurabilityUnsupported
 };
 
 struct PartyQuestCampaignPersistenceResult
@@ -70,6 +71,11 @@ struct PartyQuestCampaignPersistenceHooks
  * archive. Current state archives also embed the same identity. Metadata v2 is
  * published only after a matching canonical archive exists and records that
  * the archive is required on every later successful bootstrap.
+ *
+ * SavePowerLossDurably preserves the campaign-specific invariant that primary
+ * and backup are both refreshed to the exact current v2 identity archive. Its
+ * parent directory must already exist and satisfy the caller's surrounding
+ * namespace-durability contract.
  */
 class PartyQuestCampaignPersistence final
 {
@@ -80,6 +86,11 @@ public:
     [[nodiscard]] static PartyQuestCampaignPersistenceResult Decode(const std::vector<uint8_t>& acBytes);
 
     [[nodiscard]] static PartyQuestCampaignPersistenceStatus SaveAtomically(
+        const std::filesystem::path& acPath,
+        const PartyQuestCampaignId& acCampaignId,
+        PartyQuestCampaignPersistenceHooks aHooks = {});
+
+    [[nodiscard]] static PartyQuestCampaignPersistenceStatus SavePowerLossDurably(
         const std::filesystem::path& acPath,
         const PartyQuestCampaignId& acCampaignId,
         PartyQuestCampaignPersistenceHooks aHooks = {});
