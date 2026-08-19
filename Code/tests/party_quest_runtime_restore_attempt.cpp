@@ -57,20 +57,20 @@ PartyQuestReplicaWorkspacePublicationCapability AcquireCapability(
 
 PartyQuestReplicaRestoreJournalState BuildJournal(
     const PartyQuestCoopSavePaths& acPaths,
-    uint64_t aTransactionId,
+    uint64_t aRestoreId,
     uint32_t aOrdinal,
     PartyQuestReplicaRestoreJournalPhase aPhase)
 {
     PartyQuestReplicaRestoreJournalState state;
     state.CampaignId = kCampaign;
     state.PlayerProfileId = kPlayer;
-    state.RestoreId = PartyQuestRuntimeRestoreAttemptStore::GetRestoreId(aOrdinal);
+    state.RestoreId = aRestoreId;
     state.CheckpointKind = PartyQuestCheckpointKind::PreRepair;
     state.CampaignWorldRevision = 9000 + aOrdinal;
     state.Phase = aPhase;
     state.TransactionDirectory =
-        PartyQuestRuntimeRestoreAttemptStore::GetAttemptDirectory(
-            acPaths, aTransactionId, aOrdinal);
+        PartyQuestRuntimeRestoreAttemptStore::GetRestoreDirectory(
+            acPaths, aRestoreId);
 
     PartyQuestReplicaRestoreJournalOperation operation;
     operation.Kind = PartyQuestReplicaFileKind::SkyrimSave;
@@ -89,16 +89,16 @@ PartyQuestReplicaRestoreJournalState BuildJournal(
 
 void PersistJournal(
     const PartyQuestCoopSavePaths& acPaths,
-    uint64_t aTransactionId,
+    uint64_t aRestoreId,
     uint32_t aOrdinal,
     PartyQuestReplicaRestoreJournalPhase aPhase)
 {
-    const auto journal = BuildJournal(acPaths, aTransactionId, aOrdinal, aPhase);
+    const auto journal = BuildJournal(acPaths, aRestoreId, aOrdinal, aPhase);
     std::error_code ec;
     std::filesystem::create_directories(journal.TransactionDirectory, ec);
     REQUIRE_FALSE(ec);
     const auto path = PartyQuestRuntimeRestoreAttemptStore::GetJournalPath(
-        acPaths, aTransactionId, aOrdinal);
+        acPaths, aRestoreId);
     REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
                 path, journal) ==
         PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
@@ -106,7 +106,7 @@ void PersistJournal(
 } // namespace
 
 TEST_CASE(
-    "runtime restore attempt identity is structural and transaction namespaced",
+    "runtime restore attempt keeps exact transaction identity separate from physical restore id",
     "[quest.party-state.runtime-recovery][restore-attempt]")
 {
     Sandbox sandbox;
@@ -114,29 +114,28 @@ TEST_CASE(
 
     constexpr uint64_t txA = 0x1001;
     constexpr uint64_t txB = 0x1002;
-    const auto a0 = PartyQuestRuntimeRestoreAttemptStore::GetAttemptDirectory(paths, txA, 0);
-    const auto a1 = PartyQuestRuntimeRestoreAttemptStore::GetAttemptDirectory(paths, txA, 1);
-    const auto b0 = PartyQuestRuntimeRestoreAttemptStore::GetAttemptDirectory(paths, txB, 0);
+    const auto stateA = PartyQuestRuntimeRestoreAttemptStore::GetStatePath(paths, txA);
+    const auto stateB = PartyQuestRuntimeRestoreAttemptStore::GetStatePath(paths, txB);
+    const auto restoreA = PartyQuestRuntimeRestoreAttemptStore::GetRestoreDirectory(paths, 1);
+    const auto restoreB = PartyQuestRuntimeRestoreAttemptStore::GetRestoreDirectory(paths, 2);
 
-    REQUIRE_FALSE(a0.empty());
-    REQUIRE(a0 != a1);
-    REQUIRE(a0 != b0);
-    REQUIRE(a0.parent_path().filename() != b0.parent_path().filename());
-    REQUIRE(PartyQuestRuntimeRestoreAttemptStore::GetRestoreId(0) == 1);
-    REQUIRE(PartyQuestRuntimeRestoreAttemptStore::GetRestoreId(1) == 2);
-    REQUIRE(PartyQuestRuntimeRestoreAttemptStore::GetAttemptDirectory(
-                paths,
-                txA,
-                PartyQuestRuntimeRestoreAttemptStore::MaxAttemptsPerTransaction).empty());
+    REQUIRE_FALSE(stateA.empty());
+    REQUIRE(stateA != stateB);
+    REQUIRE(stateA.filename().string().find("0000000000001001") != std::string::npos);
+    REQUIRE(restoreA != restoreB);
+    REQUIRE(restoreA.filename() == "Transaction_0000000000000001");
+    REQUIRE(restoreB.filename() == "Transaction_0000000000000002");
+    REQUIRE(PartyQuestRuntimeRestoreAttemptStore::GetRestoreDirectory(paths, 0).empty());
 }
 
 TEST_CASE(
-    "runtime restore attempt initialization requires exact workspace authority and strong platform support",
+    "runtime restore id allocation requires workspace authority and skips occupied tombstones",
     "[quest.party-state.runtime-recovery][restore-attempt][durability]")
 {
     Sandbox sandbox;
     const auto paths = BuildPaths(sandbox);
     constexpr uint64_t transactionId = 0x2101;
+    constexpr uint64_t secondTransactionId = 0x2102;
 
     PartyQuestReplicaWorkspacePublicationCapability missingCapability;
     const auto unauthorized =
@@ -144,6 +143,13 @@ TEST_CASE(
             paths, kCampaign, kPlayer, transactionId, missingCapability);
     REQUIRE(unauthorized.Status ==
         PartyQuestRuntimeRestoreAttemptStatus::WorkspaceCapabilityRequired);
+
+    // Simulate a retained legacy/strong tombstone occupying RestoreId 1 before
+    // the new allocator has ever been initialized.
+    const auto occupied = PartyQuestRuntimeRestoreAttemptStore::GetRestoreDirectory(paths, 1);
+    std::error_code ec;
+    std::filesystem::create_directories(occupied, ec);
+    REQUIRE_FALSE(ec);
 
     PartyQuestReplicaWorkspaceLease lease;
     const auto capability = AcquireCapability(paths, lease);
@@ -160,9 +166,11 @@ TEST_CASE(
     REQUIRE(initialized.State.has_value());
     REQUIRE(initialized.State->TransactionId == transactionId);
     REQUIRE(initialized.State->CurrentOrdinal == 0);
-    REQUIRE(initialized.RestoreId == 1);
+    REQUIRE(initialized.State->CurrentRestoreId == 2);
+    REQUIRE(initialized.State->LastRolledBackRestoreId == 0);
+    REQUIRE(initialized.RestoreId == 2);
     REQUIRE(initialized.JournalPath ==
-        PartyQuestRuntimeRestoreAttemptStore::GetJournalPath(paths, transactionId, 0));
+        PartyQuestRuntimeRestoreAttemptStore::GetJournalPath(paths, 2));
 
     const auto reloaded = PartyQuestRuntimeRestoreAttemptStore::Load(
         paths, kCampaign, kPlayer, transactionId);
@@ -174,6 +182,15 @@ TEST_CASE(
             paths, kCampaign, kPlayer, transactionId, capability);
     REQUIRE(repeated.Status == PartyQuestRuntimeRestoreAttemptStatus::Success);
     REQUIRE(repeated.State == initialized.State);
+
+    const auto second =
+        PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
+            paths, kCampaign, kPlayer, secondTransactionId, capability);
+    REQUIRE(second.Status == PartyQuestRuntimeRestoreAttemptStatus::Created);
+    REQUIRE(second.State.has_value());
+    REQUIRE(second.State->TransactionId == secondTransactionId);
+    REQUIRE(second.State->CurrentRestoreId == 3);
+    REQUIRE(second.RestoreId != initialized.RestoreId);
 #endif
 }
 
@@ -195,9 +212,11 @@ TEST_CASE(
     REQUIRE(initialized.Status == PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
 #else
     REQUIRE(initialized.Status == PartyQuestRuntimeRestoreAttemptStatus::Created);
+    REQUIRE(initialized.State.has_value());
+    const uint64_t firstRestoreId = initialized.State->CurrentRestoreId;
     PersistJournal(
         paths,
-        transactionId,
+        firstRestoreId,
         0,
         PartyQuestReplicaRestoreJournalPhase::RolledBack);
 
@@ -207,13 +226,16 @@ TEST_CASE(
     REQUIRE(advanced.Status == PartyQuestRuntimeRestoreAttemptStatus::Success);
     REQUIRE(advanced.State.has_value());
     REQUIRE(advanced.State->CurrentOrdinal == 1);
-    REQUIRE(advanced.RestoreId == 2);
+    REQUIRE(advanced.State->LastRolledBackRestoreId == firstRestoreId);
+    REQUIRE(advanced.State->CurrentRestoreId != firstRestoreId);
+    const uint64_t secondRestoreId = advanced.State->CurrentRestoreId;
 
     const auto afterRestart = PartyQuestRuntimeRestoreAttemptStore::Load(
         paths, kCampaign, kPlayer, transactionId);
     REQUIRE(afterRestart.Status == PartyQuestRuntimeRestoreAttemptStatus::Success);
     REQUIRE(afterRestart.State.has_value());
     REQUIRE(afterRestart.State->CurrentOrdinal == 1);
+    REQUIRE(afterRestart.State->CurrentRestoreId == secondRestoreId);
 
     const auto replay =
         PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
@@ -221,6 +243,7 @@ TEST_CASE(
     REQUIRE(replay.Status == PartyQuestRuntimeRestoreAttemptStatus::AlreadyAdvanced);
     REQUIRE(replay.State.has_value());
     REQUIRE(replay.State->CurrentOrdinal == 1);
+    REQUIRE(replay.State->CurrentRestoreId == secondRestoreId);
 
     const auto noSecondJournal =
         PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
@@ -228,10 +251,11 @@ TEST_CASE(
     REQUIRE(noSecondJournal.Status == PartyQuestRuntimeRestoreAttemptStatus::FileNotFound);
     REQUIRE(noSecondJournal.State.has_value());
     REQUIRE(noSecondJournal.State->CurrentOrdinal == 1);
+    REQUIRE(noSecondJournal.State->CurrentRestoreId == secondRestoreId);
 
     PersistJournal(
         paths,
-        transactionId,
+        secondRestoreId,
         1,
         PartyQuestReplicaRestoreJournalPhase::Prepared);
     const auto nonterminal =
@@ -240,5 +264,6 @@ TEST_CASE(
     REQUIRE(nonterminal.Status == PartyQuestRuntimeRestoreAttemptStatus::JournalMismatch);
     REQUIRE(nonterminal.State.has_value());
     REQUIRE(nonterminal.State->CurrentOrdinal == 1);
+    REQUIRE(nonterminal.State->CurrentRestoreId == secondRestoreId);
 #endif
 }
