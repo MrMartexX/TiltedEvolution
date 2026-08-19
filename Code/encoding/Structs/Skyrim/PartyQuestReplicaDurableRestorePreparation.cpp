@@ -182,6 +182,51 @@ PartyQuestReplicaDurableRestorePreparation::Prepare(
     if (leaseStatus != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
         return Failure(MapLeaseStatus(leaseStatus));
 
+    const auto capability = workspace.CreatePublicationCapability(
+        acPaths,
+        acPlan.CampaignId,
+        acPlan.PlayerProfileId);
+    if (!capability.Protects(
+            acPaths,
+            acPlan.CampaignId,
+            acPlan.PlayerProfileId))
+    {
+        return Failure(
+            PartyQuestReplicaDurableRestorePreparationStatus::WorkspaceLeaseFailure);
+    }
+
+    return PrepareAuthorized(acPaths, acPlan, aRestoreId, capability);
+#endif
+}
+
+PartyQuestReplicaDurableRestorePreparationReport
+PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestReplicaRestorePlan& acPlan,
+    uint64_t aRestoreId,
+    const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept
+{
+    if (!acPlan.IsReady())
+        return Failure(PartyQuestReplicaDurableRestorePreparationStatus::InvalidPlan);
+    if (!acPlan.CampaignId.IsValid() || !acPlan.PlayerProfileId.IsValid())
+        return Failure(PartyQuestReplicaDurableRestorePreparationStatus::InvalidIdentity);
+    if (aRestoreId == 0)
+        return Failure(PartyQuestReplicaDurableRestorePreparationStatus::InvalidRestoreId);
+
+#ifdef _WIN32
+    (void)acPaths;
+    (void)acWorkspaceCapability;
+    return Failure(PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
+#else
+    if (!acWorkspaceCapability.Protects(
+            acPaths,
+            acPlan.CampaignId,
+            acPlan.PlayerProfileId))
+    {
+        return Failure(
+            PartyQuestReplicaDurableRestorePreparationStatus::WorkspaceLeaseFailure);
+    }
+
     const auto promotion = PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
         acPaths,
         acPlan.CampaignId,
