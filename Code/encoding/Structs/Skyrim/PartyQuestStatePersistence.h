@@ -19,7 +19,8 @@ enum class PartyQuestPersistenceStatus : uint8_t
     ChecksumMismatch,
     InvalidData,
     ReplayMismatch,
-    BackupRecoveryRequired
+    BackupRecoveryRequired,
+    PowerLossDurabilityUnsupported
 };
 
 struct PartyQuestPersistenceResult
@@ -71,6 +72,11 @@ struct PartyQuestStatePersistenceHooks
  * remains readable only for controlled one-time migration and is exposed with
  * no CampaignId. Loading replays the journal and verifies that it exactly
  * reproduces the checkpoint before exposing the restored state.
+ *
+ * SavePowerLossDurably strengthens only the archive publication sequence; its
+ * parent directory must already exist and satisfy the surrounding namespace
+ * durability contract. It never converts a successful archive write into
+ * native Skyrim mutation authority.
  */
 class PartyQuestStatePersistence final
 {
@@ -82,6 +88,12 @@ public:
 
     /** Writes through a sibling .tmp file and retains the previous file as .bak. */
     [[nodiscard]] static PartyQuestPersistenceStatus SaveAtomically(
+        const std::filesystem::path& acPath,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestState& acState,
+        PartyQuestStatePersistenceHooks aHooks = {});
+
+    [[nodiscard]] static PartyQuestPersistenceStatus SavePowerLossDurably(
         const std::filesystem::path& acPath,
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestState& acState,
