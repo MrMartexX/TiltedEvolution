@@ -89,8 +89,8 @@ struct PartyQuestReplicaRestoreJournalResult
  * Skyrim/Papyrus/native world mutation.
  *
  * Persisted phase numeric values 0..4 are frozen for compatibility with v1
- * archives. RolledBack is the v2 terminal rollback tombstone and is only
- * reachable after the exact pre-mutation destination state is verified.
+ * archives. RolledBack was introduced by v2 and is only reachable after the
+ * exact pre-mutation destination state is verified.
  */
 class PartyQuestReplicaRestoreJournal final
 {
@@ -131,6 +131,16 @@ public:
         const PartyQuestReplicaRestoreJournalState& acState) noexcept;
 };
 
+enum class PartyQuestReplicaRestoreJournalArchiveDurability : uint8_t
+{
+    /** v1/v2 did not identify which persistence protocol created the archive. */
+    AmbiguousLegacyEncoding,
+    /** Archive belongs to the process-crash SaveAtomically/Load protocol. */
+    ProcessCrashResilient,
+    /** Archive belongs to the stable SavePowerLossDurably/LoadPowerLossDurably protocol. */
+    PowerLossDurable
+};
+
 enum class PartyQuestReplicaRestoreJournalPersistenceStatus : uint8_t
 {
     Success,
@@ -143,7 +153,9 @@ enum class PartyQuestReplicaRestoreJournalPersistenceStatus : uint8_t
     InvalidData,
     BackupRecoveryRequired,
     ResourceLimitExceeded,
-    PowerLossDurabilityUnsupported
+    PowerLossDurabilityUnsupported,
+    DurabilityAmbiguous,
+    DurabilityMismatch
 };
 
 struct PartyQuestReplicaRestoreJournalPersistenceResult
@@ -151,6 +163,8 @@ struct PartyQuestReplicaRestoreJournalPersistenceResult
     PartyQuestReplicaRestoreJournalPersistenceStatus Status{
         PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData};
     std::optional<PartyQuestReplicaRestoreJournalState> State;
+    PartyQuestReplicaRestoreJournalArchiveDurability ArchiveDurability{
+        PartyQuestReplicaRestoreJournalArchiveDurability::AmbiguousLegacyEncoding};
     bool UsedTemporary{};
 };
 
@@ -194,18 +208,23 @@ struct PartyQuestReplicaRestoreJournalPersistenceHooks
 /**
  * Restore journal persistence.
  *
- * Encode writes v2. Decode remains backward-compatible with v1, whose phase
- * values 0..4 retain their original meaning. v1 cannot represent RolledBack and
- * a forged v1 archive carrying phase 5 is rejected fail-closed.
+ * Archive versions are also a persisted protocol-domain discriminator:
  *
- * SaveAtomically/Load retain the original process-crash recovery protocol.
- * SavePowerLossDurably uses stable staged writes plus stable same-directory
- * primary/backup publication and never performs an unproved rollback after a
- * durable namespace transition. LoadPowerLossDurably is its recovery partner:
- * it never promotes a valid .tmp with an ordinary rename and never overwrites a
- * present invalid primary. Its parent directory must already exist; the caller
- * remains responsible for proving that directory and every filesystem
- * prerequisite for a journal phase are durable before publishing that phase.
+ * - v1/v2: readable legacy evidence whose durability origin is ambiguous;
+ * - v3: explicit process-crash-resilient SaveAtomically/Load journal;
+ * - v4: explicit power-loss-durable SavePowerLossDurably/LoadPowerLossDurably journal.
+ *
+ * Decode accepts all four versions for inspection. The two recovery loaders are
+ * stricter: Load accepts only explicit v3 process-crash journals and
+ * LoadPowerLossDurably accepts only explicit v4 strong journals. v1/v2 fail
+ * closed as DurabilityAmbiguous instead of being guessed into either executor.
+ * A loader encountering the other explicit domain returns DurabilityMismatch
+ * without promoting temporary evidence through the wrong rename protocol.
+ *
+ * Encode is the process-crash archive encoder used by SaveAtomically and writes
+ * v3. SavePowerLossDurably writes v4 through a private strong encoder. The
+ * payload/state schema is otherwise identical, so the discriminator grants no
+ * additional filesystem or Skyrim mutation authority by itself.
  */
 class PartyQuestReplicaRestoreJournalPersistence final
 {
@@ -231,4 +250,9 @@ public:
 
     [[nodiscard]] static PartyQuestReplicaRestoreJournalPersistenceResult LoadPowerLossDurably(
         const std::filesystem::path& acPath);
+
+private:
+    [[nodiscard]] static std::vector<uint8_t> EncodeForArchiveDurability(
+        const PartyQuestReplicaRestoreJournalState& acState,
+        PartyQuestReplicaRestoreJournalArchiveDurability aDurability);
 };
