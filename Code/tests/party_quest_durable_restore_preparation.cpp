@@ -10,6 +10,23 @@
 #include <string>
 #include <vector>
 
+class PartyQuestReplicaDurableRestorePreparationTestAccess final
+{
+public:
+    [[nodiscard]] static PartyQuestReplicaDurableRestorePreparationReport PrepareAuthorized(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestReplicaRestorePlan& acPlan,
+        uint64_t aRestoreId,
+        const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept
+    {
+        return PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(
+            acPaths,
+            acPlan,
+            aRestoreId,
+            acWorkspaceCapability);
+    }
+};
+
 namespace
 {
 const PartyQuestCampaignId kCampaign{
@@ -208,6 +225,79 @@ TEST_CASE(
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
+}
+
+TEST_CASE(
+    "durable restore preparation reuses an exact held workspace capability without weakening lease exclusivity",
+    "[quest.party-state.replica-restore][durability][workspace-lease]")
+{
+    Sandbox sandbox;
+    PartyQuestCoopSavePaths paths;
+    const auto plan = BuildPlan(sandbox, paths);
+    constexpr uint64_t authorizedRestoreId = kRestoreId + 10;
+    constexpr uint64_t rejectedRestoreId = kRestoreId + 11;
+
+#ifdef _WIN32
+    PartyQuestReplicaWorkspacePublicationCapability capability;
+    const auto unsupported =
+        PartyQuestReplicaDurableRestorePreparationTestAccess::PrepareAuthorized(
+            paths,
+            plan,
+            authorizedRestoreId,
+            capability);
+    REQUIRE(unsupported.Status ==
+        PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
+#else
+    PartyQuestReplicaWorkspaceLease heldLease;
+    REQUIRE(heldLease.Acquire(paths, kCampaign, kPlayer) ==
+        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    const auto capability = heldLease.CreatePublicationCapability(
+        paths,
+        kCampaign,
+        kPlayer);
+    REQUIRE(capability.Protects(paths, kCampaign, kPlayer));
+
+    const auto recursivePublic = PartyQuestReplicaDurableRestorePreparation::Prepare(
+        paths,
+        plan,
+        authorizedRestoreId);
+    REQUIRE(recursivePublic.Status ==
+        PartyQuestReplicaDurableRestorePreparationStatus::WorkspaceBusy);
+
+    PartyQuestReplicaWorkspacePublicationCapability missingCapability;
+    const auto rejected =
+        PartyQuestReplicaDurableRestorePreparationTestAccess::PrepareAuthorized(
+            paths,
+            plan,
+            rejectedRestoreId,
+            missingCapability);
+    REQUIRE(rejected.Status ==
+        PartyQuestReplicaDurableRestorePreparationStatus::WorkspaceLeaseFailure);
+
+    const auto rejectedPreview = PartyQuestReplicaRestoreJournal::Prepare(
+        paths,
+        plan,
+        rejectedRestoreId);
+    REQUIRE(rejectedPreview.IsReady());
+    REQUIRE_FALSE(std::filesystem::exists(
+        rejectedPreview.State->TransactionDirectory));
+
+    const auto authorized =
+        PartyQuestReplicaDurableRestorePreparationTestAccess::PrepareAuthorized(
+            paths,
+            plan,
+            authorizedRestoreId,
+            capability);
+    REQUIRE(authorized.IsBackupsReady());
+    REQUIRE(authorized.State.has_value());
+    REQUIRE(authorized.State->RestoreId == authorizedRestoreId);
+    REQUIRE(authorized.State->Phase ==
+        PartyQuestReplicaRestoreJournalPhase::BackupsReady);
+    REQUIRE(ReadText(paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
+    REQUIRE(ReadText(paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
+    REQUIRE(heldLease.IsHeld());
+    REQUIRE(heldLease.Protects(paths, kCampaign, kPlayer));
+#endif
 }
 
 TEST_CASE(
