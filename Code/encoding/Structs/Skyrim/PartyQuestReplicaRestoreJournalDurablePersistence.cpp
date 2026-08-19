@@ -70,6 +70,42 @@ bool ReadArchive(
     }
     return file.good();
 }
+
+PartyQuestReplicaRestoreJournalPersistenceResult LoadArchiveExact(
+    const std::filesystem::path& acPath)
+{
+    PartyQuestReplicaRestoreJournalPersistenceResult result;
+    try
+    {
+        std::error_code ec;
+        const auto status = std::filesystem::symlink_status(acPath, ec);
+        if (status.type() == std::filesystem::file_type::not_found ||
+            ec == std::errc::no_such_file_or_directory)
+        {
+            result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound;
+            return result;
+        }
+        if (ec || std::filesystem::is_symlink(status) ||
+            !std::filesystem::is_regular_file(status))
+        {
+            result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+            return result;
+        }
+
+        std::vector<uint8_t> bytes;
+        if (!ReadArchive(acPath, bytes))
+        {
+            result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+            return result;
+        }
+        return PartyQuestReplicaRestoreJournalPersistence::Decode(bytes);
+    }
+    catch (...)
+    {
+        result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+        return result;
+    }
+}
 } // namespace
 
 PartyQuestReplicaRestoreJournalPersistenceStatus
@@ -175,4 +211,92 @@ PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
     }
 
     return PartyQuestReplicaRestoreJournalPersistenceStatus::Success;
+}
+
+PartyQuestReplicaRestoreJournalPersistenceResult
+PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
+    const std::filesystem::path& acPath)
+{
+    PartyQuestReplicaRestoreJournalPersistenceResult result;
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(acPath))
+    {
+        result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded;
+        return result;
+    }
+
+    std::filesystem::path path;
+    try
+    {
+        std::error_code ec;
+        path = std::filesystem::absolute(acPath, ec).lexically_normal();
+        if (ec || path.empty() || path.parent_path().empty())
+        {
+            result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+            return result;
+        }
+    }
+    catch (...)
+    {
+        result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+        return result;
+    }
+
+    auto primary = LoadArchiveExact(path);
+    if (primary.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+        return primary;
+
+    auto temporaryPath = path;
+    temporaryPath += ".tmp";
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(temporaryPath))
+    {
+        result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded;
+        return result;
+    }
+    auto temporary = LoadArchiveExact(temporaryPath);
+    if (temporary.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+    {
+        // A present but invalid primary is conflicting recovery evidence. Never
+        // overwrite it merely because a newer-looking temporary also decodes.
+        if (primary.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
+        {
+            result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+            return result;
+        }
+
+        const auto stable = PartyQuestStableStorage::PublishFileRename(
+            temporaryPath,
+            path,
+            false);
+        if (stable != PartyQuestStableStorageStatus::Success)
+        {
+            result.Status = MapStableStatus(stable);
+            return result;
+        }
+
+        auto promoted = LoadArchiveExact(path);
+        if (promoted.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+        {
+            promoted.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
+            promoted.State.reset();
+            return promoted;
+        }
+        promoted.UsedTemporary = true;
+        return promoted;
+    }
+
+    auto backupPath = path;
+    backupPath += ".bak";
+    if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(backupPath))
+    {
+        result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::ResourceLimitExceeded;
+        return result;
+    }
+    auto backup = LoadArchiveExact(backupPath);
+    if (backup.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+    {
+        backup.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired;
+        return backup;
+    }
+
+    return primary;
 }
