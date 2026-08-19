@@ -58,8 +58,9 @@ struct PartyQuestReplicaDurableRestorePreparationReport
  * It acquires the exact workspace lease, requires the immutable revision
  * checkpoint to pass the data-before-manifest durability promotion, binds the
  * supplied restore plan back to that exact promoted manifest, durably publishes
- * Prepared, creates/verifies durable rollback copies, then durably publishes
- * BackupsReady.
+ * Prepared, creates/verifies bounded-memory durable rollback copies, then
+ * durably publishes BackupsReady. Rollback copy publication uses the dedicated
+ * stable-storage copy primitive rather than reading a Skyrim save into memory.
  *
  * It never stages a live replacement, never publishes MutationStarted, never
  * renames/removes a live replica destination and grants no Skyrim/world mutation
