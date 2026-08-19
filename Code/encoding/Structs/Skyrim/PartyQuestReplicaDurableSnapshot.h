@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestReplicaManifest.h>
+#include <Structs/Skyrim/PartyQuestReplicaWorkspaceLease.h>
 
 #include <cstdint>
 
@@ -14,7 +15,8 @@ enum class PartyQuestReplicaDurableSnapshotStatus : uint8_t
     ManifestInvalid,
     FileVerificationFailed,
     StableStorageFailure,
-    ManifestPersistenceFailed
+    ManifestPersistenceFailed,
+    WorkspaceCapabilityRequired
 };
 
 struct PartyQuestReplicaDurableSnapshotResult
@@ -46,6 +48,13 @@ struct PartyQuestReplicaDurableSnapshotResult
  * Linux/POSIX currently has the reviewed directory-tree primitive required for
  * this proof. Windows fails closed until durable directory creation/promotion is
  * proven independently; NTFS durable file rename alone is insufficient.
+ *
+ * The capability-bearing entry point is the production/runtime surface. Its
+ * exact workspace capability must remain alive for the complete promotion so
+ * another well-behaved replica writer cannot cross the data-flush/manifest
+ * authority ordering window. The original entry point remains available for
+ * isolated/offline durability construction and tests; it does not itself grant
+ * runtime publication authority.
  */
 class PartyQuestReplicaDurableSnapshot final
 {
@@ -56,4 +65,12 @@ public:
         const PartyQuestPlayerProfileId& acPlayerProfileId,
         PartyQuestCheckpointKind aKind,
         uint64_t aCampaignWorldRevision) noexcept;
+
+    [[nodiscard]] static PartyQuestReplicaDurableSnapshotResult PromoteRevisionCheckpointAuthorized(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acPlayerProfileId,
+        PartyQuestCheckpointKind aKind,
+        uint64_t aCampaignWorldRevision,
+        const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept;
 };
