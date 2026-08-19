@@ -14,7 +14,8 @@
 namespace
 {
 constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'R', 'S', 'T', 'R', 'J'};
-constexpr uint16_t kFormatVersion = 1;
+constexpr uint16_t kLegacyFormatVersion = 1;
+constexpr uint16_t kFormatVersion = 2;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
 constexpr uint32_t kMaxOperations =
@@ -45,7 +46,7 @@ bool IsKnownCheckpointKind(PartyQuestCheckpointKind aKind) noexcept
 bool IsKnownPhase(PartyQuestReplicaRestoreJournalPhase aPhase) noexcept
 {
     return static_cast<uint8_t>(aPhase) <=
-        static_cast<uint8_t>(PartyQuestReplicaRestoreJournalPhase::Committed);
+        static_cast<uint8_t>(PartyQuestReplicaRestoreJournalPhase::RolledBack);
 }
 
 bool IsInside(
@@ -486,6 +487,40 @@ bool PartyQuestReplicaRestoreJournal::VerifyRestoredTargets(
     return true;
 }
 
+bool PartyQuestReplicaRestoreJournal::VerifyOriginalTargets(
+    const PartyQuestReplicaRestoreJournalState& acState) noexcept
+{
+    if (!ValidateState(acState))
+        return false;
+
+    for (const auto& operation : acState.Operations)
+    {
+        bool destinationExists{};
+        if (!IsRegularNonSymlink(operation.ReplicaDestinationPath, destinationExists))
+            return false;
+
+        if (!operation.DestinationExisted)
+        {
+            if (destinationExists)
+                return false;
+            continue;
+        }
+
+        if (!destinationExists)
+            return false;
+        const auto observation =
+            PartyQuestReplicaFileExecutor::ObserveRegularFile(
+                operation.ReplicaDestinationPath);
+        if (!observation ||
+            observation->Size != operation.OriginalSize ||
+            observation->Digest != operation.OriginalDigest)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 PartyQuestReplicaRestoreJournalStatus PartyQuestReplicaRestoreJournal::MarkBackupsReady(
     PartyQuestReplicaRestoreJournalState& aState) noexcept
 {
@@ -528,6 +563,20 @@ PartyQuestReplicaRestoreJournalStatus PartyQuestReplicaRestoreJournal::MarkCommi
     return PartyQuestReplicaRestoreJournalStatus::Ready;
 }
 
+PartyQuestReplicaRestoreJournalStatus PartyQuestReplicaRestoreJournal::MarkRolledBack(
+    PartyQuestReplicaRestoreJournalState& aState) noexcept
+{
+    if (aState.Phase != PartyQuestReplicaRestoreJournalPhase::MutationStarted &&
+        aState.Phase != PartyQuestReplicaRestoreJournalPhase::Restored)
+    {
+        return PartyQuestReplicaRestoreJournalStatus::InvalidTransition;
+    }
+    if (!VerifyOriginalTargets(aState))
+        return PartyQuestReplicaRestoreJournalStatus::OriginalVerificationFailed;
+    aState.Phase = PartyQuestReplicaRestoreJournalPhase::RolledBack;
+    return PartyQuestReplicaRestoreJournalStatus::Ready;
+}
+
 PartyQuestReplicaRestoreRecoveryDisposition
 PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(
     const PartyQuestReplicaRestoreJournalState& acState) noexcept
@@ -546,6 +595,8 @@ PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(
         return PartyQuestReplicaRestoreRecoveryDisposition::VerifyThenCommit;
     case PartyQuestReplicaRestoreJournalPhase::Committed:
         return PartyQuestReplicaRestoreRecoveryDisposition::Clean;
+    case PartyQuestReplicaRestoreJournalPhase::RolledBack:
+        return PartyQuestReplicaRestoreRecoveryDisposition::RolledBackClean;
     }
     return PartyQuestReplicaRestoreRecoveryDisposition::InvalidState;
 }
@@ -625,7 +676,7 @@ PartyQuestReplicaRestoreJournalPersistence::Decode(
         result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::Truncated;
         return result;
     }
-    if (version != kFormatVersion)
+    if (version != kLegacyFormatVersion && version != kFormatVersion)
     {
         result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::UnsupportedVersion;
         return result;
@@ -677,6 +728,15 @@ PartyQuestReplicaRestoreJournalPersistence::Decode(
         !ReadPath(acBytes, offset, payloadEnd, state.TransactionDirectory) ||
         !ReadInteger(acBytes, offset, payloadEnd, operationCount) ||
         operationCount == 0 || operationCount > kMaxOperations)
+    {
+        result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
+        return result;
+    }
+
+    if ((version == kLegacyFormatVersion &&
+         phase > static_cast<uint8_t>(PartyQuestReplicaRestoreJournalPhase::Committed)) ||
+        (version == kFormatVersion &&
+         phase > static_cast<uint8_t>(PartyQuestReplicaRestoreJournalPhase::RolledBack)))
     {
         result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
         return result;
