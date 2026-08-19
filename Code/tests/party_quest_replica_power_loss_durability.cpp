@@ -273,12 +273,15 @@ TEST_CASE(
     REQUIRE(std::filesystem::exists(WithSuffix(path, ".bak")));
     REQUIRE(std::filesystem::exists(WithSuffix(path, ".tmp")));
 
-    const auto recovered = PartyQuestReplicaRestoreJournalPersistence::Load(path);
+    const auto recovered =
+        PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(path);
     REQUIRE(recovered.Status ==
         PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
     REQUIRE(recovered.State.has_value());
     REQUIRE(*recovered.State == mutationStarted);
     REQUIRE(recovered.UsedTemporary);
+    REQUIRE(recovered.ArchiveDurability ==
+        PartyQuestReplicaRestoreJournalArchiveDurability::PowerLossDurable);
     REQUIRE(PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(*recovered.State) ==
         PartyQuestReplicaRestoreRecoveryDisposition::RollbackRequired);
 
