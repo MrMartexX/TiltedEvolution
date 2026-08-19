@@ -8,16 +8,30 @@ The current implementation still advertises only `ProcessCrashResilient` through
 
 This document is an ordering inventory and closure checklist. It is not evidence
 that P0-H is closed. `PartyQuestStableStorage` provides reviewed staged-file
-write and same-directory rename-publication primitives. Three authoritative
-metadata stores now expose stronger publication paths:
+write and same-directory rename-publication primitives.
 
+All six authoritative metadata stores now expose a stronger publication path:
+
+- `PartyQuestCampaignPersistence::SavePowerLossDurably`;
+- `PartyQuestPlayerProfilePersistence::SavePowerLossDurably`;
+- `PartyQuestStatePersistence::SavePowerLossDurably`;
 - `PartyQuestRuntimeApplyPersistence::SavePowerLossDurably`;
 - `PartyQuestReplicaManifestStore::SavePowerLossDurably`;
 - `PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably`.
 
-The restore journal also exposes `LoadPowerLossDurably` so recovery of a newer
-valid `.tmp` does not silently downgrade to an ordinary rename. No caller gains
-native mutation authority merely because these individual paths exist.
+This is an API/proof milestone, not production activation. Existing server/client
+callers are not automatically converted merely because the stronger functions
+exist. In particular the server canonical-state/campaign bootstrap path and the
+restore executor still use their legacy crash-resilient writers. The stronger
+path must be wired only where the surrounding directory/data ordering is also
+proved.
+
+The restore journal exposes `LoadPowerLossDurably` so recovery of a newer valid
+`.tmp` does not silently downgrade to an ordinary rename. Player-profile
+persistence also exposes `LoadPowerLossDurably` so a first-publication durable
+`.tmp` preserves the immutable ProfileId across a crash without manufacturing
+lineage authority. No caller gains native mutation authority merely because any
+of these individual paths exist.
 
 ## Authoritative persistence graph
 
@@ -39,20 +53,33 @@ Their legacy `SaveAtomically`-style protocols provide process-crash recovery
 semantics. Stream flush and a successful rename are not, by themselves, the
 project's `PowerLossDurable` proof.
 
-The three migrated stronger writers use the same core ordering:
+The stronger writers share this core ordering:
 
-1. encode the complete candidate state;
-2. durably create/truncate and write `.tmp`;
-3. re-read and decode `.tmp` and verify exact state equality;
-4. if a primary exists, durably rename primary to `.bak`, replacing an older
-   backup when necessary;
-5. durably rename the verified `.tmp` to the primary name;
-6. never perform an unproven rollback rename after a failed durable boundary.
+1. require an already-existing, validated parent directory;
+2. encode the complete candidate state;
+3. durably create/truncate and write `.tmp`;
+4. re-read/decode `.tmp` and verify exact identity/state bytes;
+5. if a primary exists, durably rename primary to `.bak`, replacing an older
+   backup when allowed by that store's semantics;
+6. durably rename the verified `.tmp` to the primary name;
+7. never perform an unproven rollback rename after a failed durable boundary.
 
-After step 4, failure deliberately preserves the old durable state as `.bak`
-and the new durable candidate as `.tmp`. After step 5, a later reported failure
+After step 5, failure deliberately preserves the old durable state as `.bak`
+and the new durable candidate as `.tmp`. After step 6, a later reported failure
 must treat the new primary as potentially/durably published rather than pretend
 publication did not occur.
+
+Campaign identity has one additional invariant: the bootstrap backup is not
+merely an older generation. After the primary is durably published,
+`SavePowerLossDurably` durably writes/verifies a backup temporary and publishes
+an exact matching v2 `.bak`, preserving `CanonicalArchiveRequired` in both
+copies.
+
+Player profile identity is immutable. `LoadPowerLossDurably` handles the strong
+first-publication crash case where only `.tmp` exists. It returns that verified
+identity as `UsedTemporary` without renaming it. A present invalid primary is
+conflicting lineage evidence and fails closed; a valid backup must agree with a
+valid temporary identity.
 
 `PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably` is the
 recovery partner for the strong restore-journal writer:
@@ -65,11 +92,19 @@ recovery partner for the strong restore-journal writer:
 - an older valid `.bak` remains `BackupRecoveryRequired`, never normal current
   truth.
 
-Still not migrated:
+### Production wiring still open
 
-- `PartyQuestCampaignPersistence`;
-- `PartyQuestPlayerProfilePersistence`;
-- `PartyQuestStatePersistence`.
+Having six strong writer APIs is not equivalent to using them end-to-end.
+Production P0-H still requires each caller to prove its surrounding directory
+namespace before choosing the strong writer. Current canonical server persistence
+still uses legacy `PartyQuestStatePersistence::SaveAtomically` and
+`PartyQuestCampaignPersistence::SaveAtomically`; switching those calls without a
+cross-platform parent-directory contract would incorrectly make Windows startup
+fail or overclaim durability.
+
+Likewise, profile/runtime/manifest/journal strong APIs must only become production
+requirements when their owning co-op directory tree has a compatible durable
+namespace proof.
 
 ## Replica/checkpoint data files
 
@@ -147,9 +182,10 @@ The restore journal writer can now durably publish a phase, but the executor has
 not yet been migrated to prove the filesystem prerequisites before each phase.
 For `PowerLossDurable`, the required ordering remains:
 
+- transaction/journal directory ancestry durable before durable `Prepared`;
 - rollback backup bytes, names and directory ancestry durable before durable
   `BackupsReady`;
-- durable `MutationStarted` before destructive destination replacement;
+- durable `MutationStarted` before any destructive live destination rename;
 - restored destination bytes, names and ancestry durable before durable
   `Restored`;
 - durable `Committed` only after every restored-state barrier completes.
@@ -201,8 +237,8 @@ normal `remove` or delete-on-close operation succeeded.
 Do not raise `CurrentLocalGuarantee` to `PowerLossDurable` until all of the
 following are true:
 
-1. every authoritative metadata store uses a reviewed stable-storage publication
-   protocol;
+1. every authoritative metadata production caller uses the reviewed strong
+   writer only after its parent namespace is durably established;
 2. the production checkpoint path requires successful data-before-manifest
    durability promotion rather than merely exposing the promotion helper;
 3. restore rollback backups, destructive replacements and every journal phase
