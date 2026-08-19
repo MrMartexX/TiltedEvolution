@@ -143,7 +143,7 @@ PartyQuestReplicaRestorePlan BuildPlan(
 } // namespace
 
 TEST_CASE(
-    "durable restore preparation reaches BackupsReady without live replacement",
+    "durable restore preparation reaches and idempotently revalidates BackupsReady without live replacement",
     "[quest.party-state.replica-restore][durability][pre-mutation]")
 {
     Sandbox sandbox;
@@ -200,11 +200,120 @@ TEST_CASE(
         paths,
         plan,
         kRestoreId);
-    REQUIRE(duplicate.Status ==
-        PartyQuestReplicaDurableRestorePreparationStatus::RestoreIdConflict);
+    REQUIRE(duplicate.IsBackupsReady());
+    REQUIRE(duplicate.CompletedBackups == 2);
+    REQUIRE(duplicate.State == prepared.State);
 #endif
 
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
+}
+
+TEST_CASE(
+    "durable restore preparation resumes an exact partial Prepared journal after restart",
+    "[quest.party-state.replica-restore][durability][pre-mutation][recovery]")
+{
+    Sandbox sandbox;
+    PartyQuestCoopSavePaths paths;
+    const auto plan = BuildPlan(sandbox, paths);
+
+    const auto initial = PartyQuestReplicaDurableRestorePreparation::Prepare(
+        paths,
+        plan,
+        kRestoreId + 1);
+
+#ifdef _WIN32
+    REQUIRE(initial.Status ==
+        PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
+#else
+    REQUIRE(initial.IsBackupsReady());
+    REQUIRE(initial.State.has_value());
+    REQUIRE(initial.State->Operations.size() == 2);
+
+    PartyQuestReplicaRestoreJournalState interrupted = *initial.State;
+    interrupted.Phase = PartyQuestReplicaRestoreJournalPhase::Prepared;
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
+                initial.JournalPath,
+                interrupted) ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+
+    const auto missingBackup = interrupted.Operations[1].RollbackPath;
+    std::error_code ec;
+    REQUIRE(std::filesystem::remove(missingBackup, ec));
+    REQUIRE_FALSE(ec);
+    REQUIRE_FALSE(std::filesystem::exists(missingBackup));
+
+    const auto resumed = PartyQuestReplicaDurableRestorePreparation::Prepare(
+        paths,
+        plan,
+        kRestoreId + 1);
+    REQUIRE(resumed.IsBackupsReady());
+    REQUIRE(resumed.CompletedBackups == 2);
+    REQUIRE(resumed.State.has_value());
+    REQUIRE(resumed.State->Phase == PartyQuestReplicaRestoreJournalPhase::BackupsReady);
+    REQUIRE(std::filesystem::exists(missingBackup));
+    REQUIRE(ReadText(paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
+    REQUIRE(ReadText(paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
+
+    const auto persisted =
+        PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
+            resumed.JournalPath);
+    REQUIRE(persisted.Status ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(persisted.State.has_value());
+    REQUIRE(persisted.State->Phase ==
+        PartyQuestReplicaRestoreJournalPhase::BackupsReady);
+#endif
+}
+
+TEST_CASE(
+    "durable restore preparation never overwrites mismatched Prepared rollback evidence",
+    "[quest.party-state.replica-restore][durability][pre-mutation][recovery]")
+{
+    Sandbox sandbox;
+    PartyQuestCoopSavePaths paths;
+    const auto plan = BuildPlan(sandbox, paths);
+
+    const auto initial = PartyQuestReplicaDurableRestorePreparation::Prepare(
+        paths,
+        plan,
+        kRestoreId + 2);
+
+#ifdef _WIN32
+    REQUIRE(initial.Status ==
+        PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
+#else
+    REQUIRE(initial.IsBackupsReady());
+    REQUIRE(initial.State.has_value());
+    PartyQuestReplicaRestoreJournalState interrupted = *initial.State;
+    interrupted.Phase = PartyQuestReplicaRestoreJournalPhase::Prepared;
+    REQUIRE(PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
+                initial.JournalPath,
+                interrupted) ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+
+    const auto corruptPath = interrupted.Operations[0].RollbackPath;
+    WriteText(corruptPath, "CORRUPT_ROLLBACK_EVIDENCE");
+    const auto corruptBytes = ReadText(corruptPath);
+
+    const auto refused = PartyQuestReplicaDurableRestorePreparation::Prepare(
+        paths,
+        plan,
+        kRestoreId + 2);
+    REQUIRE(refused.Status ==
+        PartyQuestReplicaDurableRestorePreparationStatus::BackupVerificationFailed);
+    REQUIRE(refused.State.has_value());
+    REQUIRE(refused.State->Phase == PartyQuestReplicaRestoreJournalPhase::Prepared);
+    REQUIRE(refused.FailedPath == corruptPath);
+    REQUIRE(ReadText(corruptPath) == corruptBytes);
+
+    const auto persisted =
+        PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
+            initial.JournalPath);
+    REQUIRE(persisted.Status ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(persisted.State.has_value());
+    REQUIRE(persisted.State->Phase == PartyQuestReplicaRestoreJournalPhase::Prepared);
+#endif
 }
