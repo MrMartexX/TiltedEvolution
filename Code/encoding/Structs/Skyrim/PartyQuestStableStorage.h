@@ -16,7 +16,8 @@ enum class PartyQuestStableStorageStatus : uint8_t
     FlushFailed,
     CloseFailed,
     RenameFailed,
-    RemoveFailed
+    RemoveFailed,
+    CreateDirectoryFailed
 };
 
 /**
@@ -43,6 +44,23 @@ struct PartyQuestStableStorage
 
     [[nodiscard]] static PartyQuestStableStorageStatus FlushParentDirectory(
         const std::filesystem::path& acPath) noexcept;
+
+    /**
+     * Establishes a directory tree as stable namespace evidence.
+     *
+     * POSIX walks every path component from an existing absolute root, rejects
+     * symlink/non-directory components, creates missing directories one at a
+     * time, and fsyncs both the containing directory and the resulting directory
+     * at each step. Existing components are also parent-fsync'd so a directory
+     * created by an earlier crash-resilient path can be promoted later.
+     *
+     * Windows deliberately remains Unsupported. CreateDirectory does not expose
+     * the same reviewed write-through creation contract as the NTFS file rename
+     * path used below, and a generic directory FlushFileBuffers contract is not
+     * assumed by this project.
+     */
+    [[nodiscard]] static PartyQuestStableStorageStatus EnsureDirectoryTreeDurably(
+        const std::filesystem::path& acDirectory) noexcept;
 
     /**
      * Creates/truncates and durably writes one regular staged file.
@@ -102,6 +120,15 @@ struct PartyQuestStableStorage
     [[nodiscard]] static constexpr bool HasDocumentedDurableFileWritePrimitive() noexcept
     {
         return true;
+    }
+
+    [[nodiscard]] static constexpr bool HasDocumentedDurableDirectoryTreePrimitive() noexcept
+    {
+#ifdef _WIN32
+        return false;
+#else
+        return true;
+#endif
     }
 
     /**
