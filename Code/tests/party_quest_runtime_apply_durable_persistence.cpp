@@ -127,6 +127,33 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "durable runtime apply staging cut leaves old primary and new durable candidate",
+    "[quest.party-state.runtime-apply.persistence][durability][fault]")
+{
+    DurablePersistenceSandbox sandbox;
+    const auto oldState = BuildState(kOldProfileId);
+    const auto newState = BuildState(kNewProfileId);
+
+    REQUIRE(PartyQuestRuntimeApplyPersistence::SavePowerLossDurably(
+                sandbox.Journal,
+                oldState) == PartyQuestRuntimeApplyPersistenceStatus::Success);
+
+    FailBoundary fail{PartyQuestRuntimeApplyPersistenceBoundary::TemporaryVerified};
+    REQUIRE(PartyQuestRuntimeApplyPersistence::SavePowerLossDurably(
+                sandbox.Journal,
+                newState,
+                {FailAtBoundary, &fail}) == PartyQuestRuntimeApplyPersistenceStatus::IoError);
+
+    REQUIRE(std::filesystem::exists(sandbox.Journal));
+    REQUIRE(std::filesystem::exists(WithSuffix(sandbox.Journal, ".tmp")));
+    REQUIRE_FALSE(std::filesystem::exists(WithSuffix(sandbox.Journal, ".bak")));
+    RequireLoadedState(sandbox.Journal, oldState);
+    RequireLoadedState(WithSuffix(sandbox.Journal, ".tmp"), newState);
+
+    REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
+}
+
+TEST_CASE(
     "durable runtime apply rotation cut preserves old backup and new staged authority",
     "[quest.party-state.runtime-apply.persistence][durability][fault]")
 {
