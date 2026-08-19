@@ -956,6 +956,77 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::C
         if (lease != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
             return MakeReport(MapLeaseStatus(lease), acJournalPath);
 
+        const auto capability = workspace.CreatePublicationCapability(
+            acPaths,
+            acExpectedCampaignId,
+            acExpectedPlayerProfileId);
+        if (!capability.Protects(
+                acPaths,
+                acExpectedCampaignId,
+                acExpectedPlayerProfileId))
+        {
+            return MakeReport(
+                PartyQuestReplicaDurableRestoreStatus::WorkspaceLeaseFailure,
+                acJournalPath);
+        }
+
+        return ContinueAuthorized(
+            acPaths,
+            acExpectedCampaignId,
+            acExpectedPlayerProfileId,
+            acJournalPath,
+            capability,
+            aHooks);
+    }
+    catch (...)
+    {
+        auto report = MakeReport(
+            PartyQuestReplicaDurableRestoreStatus::UnsafePath,
+            acJournalPath);
+        report.RequiresRecovery = true;
+        return report;
+    }
+#endif
+}
+
+PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCampaignId& acExpectedCampaignId,
+    const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
+    const std::filesystem::path& acJournalPath,
+    const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
+    PartyQuestReplicaDurableRestoreHooks aHooks) noexcept
+{
+#ifdef _WIN32
+    (void)acPaths;
+    (void)acExpectedCampaignId;
+    (void)acExpectedPlayerProfileId;
+    (void)acWorkspaceCapability;
+    (void)aHooks;
+    return MakeReport(
+        PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform,
+        acJournalPath);
+#else
+    try
+    {
+        if (!ValidateExpectedIdentity(
+                acExpectedCampaignId,
+                acExpectedPlayerProfileId))
+        {
+            return MakeReport(
+                PartyQuestReplicaDurableRestoreStatus::InvalidIdentity,
+                acJournalPath);
+        }
+        if (!acWorkspaceCapability.Protects(
+                acPaths,
+                acExpectedCampaignId,
+                acExpectedPlayerProfileId))
+        {
+            return MakeReport(
+                PartyQuestReplicaDurableRestoreStatus::WorkspaceLeaseFailure,
+                acJournalPath);
+        }
+
         const auto loaded =
             PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
                 acJournalPath);
@@ -1278,6 +1349,77 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::R
             acExpectedPlayerProfileId);
         if (lease != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
             return MakeReport(MapLeaseStatus(lease), acJournalPath);
+
+        const auto capability = workspace.CreatePublicationCapability(
+            acPaths,
+            acExpectedCampaignId,
+            acExpectedPlayerProfileId);
+        if (!capability.Protects(
+                acPaths,
+                acExpectedCampaignId,
+                acExpectedPlayerProfileId))
+        {
+            return MakeReport(
+                PartyQuestReplicaDurableRestoreStatus::WorkspaceLeaseFailure,
+                acJournalPath);
+        }
+
+        return RecoverAuthorized(
+            acPaths,
+            acExpectedCampaignId,
+            acExpectedPlayerProfileId,
+            acJournalPath,
+            capability,
+            aHooks);
+    }
+    catch (...)
+    {
+        auto report = MakeReport(
+            PartyQuestReplicaDurableRestoreStatus::UnsafePath,
+            acJournalPath);
+        report.RequiresRecovery = true;
+        return report;
+    }
+#endif
+}
+
+PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::RecoverAuthorized(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCampaignId& acExpectedCampaignId,
+    const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
+    const std::filesystem::path& acJournalPath,
+    const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
+    PartyQuestReplicaDurableRestoreHooks aHooks) noexcept
+{
+#ifdef _WIN32
+    (void)acPaths;
+    (void)acExpectedCampaignId;
+    (void)acExpectedPlayerProfileId;
+    (void)acWorkspaceCapability;
+    (void)aHooks;
+    return MakeReport(
+        PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform,
+        acJournalPath);
+#else
+    try
+    {
+        if (!ValidateExpectedIdentity(
+                acExpectedCampaignId,
+                acExpectedPlayerProfileId))
+        {
+            return MakeReport(
+                PartyQuestReplicaDurableRestoreStatus::InvalidIdentity,
+                acJournalPath);
+        }
+        if (!acWorkspaceCapability.Protects(
+                acPaths,
+                acExpectedCampaignId,
+                acExpectedPlayerProfileId))
+        {
+            return MakeReport(
+                PartyQuestReplicaDurableRestoreStatus::WorkspaceLeaseFailure,
+                acJournalPath);
+        }
 
         const auto loaded =
             PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
