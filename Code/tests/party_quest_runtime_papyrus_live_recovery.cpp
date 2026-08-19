@@ -232,7 +232,7 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
         kLiveRecoveryPlayer,
         transactionId);
     REQUIRE(persistedAttempt.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
+        PartyQuestRuntimeRestoreAttemptStatus::FileNotFound);
 #else
     REQUIRE(recovered.RestoreDomain ==
         PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
