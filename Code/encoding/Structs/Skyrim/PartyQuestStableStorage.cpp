@@ -79,7 +79,7 @@ bool IsWindowsNtfsHandle(HANDLE aFile) noexcept
             nullptr,
             nullptr,
             fileSystemName,
-            static_cast<DWORD>(std::size(fileSystemName))))
+            MAX_PATH + 1))
     {
         return false;
     }
@@ -252,8 +252,12 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
             return PartyQuestStableStorageStatus::InvalidPath;
         }
 
-        std::vector<uint8_t> renameBuffer(renameInfoSize, 0);
-        auto* pRename = reinterpret_cast<FILE_RENAME_INFO*>(renameBuffer.data());
+        const size_t alignedUnits =
+            (renameInfoSize + sizeof(std::max_align_t) - 1) /
+            sizeof(std::max_align_t);
+        std::vector<std::max_align_t> renameStorage(alignedUnits);
+        std::memset(renameStorage.data(), 0, alignedUnits * sizeof(std::max_align_t));
+        auto* pRename = reinterpret_cast<FILE_RENAME_INFO*>(renameStorage.data());
         pRename->ReplaceIfExists = aReplaceExisting ? TRUE : FALSE;
         pRename->RootDirectory = nullptr;
         pRename->FileNameLength = static_cast<DWORD>(destinationBytes);
