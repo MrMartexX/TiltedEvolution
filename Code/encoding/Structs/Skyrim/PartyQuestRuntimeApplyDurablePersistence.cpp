@@ -20,29 +20,6 @@ PartyQuestRuntimeApplyPersistenceStatus MapStableStorageStatus(
     return PartyQuestRuntimeApplyPersistenceStatus::IoError;
 }
 
-bool WriteExactArchive(
-    const std::filesystem::path& acPath,
-    const std::vector<uint8_t>& acBytes)
-{
-    std::ofstream file(acPath, std::ios::binary | std::ios::trunc);
-    if (!file.is_open())
-        return false;
-
-    if (!acBytes.empty())
-    {
-        file.write(
-            reinterpret_cast<const char*>(acBytes.data()),
-            static_cast<std::streamsize>(acBytes.size()));
-    }
-
-    file.flush();
-    if (!file.good())
-        return false;
-
-    file.close();
-    return file.good();
-}
-
 bool ReadExactArchive(
     const std::filesystem::path& acPath,
     std::vector<uint8_t>& aBytes)
@@ -139,13 +116,14 @@ PartyQuestRuntimeApplyPersistence::SavePowerLossDurably(
         return PartyQuestRuntimeApplyPersistenceStatus::IoError;
     }
 
-    if (!WriteExactArchive(temporaryPath, encoded))
-        return PartyQuestRuntimeApplyPersistenceStatus::IoError;
-
-    // Flush before verification so the verified bytes are also the bytes that
-    // have crossed the file-data durability barrier. PublishFileRename repeats
-    // the exact-file flush immediately before namespace publication.
-    auto stableStatus = PartyQuestStableStorage::FlushFile(temporaryPath);
+    // INV-DURABILITY-001: the new recovery candidate, including its namespace
+    // entry, must already survive power loss before the old primary authority is
+    // moved aside. File-data flush alone is insufficient for a newly created
+    // POSIX directory entry; WriteFileDurably includes that publication barrier.
+    auto stableStatus = PartyQuestStableStorage::WriteFileDurably(
+        temporaryPath,
+        encoded.data(),
+        encoded.size());
     if (stableStatus != PartyQuestStableStorageStatus::Success)
         return MapStableStorageStatus(stableStatus);
 
@@ -184,9 +162,10 @@ PartyQuestRuntimeApplyPersistence::SavePowerLossDurably(
                 PartyQuestRuntimeApplyPersistenceBoundary::PrimaryMovedToBackup) ==
             PartyQuestRuntimeApplyPersistenceDirective::FailClosed)
         {
-            // The old primary is now durably reachable as .bak. Preserve both
-            // backup and verified .tmp; an unproven rollback would reduce rather
-            // than improve recovery authority.
+            // The old primary is now durably reachable as .bak and the verified
+            // candidate is already durably reachable as .tmp. Preserve both;
+            // an unproven rollback would reduce rather than improve recovery
+            // authority.
             return PartyQuestRuntimeApplyPersistenceStatus::IoError;
         }
     }
@@ -206,6 +185,9 @@ PartyQuestRuntimeApplyPersistence::SavePowerLossDurably(
     if (aHooks.Invoke(PartyQuestRuntimeApplyPersistenceBoundary::TemporaryPublished) ==
         PartyQuestRuntimeApplyPersistenceDirective::FailClosed)
     {
+        // The new primary has crossed the platform publication barrier already.
+        // Reporting failure keeps callers fail-closed while recovery can inspect
+        // the exact durable primary rather than guessing that publication failed.
         return PartyQuestRuntimeApplyPersistenceStatus::IoError;
     }
 
