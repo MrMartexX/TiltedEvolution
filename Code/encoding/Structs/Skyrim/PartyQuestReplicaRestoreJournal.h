@@ -182,11 +182,13 @@ struct PartyQuestReplicaRestoreJournalPersistenceHooks
 /**
  * Restore journal persistence.
  *
- * SaveAtomically retains the original process-crash recovery protocol.
+ * SaveAtomically/Load retain the original process-crash recovery protocol.
  * SavePowerLossDurably uses stable staged writes plus stable same-directory
  * primary/backup publication and never performs an unproved rollback after a
- * durable namespace transition. Its parent directory must already exist; the
- * caller remains responsible for proving that directory and every filesystem
+ * durable namespace transition. LoadPowerLossDurably is its recovery partner:
+ * it never promotes a valid .tmp with an ordinary rename and never overwrites a
+ * present invalid primary. Its parent directory must already exist; the caller
+ * remains responsible for proving that directory and every filesystem
  * prerequisite for a journal phase are durable before publishing that phase.
  */
 class PartyQuestReplicaRestoreJournalPersistence final
@@ -209,5 +211,8 @@ public:
         PartyQuestReplicaRestoreJournalPersistenceHooks aHooks = {});
 
     [[nodiscard]] static PartyQuestReplicaRestoreJournalPersistenceResult Load(
+        const std::filesystem::path& acPath);
+
+    [[nodiscard]] static PartyQuestReplicaRestoreJournalPersistenceResult LoadPowerLossDurably(
         const std::filesystem::path& acPath);
 };
