@@ -19,12 +19,19 @@ All six authoritative metadata stores now expose a stronger publication path:
 - `PartyQuestReplicaManifestStore::SavePowerLossDurably`;
 - `PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably`.
 
-This is an API/proof milestone, not production activation. Existing server/client
+Linux additionally has a non-destructive strong restore preparation path,
+`PartyQuestReplicaDurableRestorePreparation::Prepare`. It requires an immutable
+revision checkpoint to pass data-before-manifest durability promotion, durably
+publishes `Prepared`, creates and verifies durable rollback copies, and durably
+publishes `BackupsReady`. It deliberately stops before staging a live
+replacement or publishing `MutationStarted`.
+
+This is still not production native-mutation activation. Existing server/client
 callers are not automatically converted merely because the stronger functions
 exist. In particular the server canonical-state/campaign bootstrap path and the
-restore executor still use their legacy crash-resilient writers. The stronger
-path must be wired only where the surrounding directory/data ordering is also
-proved.
+legacy destructive restore executor still use crash-resilient writers. The
+stronger path must be wired only where the surrounding directory/data ordering
+is also proved.
 
 The restore journal exposes `LoadPowerLossDurably` so recovery of a newer valid
 `.tmp` does not silently downgrade to an ordinary rename. Player-profile
@@ -106,6 +113,13 @@ Likewise, profile/runtime/manifest/journal strong APIs must only become producti
 requirements when their owning co-op directory tree has a compatible durable
 namespace proof.
 
+The Linux durable restore preparation is also intentionally separate from
+`PartyQuestReplicaRestoreExecutor::Recover/Execute`. A `BackupsReady` journal does
+not itself authorize a caller to continue through the legacy crash-resilient
+`MutationStarted` path. The eventual destructive strong executor must reacquire
+the exact workspace and revalidate all evidence before publishing its own durable
+mutation barrier.
+
 ## Replica/checkpoint data files
 
 `PartyQuestReplicaFileExecutor` still performs the process-crash copy protocol:
@@ -136,16 +150,24 @@ exact orphaned data or a process-crash manifest, but neither is stronger
 mutation authority. Promotion is idempotent and re-establishes every stable
 barrier each time it is requested.
 
+`PartyQuestReplicaDurableRestorePreparation` machine-enforces this dependency on
+Linux. It promotes the exact revision checkpoint while holding the workspace
+lease, reloads that manifest, rebuilds a restore plan from it and requires exact
+plan equality before any restore transaction directory or rollback file is
+created. A caller therefore cannot use a coincident legacy checkpoint plan as a
+shortcut around promotion.
+
 Windows currently returns `UnsupportedPlatform` from revision-checkpoint
-promotion before issuing stronger authority. NTFS durable file write/rename is
-implemented, but durable creation/promotion of the directory tree is not yet
-proved to the same standard. The project therefore does not infer a complete
-Windows checkpoint-durability proof from file rename semantics alone.
+promotion and durable restore preparation before stronger restore authority is
+issued. NTFS durable file write/rename is implemented, but durable
+creation/promotion of the directory tree is not yet proved to the same standard.
+The project therefore does not infer a complete Windows checkpoint/restore proof
+from file rename semantics alone.
 
 The manifest must never become power-loss authority while any file it names is
 still only cache-resident or its directory ancestry can disappear independently.
 
-## Durable directory namespace
+## Durable directory and rollback namespace
 
 `PartyQuestStableStorage::EnsureDirectoryTreeDurably` currently provides the
 reviewed directory-tree promotion primitive on POSIX/Linux:
@@ -158,14 +180,26 @@ reviewed directory-tree promotion primitive on POSIX/Linux:
 - repeat the parent/child barriers for already-existing components, allowing a
   directory created by an earlier crash-resilient path to be promoted later.
 
-Windows deliberately returns `Unsupported`. `CreateDirectory` does not expose
-the same reviewed write-through creation contract used by the NTFS file rename
-path, and this project does not assume a generic directory `FlushFileBuffers`
-contract.
+`PartyQuestStableStorage::CopyFileDurably` provides the bounded-memory rollback
+copy primitive used by Linux strong restore preparation:
+
+- open source and destination with `O_NOFOLLOW`;
+- validate exact regular-file handles;
+- detect source/destination hard-link aliasing before truncation;
+- stream bytes through a bounded buffer;
+- `fsync` the exact destination;
+- close both descriptors;
+- `fsync` the destination parent so the rollback name is stable.
+
+Windows deliberately returns `Unsupported` from both durable directory-tree and
+rollback-copy primitives. `CreateDirectory` does not expose the same reviewed
+write-through creation contract used by the NTFS file rename path, and this
+project does not assume a generic directory `FlushFileBuffers` contract.
 
 ## Destructive restore
 
-`PartyQuestReplicaRestoreExecutor` still enforces this logical recovery sequence:
+`PartyQuestReplicaRestoreExecutor` still enforces the legacy logical recovery
+sequence:
 
 1. persist `Prepared` journal state;
 2. create and verify rollback backups;
@@ -178,15 +212,32 @@ contract.
 9. persist `Committed`;
 10. clean temporary/transaction files when safe.
 
-The restore journal writer can now durably publish a phase, but the executor has
-not yet been migrated to prove the filesystem prerequisites before each phase.
-For `PowerLossDurable`, the required ordering remains:
+Linux now has a separate strong implementation of steps 1-3 only. Its ordering
+is:
 
-- transaction/journal directory ancestry durable before durable `Prepared`;
-- rollback backup bytes, names and directory ancestry durable before durable
-  `BackupsReady`;
+1. acquire the exact campaign/player workspace lease;
+2. promote and rebind the exact immutable revision checkpoint;
+3. prepare the restore journal from current live destinations;
+4. check the existing restore resource/free-space budget;
+5. durably establish transaction and rollback directories;
+6. durably publish `Prepared`;
+7. revalidate every live destination and checkpoint source;
+8. durably copy every existing live destination into its rollback path;
+9. verify exact rollback size/digest;
+10. revalidate destinations and checkpoint sources again;
+11. verify the complete rollback set;
+12. mark and durably publish `BackupsReady`;
+13. return without `MutationStarted` and without changing a live replica file.
+
+This state remains `ResumeBeforeMutation`. Reusing the same restore id is rejected
+rather than overwriting the durable transaction.
+
+The remaining destructive `PowerLossDurable` ordering is still open:
+
+- stage/verify checkpoint bytes under a reacquired exact workspace;
+- revalidate checkpoint, rollback and live destination evidence;
 - durable `MutationStarted` before any destructive live destination rename;
-- restored destination bytes, names and ancestry durable before durable
+- each restored destination bytes, names and ancestry durable before durable
   `Restored`;
 - durable `Committed` only after every restored-state barrier completes.
 
@@ -241,8 +292,8 @@ following are true:
    writer only after its parent namespace is durably established;
 2. the production checkpoint path requires successful data-before-manifest
    durability promotion rather than merely exposing the promotion helper;
-3. restore rollback backups, destructive replacements and every journal phase
-   transition obey the ordering above;
+3. the destructive restore continuation after `BackupsReady` durably orders
+   `MutationStarted`, live replacement, `Restored`, `Committed` and rollback;
 4. recovery/adoption paths use the same durability contract rather than silently
    downgrading it after a crash;
 5. Linux file + directory ordering is covered by deterministic failure/fault
