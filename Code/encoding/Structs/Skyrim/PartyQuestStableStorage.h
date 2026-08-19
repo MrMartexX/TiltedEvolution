@@ -78,6 +78,24 @@ struct PartyQuestStableStorage
         size_t aSize) noexcept;
 
     /**
+     * Streams one exact regular file into a new/truncated regular destination and
+     * establishes both destination data and its directory entry as stable.
+     *
+     * The POSIX implementation uses O_NOFOLLOW handles for both source and
+     * destination, validates the source as a regular file, copies with bounded
+     * memory, fsyncs the exact destination, closes both descriptors, then fsyncs
+     * the destination parent. This avoids loading Skyrim save/sidecar sized files
+     * into memory merely to create rollback evidence.
+     *
+     * Windows deliberately remains Unsupported because the current restore path
+     * also lacks a reviewed durable directory-tree/delete contract; this method
+     * must not be used to imply that Windows destructive restore is ready.
+     */
+    [[nodiscard]] static PartyQuestStableStorageStatus CopyFileDurably(
+        const std::filesystem::path& acSource,
+        const std::filesystem::path& acDestination) noexcept;
+
+    /**
      * Publishes one already-complete regular file by a same-directory rename.
      *
      * On POSIX the exact source file is fsync'd before rename and the containing
@@ -120,6 +138,15 @@ struct PartyQuestStableStorage
     [[nodiscard]] static constexpr bool HasDocumentedDurableFileWritePrimitive() noexcept
     {
         return true;
+    }
+
+    [[nodiscard]] static constexpr bool HasDocumentedDurableFileCopyPrimitive() noexcept
+    {
+#ifdef _WIN32
+        return false;
+#else
+        return true;
+#endif
     }
 
     [[nodiscard]] static constexpr bool HasDocumentedDurableDirectoryTreePrimitive() noexcept
