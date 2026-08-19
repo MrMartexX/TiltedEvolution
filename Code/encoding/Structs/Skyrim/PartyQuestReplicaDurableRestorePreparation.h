@@ -6,6 +6,9 @@
 #include <cstdint>
 #include <optional>
 
+class PartyQuestRuntimeRecoveryCoordinator;
+class PartyQuestReplicaDurableRestorePreparationTestAccess;
+
 enum class PartyQuestReplicaDurableRestorePreparationStatus : uint8_t
 {
     BackupsReady,
@@ -62,14 +65,20 @@ struct PartyQuestReplicaDurableRestorePreparationReport
  * durably publishes BackupsReady. Rollback copy publication uses the dedicated
  * stable-storage copy primitive rather than reading a Skyrim save into memory.
  *
+ * Runtime recovery can already own the exact workspace lease through its
+ * hydrated session owner. That path uses the private capability-bearing entry
+ * point rather than recursively acquiring the same kernel lock. The capability
+ * is exact-root/campaign/player bound and pins the native lease for the entire
+ * synchronous preparation.
+ *
  * It never stages a live replacement, never publishes MutationStarted, never
  * renames/removes a live replica destination and grants no Skyrim/world mutation
- * authority. A later destructive phase must reacquire/revalidate the same
- * workspace and all evidence before it may publish MutationStarted.
+ * authority. A later destructive phase must revalidate the same workspace and
+ * all evidence before it may publish MutationStarted.
  *
- * Windows fails closed before acquiring a workspace lease or creating restore
- * metadata because durable checkpoint directory promotion and durable rollback
- * deletion are not yet proved there.
+ * Windows fails closed before creating restore metadata because durable
+ * checkpoint directory promotion and durable rollback deletion are not yet
+ * proved there.
  */
 class PartyQuestReplicaDurableRestorePreparation final
 {
@@ -78,4 +87,15 @@ public:
         const PartyQuestCoopSavePaths& acPaths,
         const PartyQuestReplicaRestorePlan& acPlan,
         uint64_t aRestoreId) noexcept;
+
+private:
+    [[nodiscard]] static PartyQuestReplicaDurableRestorePreparationReport PrepareAuthorized(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestReplicaRestorePlan& acPlan,
+        uint64_t aRestoreId,
+        const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept;
+
+    friend class PartyQuestRuntimeRecoveryCoordinator;
+    // Defined only in Code/tests for exact capability acceptance/rejection tests.
+    friend class PartyQuestReplicaDurableRestorePreparationTestAccess;
 };
