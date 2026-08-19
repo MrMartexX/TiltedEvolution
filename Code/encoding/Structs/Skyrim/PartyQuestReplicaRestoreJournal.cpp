@@ -6,6 +6,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <system_error>
@@ -15,7 +16,9 @@ namespace
 {
 constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'R', 'S', 'T', 'R', 'J'};
 constexpr uint16_t kLegacyFormatVersion = 1;
-constexpr uint16_t kFormatVersion = 2;
+constexpr uint16_t kRolledBackFormatVersion = 2;
+constexpr uint16_t kProcessCrashFormatVersion = 3;
+constexpr uint16_t kPowerLossFormatVersion = 4;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
 constexpr uint32_t kMaxOperations =
@@ -47,6 +50,39 @@ bool IsKnownPhase(PartyQuestReplicaRestoreJournalPhase aPhase) noexcept
 {
     return static_cast<uint8_t>(aPhase) <=
         static_cast<uint8_t>(PartyQuestReplicaRestoreJournalPhase::RolledBack);
+}
+
+bool IsSupportedFormatVersion(uint16_t aVersion) noexcept
+{
+    return aVersion == kLegacyFormatVersion ||
+        aVersion == kRolledBackFormatVersion ||
+        aVersion == kProcessCrashFormatVersion ||
+        aVersion == kPowerLossFormatVersion;
+}
+
+PartyQuestReplicaRestoreJournalArchiveDurability GetArchiveDurability(
+    uint16_t aVersion) noexcept
+{
+    if (aVersion == kProcessCrashFormatVersion)
+        return PartyQuestReplicaRestoreJournalArchiveDurability::ProcessCrashResilient;
+    if (aVersion == kPowerLossFormatVersion)
+        return PartyQuestReplicaRestoreJournalArchiveDurability::PowerLossDurable;
+    return PartyQuestReplicaRestoreJournalArchiveDurability::AmbiguousLegacyEncoding;
+}
+
+std::optional<uint16_t> GetFormatVersion(
+    PartyQuestReplicaRestoreJournalArchiveDurability aDurability) noexcept
+{
+    switch (aDurability)
+    {
+    case PartyQuestReplicaRestoreJournalArchiveDurability::ProcessCrashResilient:
+        return kProcessCrashFormatVersion;
+    case PartyQuestReplicaRestoreJournalArchiveDurability::PowerLossDurable:
+        return kPowerLossFormatVersion;
+    case PartyQuestReplicaRestoreJournalArchiveDurability::AmbiguousLegacyEncoding:
+        return std::nullopt;
+    }
+    return std::nullopt;
 }
 
 bool IsInside(
@@ -292,6 +328,43 @@ PartyQuestReplicaRestoreJournalPersistenceResult DecodeFile(
     if (result.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
         return result;
     return PartyQuestReplicaRestoreJournalPersistence::Decode(bytes);
+}
+
+PartyQuestReplicaRestoreJournalPersistenceResult RequireArchiveDurability(
+    PartyQuestReplicaRestoreJournalPersistenceResult aResult,
+    PartyQuestReplicaRestoreJournalArchiveDurability aExpected) noexcept
+{
+    if (aResult.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+        return aResult;
+    if (!aResult.State)
+    {
+        aResult.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
+        return aResult;
+    }
+    if (aResult.ArchiveDurability ==
+        PartyQuestReplicaRestoreJournalArchiveDurability::AmbiguousLegacyEncoding)
+    {
+        aResult.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::DurabilityAmbiguous;
+        return aResult;
+    }
+    if (aResult.ArchiveDurability != aExpected)
+    {
+        aResult.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::DurabilityMismatch;
+        return aResult;
+    }
+    return aResult;
+}
+
+PartyQuestReplicaRestoreJournalPersistenceStatus ValidateExistingEvidenceDomain(
+    const std::filesystem::path& acPath,
+    PartyQuestReplicaRestoreJournalArchiveDurability aExpected) noexcept
+{
+    const auto decoded = DecodeFile(acPath);
+    if (decoded.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
+        return PartyQuestReplicaRestoreJournalPersistenceStatus::Success;
+    if (decoded.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+        return PartyQuestReplicaRestoreJournalPersistenceStatus::Success;
+    return RequireArchiveDurability(decoded, aExpected).Status;
 }
 } // namespace
 
@@ -604,7 +677,20 @@ PartyQuestReplicaRestoreJournal::GetRecoveryDisposition(
 std::vector<uint8_t> PartyQuestReplicaRestoreJournalPersistence::Encode(
     const PartyQuestReplicaRestoreJournalState& acState)
 {
+    return EncodeForArchiveDurability(
+        acState,
+        PartyQuestReplicaRestoreJournalArchiveDurability::ProcessCrashResilient);
+}
+
+std::vector<uint8_t> PartyQuestReplicaRestoreJournalPersistence::EncodeForArchiveDurability(
+    const PartyQuestReplicaRestoreJournalState& acState,
+    PartyQuestReplicaRestoreJournalArchiveDurability aDurability)
+{
     if (!ValidateState(acState))
+        return {};
+
+    const auto version = GetFormatVersion(aDurability);
+    if (!version)
         return {};
 
     std::vector<uint8_t> payload;
@@ -634,7 +720,7 @@ std::vector<uint8_t> PartyQuestReplicaRestoreJournalPersistence::Encode(
 
     std::vector<uint8_t> archive;
     archive.insert(archive.end(), kMagic.begin(), kMagic.end());
-    WriteInteger<uint16_t>(archive, kFormatVersion);
+    WriteInteger<uint16_t>(archive, *version);
     WriteInteger<uint64_t>(archive, payload.size());
     archive.insert(archive.end(), payload.begin(), payload.end());
     WriteInteger<uint64_t>(
@@ -676,11 +762,13 @@ PartyQuestReplicaRestoreJournalPersistence::Decode(
         result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::Truncated;
         return result;
     }
-    if (version != kLegacyFormatVersion && version != kFormatVersion)
+    if (!IsSupportedFormatVersion(version))
     {
         result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::UnsupportedVersion;
         return result;
     }
+    result.ArchiveDurability = GetArchiveDurability(version);
+
     if (payloadSize > acBytes.size() ||
         offset > acBytes.size() ||
         acBytes.size() - offset < payloadSize + sizeof(uint64_t))
@@ -735,7 +823,7 @@ PartyQuestReplicaRestoreJournalPersistence::Decode(
 
     if ((version == kLegacyFormatVersion &&
          phase > static_cast<uint8_t>(PartyQuestReplicaRestoreJournalPhase::Committed)) ||
-        (version == kFormatVersion &&
+        (version != kLegacyFormatVersion &&
          phase > static_cast<uint8_t>(PartyQuestReplicaRestoreJournalPhase::RolledBack)))
     {
         result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
@@ -815,6 +903,15 @@ PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
         std::filesystem::path backup = acPath;
         backup += ".bak";
 
+        for (const auto& evidence : {acPath, temporary, backup})
+        {
+            const auto domainStatus = ValidateExistingEvidenceDomain(
+                evidence,
+                PartyQuestReplicaRestoreJournalArchiveDurability::ProcessCrashResilient);
+            if (domainStatus != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+                return domainStatus;
+        }
+
         std::filesystem::remove(temporary, ec);
         if (ec && !IsMissingError(ec))
             return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
@@ -823,12 +920,16 @@ PartyQuestReplicaRestoreJournalPersistence::SaveAtomically(
         if (!WriteFile(temporary, bytes))
             return PartyQuestReplicaRestoreJournalPersistenceStatus::IoError;
 
-        const auto verify = DecodeFile(temporary);
+        const auto verify = RequireArchiveDurability(
+            DecodeFile(temporary),
+            PartyQuestReplicaRestoreJournalArchiveDurability::ProcessCrashResilient);
         if (verify.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success ||
             !verify.State || *verify.State != acState)
         {
             std::filesystem::remove(temporary, ec);
-            return PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData;
+            return verify.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success
+                ? PartyQuestReplicaRestoreJournalPersistenceStatus::InvalidData
+                : verify.Status;
         }
 
         if (aHooks.Invoke(
@@ -904,7 +1005,11 @@ PartyQuestReplicaRestoreJournalPersistence::Load(
 
     primary = DecodeFile(acPath);
     if (primary.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
-        return primary;
+    {
+        return RequireArchiveDurability(
+            std::move(primary),
+            PartyQuestReplicaRestoreJournalArchiveDurability::ProcessCrashResilient);
+    }
 
     std::filesystem::path temporary = acPath;
     temporary += ".tmp";
@@ -919,6 +1024,12 @@ PartyQuestReplicaRestoreJournalPersistence::Load(
     if (temp.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success &&
         temp.State)
     {
+        temp = RequireArchiveDurability(
+            std::move(temp),
+            PartyQuestReplicaRestoreJournalArchiveDurability::ProcessCrashResilient);
+        if (temp.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+            return temp;
+
         try
         {
             std::error_code ec;
@@ -954,13 +1065,17 @@ PartyQuestReplicaRestoreJournalPersistence::Load(
         return primary;
     }
 
-    const auto staleBackup = DecodeFile(backup);
+    auto staleBackup = DecodeFile(backup);
     if (staleBackup.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
     {
-        PartyQuestReplicaRestoreJournalPersistenceResult result;
-        result.Status = PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired;
-        result.State = staleBackup.State;
-        return result;
+        staleBackup = RequireArchiveDurability(
+            std::move(staleBackup),
+            PartyQuestReplicaRestoreJournalArchiveDurability::ProcessCrashResilient);
+        if (staleBackup.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+            return staleBackup;
+        staleBackup.Status =
+            PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired;
+        return staleBackup;
     }
 
     return primary;
