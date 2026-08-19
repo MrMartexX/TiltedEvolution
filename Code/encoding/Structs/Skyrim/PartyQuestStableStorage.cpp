@@ -404,7 +404,12 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
             return PartyQuestStableStorageStatus::FlushFailed;
         }
 
-        const auto& destinationName = destination.native();
+        // The primitive already proves source/destination share one directory.
+        // FILE_RENAME_INFORMATION explicitly defines a simple name with a null
+        // RootDirectory as a rename within the source file's current directory.
+        // Use only that basename rather than asking the filesystem to resolve an
+        // absolute DOS path through the lower-level rename information buffer.
+        const auto& destinationName = destination.filename().native();
         const size_t destinationBytes =
             destinationName.size() * sizeof(std::filesystem::path::value_type);
         if (destinationName.empty() ||
