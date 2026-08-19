@@ -130,6 +130,19 @@ struct PartyQuestStableStorage
     [[nodiscard]] static PartyQuestStableStorageStatus RemoveFileDurably(
         const std::filesystem::path& acPath) noexcept;
 
+    /**
+     * Durably removes one already-empty directory namespace entry.
+     *
+     * POSIX validates the final node as a real directory, calls rmdir(), then
+     * fsyncs the containing directory so successful return proves the removed
+     * child name crossed the stable-storage barrier. Windows remains Unsupported
+     * for the same directory-metadata reason as EnsureDirectoryTreeDurably.
+     * Callers must prove the directory is inside their confined namespace and
+     * must never use this primitive as recursive deletion authority.
+     */
+    [[nodiscard]] static PartyQuestStableStorageStatus RemoveEmptyDirectoryDurably(
+        const std::filesystem::path& acDirectory) noexcept;
+
     [[nodiscard]] static constexpr bool HasDocumentedFileFlushPrimitive() noexcept
     {
         return true;
@@ -184,6 +197,15 @@ struct PartyQuestStableStorage
     }
 
     [[nodiscard]] static constexpr bool HasDocumentedDurableFileRemovalPrimitive() noexcept
+    {
+#ifdef _WIN32
+        return false;
+#else
+        return true;
+#endif
+    }
+
+    [[nodiscard]] static constexpr bool HasDocumentedDurableEmptyDirectoryRemovalPrimitive() noexcept
     {
 #ifdef _WIN32
         return false;
