@@ -1,6 +1,10 @@
 #include <Structs/Skyrim/PartyQuestStableStorage.h>
 
+#include <cstddef>
+#include <cstring>
+#include <limits>
 #include <system_error>
+#include <vector>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -50,6 +54,43 @@ PartyQuestStableStorageStatus FlushPosixPath(
 
     return PartyQuestStableStorageStatus::Success;
 }
+#else
+PartyQuestStableStorageStatus ValidateWindowsRegularHandle(HANDLE aFile) noexcept
+{
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!::GetFileInformationByHandle(aFile, &information) ||
+        (information.dwFileAttributes &
+            (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0)
+    {
+        return PartyQuestStableStorageStatus::NodeValidationFailed;
+    }
+
+    return PartyQuestStableStorageStatus::Success;
+}
+
+bool IsWindowsNtfsHandle(HANDLE aFile) noexcept
+{
+    wchar_t fileSystemName[MAX_PATH + 1]{};
+    if (!::GetVolumeInformationByHandleW(
+            aFile,
+            nullptr,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            fileSystemName,
+            static_cast<DWORD>(std::size(fileSystemName))))
+    {
+        return false;
+    }
+
+    return ::CompareStringOrdinal(
+               fileSystemName,
+               -1,
+               L"NTFS",
+               -1,
+               TRUE) == CSTR_EQUAL;
+}
 #endif
 } // namespace
 
@@ -71,13 +112,11 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::FlushFile(
     if (file == INVALID_HANDLE_VALUE)
         return PartyQuestStableStorageStatus::OpenFailed;
 
-    BY_HANDLE_FILE_INFORMATION information{};
-    if (!::GetFileInformationByHandle(file, &information) ||
-        (information.dwFileAttributes &
-            (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0)
+    const auto validation = ValidateWindowsRegularHandle(file);
+    if (validation != PartyQuestStableStorageStatus::Success)
     {
         ::CloseHandle(file);
-        return PartyQuestStableStorageStatus::NodeValidationFailed;
+        return validation;
     }
 
     if (!::FlushFileBuffers(file))
@@ -102,8 +141,9 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::FlushDirectory(
         return PartyQuestStableStorageStatus::InvalidPath;
 
 #ifdef _WIN32
-    // No documented non-admin Win32 equivalent to POSIX directory fsync is
-    // accepted as a P0-H proof primitive here. Keep the boundary explicit.
+    // No generic documented non-admin Win32 equivalent to POSIX directory fsync
+    // is accepted as a P0-H proof primitive. NTFS rename durability uses the
+    // narrower FILE_FLAG_WRITE_THROUGH path below instead.
     return PartyQuestStableStorageStatus::Unsupported;
 #else
     return FlushPosixPath(acDirectory, true);
@@ -133,7 +173,8 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::FlushParentDirectory(
 
 PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
     const std::filesystem::path& acSource,
-    const std::filesystem::path& acDestination) noexcept
+    const std::filesystem::path& acDestination,
+    bool aReplaceExisting) noexcept
 {
     if (acSource.empty() || acDestination.empty())
         return PartyQuestStableStorageStatus::InvalidPath;
@@ -155,16 +196,106 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
             return PartyQuestStableStorageStatus::CrossDirectoryRename;
 
 #ifdef _WIN32
-        // P0-H deliberately has no Windows publication claim yet. File-level
-        // FlushFileBuffers alone is not treated as proof that the destination
-        // directory entry is durably published.
-        return PartyQuestStableStorageStatus::Unsupported;
+        // Use one exact source handle for validation, data flush and rename. This
+        // avoids proving durability for one path node and then renaming a later
+        // replacement of that node.
+        const HANDLE file = ::CreateFileW(
+            source.c_str(),
+            GENERIC_WRITE | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL |
+                FILE_FLAG_OPEN_REPARSE_POINT |
+                FILE_FLAG_WRITE_THROUGH,
+            nullptr);
+        if (file == INVALID_HANDLE_VALUE)
+            return PartyQuestStableStorageStatus::OpenFailed;
+
+        const auto validation = ValidateWindowsRegularHandle(file);
+        if (validation != PartyQuestStableStorageStatus::Success)
+        {
+            ::CloseHandle(file);
+            return validation;
+        }
+
+        // The accepted Windows proof is intentionally NTFS-specific. Microsoft
+        // documents write-through metadata flushing for NTFS rename operations;
+        // no equivalent claim is made here for ReFS/FAT/network filesystems.
+        if (!IsWindowsNtfsHandle(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::Unsupported;
+        }
+
+        if (!::FlushFileBuffers(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::FlushFailed;
+        }
+
+        const auto& destinationName = destination.native();
+        const size_t destinationBytes =
+            destinationName.size() * sizeof(std::filesystem::path::value_type);
+        if (destinationName.empty() ||
+            destinationBytes > static_cast<size_t>(std::numeric_limits<DWORD>::max()))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::InvalidPath;
+        }
+
+        const size_t renameInfoSize =
+            offsetof(FILE_RENAME_INFO, FileName) + destinationBytes;
+        if (renameInfoSize > static_cast<size_t>(std::numeric_limits<DWORD>::max()))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::InvalidPath;
+        }
+
+        std::vector<uint8_t> renameBuffer(renameInfoSize, 0);
+        auto* pRename = reinterpret_cast<FILE_RENAME_INFO*>(renameBuffer.data());
+        pRename->ReplaceIfExists = aReplaceExisting ? TRUE : FALSE;
+        pRename->RootDirectory = nullptr;
+        pRename->FileNameLength = static_cast<DWORD>(destinationBytes);
+        std::memcpy(pRename->FileName, destinationName.data(), destinationBytes);
+
+        if (!::SetFileInformationByHandle(
+                file,
+                FileRenameInfo,
+                pRename,
+                static_cast<DWORD>(renameInfoSize)))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::RenameFailed;
+        }
+
+        // FILE_FLAG_WRITE_THROUGH is the authority for NTFS rename metadata.
+        // FlushFileBuffers after the rename is an additional exact-handle barrier;
+        // failure means publication is uncertain even though the name may exist.
+        if (!::FlushFileBuffers(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::FlushFailed;
+        }
+
+        if (!::CloseHandle(file))
+            return PartyQuestStableStorageStatus::CloseFailed;
+
+        return PartyQuestStableStorageStatus::Success;
 #else
+        ec.clear();
+        const auto destinationStatus = std::filesystem::symlink_status(destination, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory)
+            return PartyQuestStableStorageStatus::InvalidPath;
+        ec.clear();
+
+        if (!aReplaceExisting && std::filesystem::exists(destinationStatus))
+            return PartyQuestStableStorageStatus::RenameFailed;
+
         const auto fileFlush = FlushFile(source);
         if (fileFlush != PartyQuestStableStorageStatus::Success)
             return fileFlush;
 
-        ec.clear();
         std::filesystem::rename(source, destination, ec);
         if (ec)
             return PartyQuestStableStorageStatus::RenameFailed;
@@ -173,6 +304,46 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
         // publication, not a reason to pretend the old namespace is restored.
         // The caller must keep transaction/recovery authority and fail closed.
         return FlushDirectory(destination.parent_path());
+#endif
+    }
+    catch (...)
+    {
+        return PartyQuestStableStorageStatus::InvalidPath;
+    }
+}
+
+PartyQuestStableStorageStatus PartyQuestStableStorage::RemoveFileDurably(
+    const std::filesystem::path& acPath) noexcept
+{
+    if (acPath.empty())
+        return PartyQuestStableStorageStatus::InvalidPath;
+
+    try
+    {
+        std::error_code ec;
+        const auto path = std::filesystem::absolute(acPath, ec).lexically_normal();
+        if (ec || path.empty() || path.parent_path().empty())
+            return PartyQuestStableStorageStatus::InvalidPath;
+
+#ifdef _WIN32
+        // Delete disposition commonly becomes a namespace removal on handle
+        // close. Until that close-time metadata durability is documented to the
+        // same standard as NTFS write-through rename, fail closed.
+        return PartyQuestStableStorageStatus::Unsupported;
+#else
+        struct stat status{};
+        if (::lstat(path.c_str(), &status) != 0)
+            return PartyQuestStableStorageStatus::OpenFailed;
+        if (!S_ISREG(status.st_mode))
+            return PartyQuestStableStorageStatus::NodeValidationFailed;
+
+        if (::unlink(path.c_str()) != 0)
+            return PartyQuestStableStorageStatus::RemoveFailed;
+
+        // A failed parent fsync after unlink means deletion durability is
+        // uncertain. Do not report success merely because the name disappeared
+        // from the current process view.
+        return FlushDirectory(path.parent_path());
 #endif
     }
     catch (...)
