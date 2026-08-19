@@ -48,7 +48,8 @@ enum class PartyQuestReplicaManifestPersistenceStatus : uint8_t
     ChecksumMismatch,
     InvalidData,
     BackupRecoveryRequired,
-    ResourceLimitExceeded
+    ResourceLimitExceeded,
+    PowerLossDurabilityUnsupported
 };
 
 struct PartyQuestReplicaManifestPersistenceResult
@@ -57,6 +58,38 @@ struct PartyQuestReplicaManifestPersistenceResult
     std::optional<PartyQuestReplicaManifest> Manifest;
     bool UsedTemporary{};
     bool UsedBackup{};
+};
+
+enum class PartyQuestReplicaManifestPersistenceBoundary : uint8_t
+{
+    TemporaryVerified,
+    PrimaryMovedToBackup,
+    TemporaryPublished
+};
+
+enum class PartyQuestReplicaManifestPersistenceDirective : uint8_t
+{
+    Continue,
+    FailClosed
+};
+
+/** Ephemeral local fault observer; it carries no path or filesystem authority. */
+struct PartyQuestReplicaManifestPersistenceHooks
+{
+    using Callback = PartyQuestReplicaManifestPersistenceDirective (*)(
+        PartyQuestReplicaManifestPersistenceBoundary,
+        void*) noexcept;
+
+    Callback OnBoundary{};
+    void* Context{};
+
+    [[nodiscard]] PartyQuestReplicaManifestPersistenceDirective Invoke(
+        PartyQuestReplicaManifestPersistenceBoundary aBoundary) const noexcept
+    {
+        return OnBoundary
+            ? OnBoundary(aBoundary, Context)
+            : PartyQuestReplicaManifestPersistenceDirective::Continue;
+    }
 };
 
 enum class PartyQuestReplicaManifestVerificationStatus : uint8_t
@@ -77,6 +110,10 @@ enum class PartyQuestReplicaManifestVerificationStatus : uint8_t
  * is written only after all final files verify, and future use must verify the
  * manifest again. A valid .tmp is preferred after an interrupted manifest
  * replacement; an older .bak is never silently treated as current truth.
+ *
+ * SavePowerLossDurably is a stronger publication primitive for callers that
+ * have already established stable parent-directory and data-file ordering. It
+ * does not itself prove that files named by the manifest are durable.
  */
 class PartyQuestReplicaManifestStore final
 {
@@ -127,6 +164,11 @@ public:
     [[nodiscard]] static PartyQuestReplicaManifestPersistenceStatus SaveAtomically(
         const std::filesystem::path& acPath,
         const PartyQuestReplicaManifest& acManifest);
+
+    [[nodiscard]] static PartyQuestReplicaManifestPersistenceStatus SavePowerLossDurably(
+        const std::filesystem::path& acPath,
+        const PartyQuestReplicaManifest& acManifest,
+        PartyQuestReplicaManifestPersistenceHooks aHooks = {});
 
     [[nodiscard]] static PartyQuestReplicaManifestPersistenceResult Load(
         const std::filesystem::path& acPath);
