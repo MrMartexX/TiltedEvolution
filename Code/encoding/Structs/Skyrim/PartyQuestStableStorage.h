@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 
@@ -11,6 +12,7 @@ enum class PartyQuestStableStorageStatus : uint8_t
     CrossDirectoryRename,
     OpenFailed,
     NodeValidationFailed,
+    WriteFailed,
     FlushFailed,
     CloseFailed,
     RenameFailed,
@@ -27,9 +29,9 @@ enum class PartyQuestStableStorageStatus : uint8_t
  * path confinement, ancestor/topology validation, verification and recovery
  * ordering.
  *
- * FlushFile rejects a symlink/reparse final node and non-regular-file nodes
- * rather than intentionally following them. This is only final-node hardening;
- * it is not a replacement for the caller's confined namespace proof.
+ * File operations reject a symlink/reparse final node and non-regular-file
+ * nodes rather than intentionally following them. This is only final-node
+ * hardening; it is not a replacement for the caller's confined namespace proof.
  */
 struct PartyQuestStableStorage
 {
@@ -41,6 +43,21 @@ struct PartyQuestStableStorage
 
     [[nodiscard]] static PartyQuestStableStorageStatus FlushParentDirectory(
         const std::filesystem::path& acPath) noexcept;
+
+    /**
+     * Creates/truncates and durably writes one regular staged file.
+     *
+     * POSIX writes through an O_NOFOLLOW descriptor, fsyncs the file, closes it,
+     * then fsyncs the containing directory so a newly created name is durable.
+     * Windows first validates an existing non-reparse NTFS parent, then creates
+     * the file with FILE_FLAG_WRITE_THROUGH, writes all bytes, calls
+     * FlushFileBuffers and closes the exact handle. Non-NTFS Windows paths fail
+     * closed before the target file is created or truncated.
+     */
+    [[nodiscard]] static PartyQuestStableStorageStatus WriteFileDurably(
+        const std::filesystem::path& acPath,
+        const void* apData,
+        size_t aSize) noexcept;
 
     /**
      * Publishes one already-complete regular file by a same-directory rename.
@@ -82,11 +99,16 @@ struct PartyQuestStableStorage
         return true;
     }
 
+    [[nodiscard]] static constexpr bool HasDocumentedDurableFileWritePrimitive() noexcept
+    {
+        return true;
+    }
+
     /**
      * Linux exposes fsync() on directory file descriptors for persisting
      * directory-entry changes. The current Windows implementation deliberately
-     * reports Unsupported for a generic directory flush; NTFS rename durability
-     * is instead provided by the narrower write-through publication primitive.
+     * reports Unsupported for a generic directory flush; NTFS file creation and
+     * rename durability use narrower write-through primitives instead.
      */
     [[nodiscard]] static constexpr bool HasDocumentedParentDirectoryFlushPrimitive() noexcept
     {
