@@ -1,8 +1,10 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestReplicaDurableRestoreExecutor.h>
+#include <Structs/Skyrim/PartyQuestReplicaDurableRestorePreparation.h>
 #include <Structs/Skyrim/PartyQuestReplicaRestoreExecutor.h>
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
+#include <Structs/Skyrim/PartyQuestRuntimeRestoreAttempt.h>
 
 #include <cstdint>
 #include <filesystem>
@@ -50,6 +52,9 @@ struct PartyQuestRuntimeRecoveryResult
         PartyQuestReplicaRestorePlanStatus::InvalidIdentity};
     PartyQuestReplicaRestoreExecutionStatus RestoreStatus{
         PartyQuestReplicaRestoreExecutionStatus::InvalidPlan};
+    std::optional<PartyQuestRuntimeRestoreAttemptStatus> RestoreAttemptStatus;
+    std::optional<PartyQuestReplicaDurableRestorePreparationStatus>
+        DurablePreparationStatus;
     std::optional<PartyQuestReplicaDurableRestoreStatus> DurableRestoreStatus;
     PartyQuestRuntimeRestoreDurabilityDomain RestoreDomain{
         PartyQuestRuntimeRestoreDurabilityDomain::None};
