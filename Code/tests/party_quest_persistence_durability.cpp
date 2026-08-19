@@ -6,6 +6,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 namespace
@@ -33,14 +34,13 @@ TEST_CASE("PoC durability policy explicitly stops below power-loss durability", 
         PartyQuestPersistenceGuarantee::Volatile,
         PartyQuestPersistenceDurabilityPolicy::MinimumPoCRuntimeMutationGuarantee));
 
-    // PoC crash-resilient ordering is intentionally insufficient authority for
-    // any native Skyrim side effect. The native executor uses this exact gate.
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
 }
 
 TEST_CASE("stable-storage primitives keep the platform publication boundary explicit", "[quest.party-state.durability]")
 {
     REQUIRE(PartyQuestStableStorage::HasDocumentedFileFlushPrimitive());
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileWritePrimitive());
     REQUIRE(PartyQuestStableStorage::HasDocumentedAtomicFilePublicationPrimitive());
 #ifdef _WIN32
     REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedParentDirectoryFlushPrimitive());
@@ -56,13 +56,13 @@ TEST_CASE("stable-storage primitives keep the platform publication boundary expl
         PartyQuestStableStorageStatus::InvalidPath);
     REQUIRE(PartyQuestStableStorage::FlushParentDirectory({}) ==
         PartyQuestStableStorageStatus::InvalidPath);
+    REQUIRE(PartyQuestStableStorage::WriteFileDurably({}, nullptr, 0) ==
+        PartyQuestStableStorageStatus::InvalidPath);
     REQUIRE(PartyQuestStableStorage::PublishFileRename({}, {}) ==
         PartyQuestStableStorageStatus::InvalidPath);
     REQUIRE(PartyQuestStableStorage::RemoveFileDurably({}) ==
         PartyQuestStableStorageStatus::InvalidPath);
 
-    // Adding OS primitives is evidence only; it must not silently upgrade the
-    // global mutation authority boundary.
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
@@ -110,7 +110,37 @@ TEST_CASE("stable-storage file flush works without claiming cross-platform direc
 
     std::filesystem::remove_all(root, ec);
     REQUIRE_FALSE(ec);
+    REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
+}
 
+TEST_CASE("staged file creation crosses the platform durable-write barrier", "[quest.party-state.durability][publication]")
+{
+    const auto nonce = static_cast<uint64_t>(
+        std::chrono::high_resolution_clock::now().time_since_epoch().count());
+    const auto root = std::filesystem::temp_directory_path() /
+        ("tilted_party_quest_durable_write_" + std::to_string(nonce));
+    const auto path = root / "candidate.tmp";
+
+    std::error_code ec;
+    std::filesystem::create_directories(root, ec);
+    REQUIRE_FALSE(ec);
+
+    const std::string first = "durable-created";
+    REQUIRE(PartyQuestStableStorage::WriteFileDurably(
+        path, first.data(), first.size()) == PartyQuestStableStorageStatus::Success);
+    REQUIRE(ReadText(path) == first);
+
+    const std::string replacement = "durable-rewritten-with-different-length";
+    REQUIRE(PartyQuestStableStorage::WriteFileDurably(
+        path, replacement.data(), replacement.size()) == PartyQuestStableStorageStatus::Success);
+    REQUIRE(ReadText(path) == replacement);
+
+    REQUIRE(PartyQuestStableStorage::WriteFileDurably(path, nullptr, 1) ==
+        PartyQuestStableStorageStatus::InvalidPath);
+    REQUIRE(ReadText(path) == replacement);
+
+    std::filesystem::remove_all(root, ec);
+    REQUIRE_FALSE(ec);
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
 }
 
@@ -129,13 +159,9 @@ TEST_CASE("stable rename publication is same-directory and rejects accidental ov
     std::filesystem::create_directories(otherRoot, ec);
     REQUIRE_FALSE(ec);
 
-    {
-        std::ofstream file(source, std::ios::binary | std::ios::trunc);
-        REQUIRE(file.is_open());
-        file.write("durable-state", 13);
-        file.flush();
-        REQUIRE(file.good());
-    }
+    const std::string sourceText = "durable-state";
+    REQUIRE(PartyQuestStableStorage::WriteFileDurably(
+        source, sourceText.data(), sourceText.size()) == PartyQuestStableStorageStatus::Success);
 
     REQUIRE(PartyQuestStableStorage::PublishFileRename(source, source) ==
         PartyQuestStableStorageStatus::CrossDirectoryRename);
@@ -163,14 +189,13 @@ TEST_CASE("stable rename publication is same-directory and rejects accidental ov
         PartyQuestStableStorageStatus::Success);
     REQUIRE_FALSE(std::filesystem::exists(source));
     REQUIRE(std::filesystem::exists(destination));
-    REQUIRE(ReadText(destination) == "durable-state");
+    REQUIRE(ReadText(destination) == sourceText);
     REQUIRE(PartyQuestStableStorage::FlushFile(destination) ==
         PartyQuestStableStorageStatus::Success);
 
     std::filesystem::remove_all(root, ec);
     REQUIRE_FALSE(ec);
 
-    // One proven publication primitive is not an end-to-end persistence proof.
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
