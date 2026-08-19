@@ -12,6 +12,7 @@ enum class PartyQuestRuntimeApplyPersistenceStatus : uint8_t
     Success,
     FileNotFound,
     IoError,
+    PowerLossDurabilityUnsupported,
     InvalidMagic,
     UnsupportedVersion,
     Truncated,
@@ -84,6 +85,25 @@ public:
         const std::vector<uint8_t>& acBytes);
 
     [[nodiscard]] static PartyQuestRuntimeApplyPersistenceStatus SaveAtomically(
+        const std::filesystem::path& acPath,
+        const PartyQuestRuntimeRecoveryState& acState,
+        PartyQuestRuntimeApplyPersistenceHooks aHooks = {});
+
+    /**
+     * Stronger P0-H publication path for this one journal only.
+     *
+     * The destination directory must already exist; this method deliberately
+     * does not claim durable ancestor-directory creation. It writes and verifies
+     * the .tmp archive, durably rotates an existing primary to .bak with
+     * replace-existing semantics, then durably publishes .tmp as primary.
+     * A failure after primary -> backup preserves backup/temporary recovery
+     * authority and does not perform an unproven rollback rename.
+     *
+     * This method proving one writer does not upgrade the global durability
+     * policy. Unsupported filesystem semantics fail closed with
+     * PowerLossDurabilityUnsupported.
+     */
+    [[nodiscard]] static PartyQuestRuntimeApplyPersistenceStatus SavePowerLossDurably(
         const std::filesystem::path& acPath,
         const PartyQuestRuntimeRecoveryState& acState,
         PartyQuestRuntimeApplyPersistenceHooks aHooks = {});
