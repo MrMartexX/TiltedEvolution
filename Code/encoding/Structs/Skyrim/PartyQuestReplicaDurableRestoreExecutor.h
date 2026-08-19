@@ -11,6 +11,7 @@ enum class PartyQuestReplicaDurableRestoreStatus : uint8_t
 {
     Success,
     AlreadyCommitted,
+    AlreadyRolledBack,
     RecoveredRollback,
     RecoveredCommit,
     ResumeBeforeMutation,
@@ -32,6 +33,7 @@ enum class PartyQuestReplicaDurableRestoreStatus : uint8_t
     ReplacementFailed,
     RestoredVerificationFailed,
     CommittedVerificationFailed,
+    RolledBackVerificationFailed,
     RollbackFailed,
     CleanupFailed,
     FaultInjected
@@ -43,7 +45,8 @@ enum class PartyQuestReplicaDurableRestoreBoundary : uint8_t
     RestoredFilePublished,
     RestoredDurable,
     CommittedDurable,
-    OriginalStateRestored
+    OriginalStateRestored,
+    RolledBackDurable
 };
 
 enum class PartyQuestReplicaDurableRestoreDirective : uint8_t
@@ -100,6 +103,7 @@ struct PartyQuestReplicaDurableRestoreReport
     {
         return IsCheckpointRestored() ||
             Status == PartyQuestReplicaDurableRestoreStatus::RecoveredRollback ||
+            Status == PartyQuestReplicaDurableRestoreStatus::AlreadyRolledBack ||
             Status == PartyQuestReplicaDurableRestoreStatus::ResumeBeforeMutation;
     }
 };
@@ -115,7 +119,7 @@ struct PartyQuestReplicaDurableRestoreReport
  * publishes MutationStarted. Only after that journal barrier may same-directory
  * durable rename replace protected co-op replica files.
  *
- * Ordering after the barrier is:
+ * Forward ordering is:
  *
  *   MutationStarted durable
  *   -> each staged destination durably published and verified
@@ -124,19 +128,26 @@ struct PartyQuestReplicaDurableRestoreReport
  *   -> Committed durable
  *   -> committed transaction compaction.
  *
- * Committed compaction durably removes large rollback/staging evidence and
- * obsolete journal .tmp/.bak files, but deliberately retains the Committed
- * primary journal and transaction directory as a small terminal tombstone. This
- * preserves RestoreId idempotency instead of making a completed transaction id
- * reusable merely because cleanup ran.
+ * Rollback ordering is:
+ *
+ *   durable MutationStarted/Restored recovery authority
+ *   -> exact original destinations durably restored
+ *   -> complete original-state revalidation
+ *   -> RolledBack durable
+ *   -> rollback/staging evidence compaction.
+ *
+ * Committed and RolledBack compaction durably remove large rollback/staging
+ * evidence and obsolete journal .tmp/.bak files, but deliberately retain the
+ * terminal primary journal and transaction directory as a small RestoreId
+ * tombstone. This preserves transaction identity across restart and prevents a
+ * completed restore id from becoming reusable merely because cleanup ran.
  *
  * Recover() never crosses a mutation barrier that was not already durable:
  * Prepared/BackupsReady return ResumeBeforeMutation; MutationStarted restores
- * the exact pre-mutation replica bytes; Restored verifies then commits;
- * Committed verifies then resumes safe compaction. Rollback keeps the
- * MutationStarted journal and rollback evidence because the current durable
- * schema has no terminal RolledBack phase; repeated recovery is therefore
- * intentionally idempotent and conservative.
+ * the exact pre-mutation replica bytes and publishes RolledBack; Restored either
+ * verifies then commits or restores originals and publishes RolledBack;
+ * Committed/RolledBack only reverify their terminal postcondition and resume
+ * safe compaction.
  *
  * Windows fails closed before filesystem mutation. This class never calls
  * Skyrim, Papyrus, TESQuest or native world mutation APIs and grants no such
