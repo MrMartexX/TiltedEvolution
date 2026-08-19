@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
+#include <Structs/Skyrim/PartyQuestRuntimeRestoreAttempt.h>
 
 #include <party_quest_papyrus_runtime_observer_test_access.h>
 #include <party_quest_runtime_apply_session_test_access.h>
@@ -220,7 +221,31 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
 
     const auto recovered = guarded.ResolveLiveRecovery(*paths);
     REQUIRE(recovered.Status == PartyQuestRuntimeRecoveryStatus::Restored);
-    REQUIRE(recovered.RestoreId == transactionId);
+    REQUIRE(recovered.TransactionId == transactionId);
+    REQUIRE(recovered.RestoreId != 0);
+#ifdef _WIN32
+    REQUIRE(recovered.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
+    const auto persistedAttempt = PartyQuestRuntimeRestoreAttemptStore::Load(
+        *paths,
+        kLiveRecoveryCampaign,
+        kLiveRecoveryPlayer,
+        transactionId);
+    REQUIRE(persistedAttempt.Status ==
+        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
+#else
+    REQUIRE(recovered.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
+    const auto persistedAttempt = PartyQuestRuntimeRestoreAttemptStore::Load(
+        *paths,
+        kLiveRecoveryCampaign,
+        kLiveRecoveryPlayer,
+        transactionId);
+    REQUIRE(persistedAttempt.Status == PartyQuestRuntimeRestoreAttemptStatus::Success);
+    REQUIRE(persistedAttempt.State.has_value());
+    REQUIRE(persistedAttempt.State->TransactionId == transactionId);
+    REQUIRE(persistedAttempt.State->CurrentRestoreId == recovered.RestoreId);
+#endif
     REQUIRE(recovered.RuntimeTransition ==
         PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(ReadLiveRecoveryBytes(liveSave) == "PRE_REPAIR_1880");
