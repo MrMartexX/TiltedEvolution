@@ -20,6 +20,20 @@ bool SamePlan(
         acLeft.Operations == acRight.Operations;
 }
 
+bool SamePreparedIdentity(
+    const PartyQuestReplicaRestoreJournalState& acExpected,
+    const PartyQuestReplicaRestoreJournalState& acPersisted) noexcept
+{
+    return acExpected.CampaignId == acPersisted.CampaignId &&
+        acExpected.PlayerProfileId == acPersisted.PlayerProfileId &&
+        acExpected.RestoreId == acPersisted.RestoreId &&
+        acExpected.CheckpointKind == acPersisted.CheckpointKind &&
+        acExpected.CampaignWorldRevision == acPersisted.CampaignWorldRevision &&
+        acExpected.TransactionDirectory.lexically_normal() ==
+            acPersisted.TransactionDirectory.lexically_normal() &&
+        acExpected.Operations == acPersisted.Operations;
+}
+
 PartyQuestReplicaDurableRestorePreparationStatus MapLeaseStatus(
     PartyQuestReplicaWorkspaceLeaseStatus aStatus) noexcept
 {
@@ -50,13 +64,9 @@ bool IsNewTransactionPath(const std::filesystem::path& acPath) noexcept
     {
         std::error_code ec;
         const auto status = std::filesystem::symlink_status(acPath, ec);
-        if (status.type() == std::filesystem::file_type::not_found ||
+        return status.type() == std::filesystem::file_type::not_found ||
             ec == std::errc::no_such_file_or_directory ||
-            ec == std::errc::not_a_directory)
-        {
-            return true;
-        }
-        return false;
+            ec == std::errc::not_a_directory;
     }
     catch (...)
     {
@@ -89,6 +99,30 @@ bool MatchesCheckpointSource(
         current->Digest == acOperation.ExpectedRestoredDigest;
 }
 
+enum class RollbackEvidence : uint8_t
+{
+    Missing,
+    Exact,
+    Invalid
+};
+
+RollbackEvidence InspectRollbackEvidence(
+    const PartyQuestReplicaRestoreJournalOperation& acOperation) noexcept
+{
+    if (IsMissingPath(acOperation.RollbackPath))
+        return RollbackEvidence::Missing;
+
+    const auto backup = PartyQuestReplicaFileExecutor::ObserveRegularFile(
+        acOperation.RollbackPath);
+    if (!backup ||
+        backup->Size != acOperation.OriginalSize ||
+        backup->Digest != acOperation.OriginalDigest)
+    {
+        return RollbackEvidence::Invalid;
+    }
+    return RollbackEvidence::Exact;
+}
+
 PartyQuestReplicaDurableRestorePreparationReport Failure(
     PartyQuestReplicaDurableRestorePreparationStatus aStatus,
     const PartyQuestReplicaRestoreJournalState* apState = nullptr,
@@ -104,6 +138,18 @@ PartyQuestReplicaDurableRestorePreparationReport Failure(
         report.State = *apState;
         report.JournalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(*apState);
     }
+    return report;
+}
+
+PartyQuestReplicaDurableRestorePreparationReport ReadyReport(
+    PartyQuestReplicaRestoreJournalState aState,
+    size_t aCompletedBackups)
+{
+    PartyQuestReplicaDurableRestorePreparationReport report;
+    report.Status = PartyQuestReplicaDurableRestorePreparationStatus::BackupsReady;
+    report.JournalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(aState);
+    report.CompletedBackups = aCompletedBackups;
+    report.State = std::move(aState);
     return report;
 }
 } // namespace
@@ -189,16 +235,39 @@ PartyQuestReplicaDurableRestorePreparation::Prepare(
                 : PartyQuestReplicaDurableRestorePreparationStatus::InvalidPlan);
     }
 
-    PartyQuestReplicaRestoreJournalState state = std::move(*prepared.State);
-    if (!IsNewTransactionPath(state.TransactionDirectory))
+    PartyQuestReplicaRestoreJournalState expected = std::move(*prepared.State);
+    PartyQuestReplicaRestoreJournalState state = expected;
+    const auto journalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(expected);
+    const bool freshTransaction = IsNewTransactionPath(expected.TransactionDirectory);
+
+    if (!freshTransaction)
     {
-        return Failure(
-            PartyQuestReplicaDurableRestorePreparationStatus::RestoreIdConflict,
-            &state,
-            0,
-            state.TransactionDirectory);
+        // An occupied RestoreId is resumable only when the exact strong journal
+        // already names this same plan and remains strictly before mutation.
+        // Ambiguous/v3/wrong-id/wrong-plan evidence is never overwritten.
+        const auto persisted =
+            PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
+                journalPath);
+        if (persisted.Status !=
+                PartyQuestReplicaRestoreJournalPersistenceStatus::Success ||
+            !persisted.State ||
+            !SamePreparedIdentity(expected, *persisted.State) ||
+            (persisted.State->Phase != PartyQuestReplicaRestoreJournalPhase::Prepared &&
+             persisted.State->Phase != PartyQuestReplicaRestoreJournalPhase::BackupsReady))
+        {
+            return Failure(
+                PartyQuestReplicaDurableRestorePreparationStatus::RestoreIdConflict,
+                &expected,
+                0,
+                expected.TransactionDirectory);
+        }
+        state = *persisted.State;
     }
 
+    // RequiredFreeBytes is also the bounded-resource validation for a restore
+    // journal. A resumed transaction already paid for any existing rollback
+    // copies, so the fresh-operation free-space estimate must not be applied a
+    // second time; missing copies still fail closed at CopyFileDurably on ENOSPC.
     const auto requiredBytes =
         PartyQuestReplicaRestoreResourcePolicy::RequiredFreeBytes(state);
     if (!requiredBytes)
@@ -208,11 +277,30 @@ PartyQuestReplicaDurableRestorePreparation::Prepare(
             &state);
     }
 
-    try
+    if (freshTransaction)
     {
-        std::error_code ec;
-        const auto space = std::filesystem::space(acPaths.PlayerDirectory, ec);
-        if (ec)
+        try
+        {
+            std::error_code ec;
+            const auto space = std::filesystem::space(acPaths.PlayerDirectory, ec);
+            if (ec)
+            {
+                return Failure(
+                    PartyQuestReplicaDurableRestorePreparationStatus::StableStorageFailure,
+                    &state,
+                    0,
+                    acPaths.PlayerDirectory);
+            }
+            if (!PartyQuestReplicaRestoreResourcePolicy::HasSufficientDiskSpace(
+                    state,
+                    space.available))
+            {
+                return Failure(
+                    PartyQuestReplicaDurableRestorePreparationStatus::InsufficientDiskSpace,
+                    &state);
+            }
+        }
+        catch (...)
         {
             return Failure(
                 PartyQuestReplicaDurableRestorePreparationStatus::StableStorageFailure,
@@ -220,47 +308,30 @@ PartyQuestReplicaDurableRestorePreparation::Prepare(
                 0,
                 acPaths.PlayerDirectory);
         }
-        if (!PartyQuestReplicaRestoreResourcePolicy::HasSufficientDiskSpace(
-                state,
-                space.available))
+
+        auto stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(
+            state.TransactionDirectory / "rollback");
+        if (stable != PartyQuestStableStorageStatus::Success)
         {
             return Failure(
-                PartyQuestReplicaDurableRestorePreparationStatus::InsufficientDiskSpace,
-                &state);
+                PartyQuestReplicaDurableRestorePreparationStatus::StableStorageFailure,
+                &state,
+                0,
+                state.TransactionDirectory);
         }
-    }
-    catch (...)
-    {
-        return Failure(
-            PartyQuestReplicaDurableRestorePreparationStatus::StableStorageFailure,
-            &state,
-            0,
-            acPaths.PlayerDirectory);
-    }
 
-    auto stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(
-        state.TransactionDirectory / "rollback");
-    if (stable != PartyQuestStableStorageStatus::Success)
-    {
-        return Failure(
-            PartyQuestReplicaDurableRestorePreparationStatus::StableStorageFailure,
-            &state,
-            0,
-            state.TransactionDirectory);
-    }
-
-    const auto journalPath = PartyQuestReplicaRestoreJournal::GetJournalPath(state);
-    const auto preparedSave =
-        PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
-            journalPath,
-            state);
-    if (preparedSave != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
-    {
-        return Failure(
-            PartyQuestReplicaDurableRestorePreparationStatus::JournalPersistenceFailed,
-            &state,
-            0,
-            journalPath);
+        const auto preparedSave =
+            PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably(
+                journalPath,
+                state);
+        if (preparedSave != PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+        {
+            return Failure(
+                PartyQuestReplicaDurableRestorePreparationStatus::JournalPersistenceFailed,
+                &state,
+                0,
+                journalPath);
+        }
     }
 
     size_t completedBackups = 0;
@@ -288,10 +359,54 @@ PartyQuestReplicaDurableRestorePreparation::Prepare(
             return report;
         }
 
+        const auto rollbackEvidence = InspectRollbackEvidence(operation);
         if (!operation.DestinationExisted)
+        {
+            if (rollbackEvidence != RollbackEvidence::Missing)
+            {
+                auto report = Failure(
+                    PartyQuestReplicaDurableRestorePreparationStatus::BackupVerificationFailed,
+                    &state,
+                    index,
+                    operation.RollbackPath);
+                report.CompletedBackups = completedBackups;
+                return report;
+            }
             continue;
+        }
 
-        stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(
+        if (rollbackEvidence == RollbackEvidence::Invalid)
+        {
+            auto report = Failure(
+                PartyQuestReplicaDurableRestorePreparationStatus::BackupVerificationFailed,
+                &state,
+                index,
+                operation.RollbackPath);
+            report.CompletedBackups = completedBackups;
+            return report;
+        }
+
+        if (rollbackEvidence == RollbackEvidence::Exact)
+        {
+            ++completedBackups;
+            continue;
+        }
+
+        // BackupsReady is durable authority that every required backup already
+        // crossed its barrier. Missing evidence in that phase is corruption, not
+        // permission to silently reconstruct it.
+        if (state.Phase == PartyQuestReplicaRestoreJournalPhase::BackupsReady)
+        {
+            auto report = Failure(
+                PartyQuestReplicaDurableRestorePreparationStatus::BackupVerificationFailed,
+                &state,
+                index,
+                operation.RollbackPath);
+            report.CompletedBackups = completedBackups;
+            return report;
+        }
+
+        auto stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(
             operation.RollbackPath.parent_path());
         if (stable != PartyQuestStableStorageStatus::Success)
         {
@@ -335,7 +450,8 @@ PartyQuestReplicaDurableRestorePreparation::Prepare(
         ++completedBackups;
     }
 
-    // Revalidate both sides immediately before advancing journal authority.
+    // Revalidate both sides immediately before advancing journal authority or
+    // accepting an already-durable BackupsReady phase after restart.
     for (size_t index = 0; index < state.Operations.size(); ++index)
     {
         const auto& operation = state.Operations[index];
@@ -370,6 +486,9 @@ PartyQuestReplicaDurableRestorePreparation::Prepare(
         return report;
     }
 
+    if (state.Phase == PartyQuestReplicaRestoreJournalPhase::BackupsReady)
+        return ReadyReport(std::move(state), completedBackups);
+
     PartyQuestReplicaRestoreJournalState backupsReady = state;
     if (PartyQuestReplicaRestoreJournal::MarkBackupsReady(backupsReady) !=
         PartyQuestReplicaRestoreJournalStatus::Ready)
@@ -396,11 +515,6 @@ PartyQuestReplicaDurableRestorePreparation::Prepare(
         return report;
     }
 
-    PartyQuestReplicaDurableRestorePreparationReport report;
-    report.Status = PartyQuestReplicaDurableRestorePreparationStatus::BackupsReady;
-    report.State = std::move(backupsReady);
-    report.JournalPath = journalPath;
-    report.CompletedBackups = completedBackups;
-    return report;
+    return ReadyReport(std::move(backupsReady), completedBackups);
 #endif
 }
