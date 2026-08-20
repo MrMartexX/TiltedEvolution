@@ -253,13 +253,12 @@ TEST_CASE(
         PartyQuestRuntimeRestoreAttemptStatus::InvalidData);
     REQUIRE(result.RestoreDomain ==
         PartyQuestRuntimeRestoreDurabilityDomain::None);
+    REQUIRE(result.RestoreId == 0);
 
-    // Conflict must not clear or weaken the live runtime safety envelope.
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(processGuard.GetTransactionId() == transactionId);
     REQUIRE(ReadText(liveSave) == liveBytes);
 
-    // Neither conflicting evidence source is adopted or rewritten.
     REQUIRE(ReadText(strongAttempt.StatePath) ==
         "CORRUPT_LIVE_STRONG_ATTEMPT_MAPPING");
     const auto legacyAfter =
@@ -336,19 +335,18 @@ TEST_CASE(
     REQUIRE(result.TargetWorldRevision == worldRevision);
     REQUIRE(result.RestoreAttemptStatus ==
         PartyQuestRuntimeRestoreAttemptStatus::Success);
+    REQUIRE(result.RestoreDomain ==
+        PartyQuestRuntimeRestoreDurabilityDomain::None);
+    REQUIRE(result.RestoreId == 0);
     REQUIRE(result.RestoreStatus ==
         PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed);
 
-    // No restore executor may run and the physical process safety envelope must
-    // remain held when two independently valid durability domains conflict.
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(session.GetCoordinator().GetActive()->TransactionId == transactionId);
     REQUIRE(processGuard.GetTransactionId() == transactionId);
     REQUIRE(ReadText(liveSave) == liveBytes);
     REQUIRE_FALSE(std::filesystem::exists(strongAttempt.JournalPath));
 
-    // Conflict detection must preserve both evidence sources exactly so a later
-    // authority/provenance fix can resolve the ambiguity without information loss.
     const auto strongAfter = PartyQuestRuntimeRestoreAttemptStore::Load(
         *paths,
         kCampaign,

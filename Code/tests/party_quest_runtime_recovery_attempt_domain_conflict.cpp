@@ -238,9 +238,6 @@ TEST_CASE(
         PersistLegacyJournal(paths, revision, transactionId);
     REQUIRE(std::filesystem::exists(legacyJournalPath));
 
-    // The persisted strong mapping is authoritative local recovery evidence.
-    // Corrupt it after a valid v3 journal exists: recovery must not reinterpret
-    // the transaction-id directory as permission to downgrade to legacy.
     WriteText(strongAttempt.StatePath, "CORRUPT_STRONG_ATTEMPT_MAPPING");
     const auto corruptLoad = PartyQuestRuntimeRestoreAttemptStore::Load(
         paths,
@@ -261,10 +258,10 @@ TEST_CASE(
         PartyQuestRuntimeRestoreAttemptStatus::InvalidData);
     REQUIRE(result.RestoreDomain ==
         PartyQuestRuntimeRestoreDurabilityDomain::None);
+    REQUIRE(result.RestoreId == 0);
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
     REQUIRE(ReadText(paths.SavesDirectory / "Hero.ess") == liveBytes);
 
-    // Neither evidence source may be rewritten or consumed on conflict.
     REQUIRE(ReadText(strongAttempt.StatePath) ==
         "CORRUPT_STRONG_ATTEMPT_MAPPING");
     const auto legacyAfter =
@@ -322,15 +319,13 @@ TEST_CASE(
     REQUIRE(result.RestoreAttemptStatus ==
         PartyQuestRuntimeRestoreAttemptStatus::Success);
     REQUIRE(result.RestoreDomain ==
-        PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
-    REQUIRE(result.RestoreId == strongState.CurrentRestoreId);
+        PartyQuestRuntimeRestoreDurabilityDomain::None);
+    REQUIRE(result.RestoreId == 0);
     REQUIRE(result.RestoreStatus ==
         PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed);
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
     REQUIRE(ReadText(paths.SavesDirectory / "Hero.ess") == liveBytes);
 
-    // Conflict detection must not create a strong journal or consume either
-    // valid evidence source. Both domains remain inspectable for diagnosis.
     REQUIRE_FALSE(std::filesystem::exists(strongAttempt.JournalPath));
     const auto strongAfter = PartyQuestRuntimeRestoreAttemptStore::Load(
         paths,

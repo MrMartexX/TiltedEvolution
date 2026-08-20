@@ -357,9 +357,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         {
             const auto& currentAttempt = *attempt.State;
             const auto strongJournalPath = attempt.JournalPath;
-            result.RestoreId = currentAttempt.CurrentRestoreId;
-            result.RestoreJournalPath = strongJournalPath;
-            result.RestoreDomain = PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable;
 
             if (strongJournalPath.lexically_normal() !=
                 legacyJournalPath.lexically_normal())
@@ -377,6 +374,10 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
                     return result;
                 }
             }
+
+            result.RestoreId = currentAttempt.CurrentRestoreId;
+            result.RestoreJournalPath = strongJournalPath;
+            result.RestoreDomain = PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable;
 
             PartyQuestReplicaDurableRestoreReport durableReport;
             const auto strongJournal =
