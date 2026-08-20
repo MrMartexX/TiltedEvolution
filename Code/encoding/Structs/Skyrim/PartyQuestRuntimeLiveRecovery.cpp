@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
+#include <Structs/Skyrim/PartyQuestRuntimeRestoreAttemptPendingPublication.h>
 #include <Structs/Skyrim/PartyQuestRuntimeWorkspacePublicationAuthority.h>
 
 #include <iomanip>
@@ -338,8 +339,52 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
             transactionId);
         result.RestoreAttemptStatus = attempt.Status;
 
-        if (attempt.Status == PartyQuestRuntimeRestoreAttemptStatus::Success &&
-            attempt.State)
+        // The staged strong attempt mapping is itself recoverable durable
+        // evidence. Detect it without publication before legacy routing; only a
+        // legacy-free workspace is allowed to let EnsureInitializedAuthorized()
+        // complete the pending rename.
+        if (attempt.Status == PartyQuestRuntimeRestoreAttemptStatus::FileNotFound)
+        {
+            const auto pendingPublication =
+                PartyQuestRuntimeRestoreAttemptPendingPublicationProbe::Probe(
+                    acPaths,
+                    aSession.GetCampaignId(),
+                    aSession.GetPlayerProfileId(),
+                    transactionId);
+            if (pendingPublication ==
+                PartyQuestRuntimeRestoreAttemptPendingPublicationStatus::ProbeFailed)
+            {
+                result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
+                return result;
+            }
+            if (pendingPublication ==
+                PartyQuestRuntimeRestoreAttemptPendingPublicationStatus::Present)
+            {
+                const auto legacyEvidence =
+                    PartyQuestReplicaRestoreJournalPersistence::Load(legacyJournalPath);
+                if (legacyEvidence.Status !=
+                    PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
+                {
+                    result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
+                    result.RestoreStatus = legacyEvidence.Status ==
+                            PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired
+                        ? PartyQuestReplicaRestoreExecutionStatus::BackupRecoveryRequired
+                        : PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
+                    return result;
+                }
+
+                attempt =
+                    PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
+                        acPaths,
+                        aSession.GetCampaignId(),
+                        aSession.GetPlayerProfileId(),
+                        transactionId,
+                        workspaceCapability);
+                result.RestoreAttemptStatus = attempt.Status;
+            }
+        }
+
+        if (attempt.IsUsable() && attempt.State)
         {
             const auto& currentAttempt = *attempt.State;
             const auto strongJournalPath = attempt.JournalPath;

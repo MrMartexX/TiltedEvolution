@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
+#include <Structs/Skyrim/PartyQuestRuntimeRestoreAttemptPendingPublication.h>
 #include <Structs/Skyrim/PartyQuestRuntimeWorkspacePublicationAuthority.h>
 
 #include <iomanip>
@@ -319,8 +320,53 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             transactionId);
         result.RestoreAttemptStatus = attempt.Status;
 
-        if (attempt.Status == PartyQuestRuntimeRestoreAttemptStatus::Success &&
-            attempt.State)
+        // A durable staged attempt-state publication is recoverable strong
+        // evidence even when the primary mapping rename did not complete. Check
+        // it before a transaction-id journal can be interpreted or executed as
+        // legacy. Conflict detection is deliberately non-mutating: only when no
+        // legacy evidence exists may the authorized store finish publication.
+        if (attempt.Status == PartyQuestRuntimeRestoreAttemptStatus::FileNotFound)
+        {
+            const auto pendingPublication =
+                PartyQuestRuntimeRestoreAttemptPendingPublicationProbe::Probe(
+                    acPaths,
+                    aSession.GetCampaignId(),
+                    aSession.GetPlayerProfileId(),
+                    transactionId);
+            if (pendingPublication ==
+                PartyQuestRuntimeRestoreAttemptPendingPublicationStatus::ProbeFailed)
+            {
+                result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
+                return result;
+            }
+            if (pendingPublication ==
+                PartyQuestRuntimeRestoreAttemptPendingPublicationStatus::Present)
+            {
+                const auto legacyEvidence =
+                    PartyQuestReplicaRestoreJournalPersistence::Load(legacyJournalPath);
+                if (legacyEvidence.Status !=
+                    PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
+                {
+                    result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
+                    result.RestoreStatus = legacyEvidence.Status ==
+                            PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired
+                        ? PartyQuestReplicaRestoreExecutionStatus::BackupRecoveryRequired
+                        : PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
+                    return result;
+                }
+
+                attempt =
+                    PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
+                        acPaths,
+                        aSession.GetCampaignId(),
+                        aSession.GetPlayerProfileId(),
+                        transactionId,
+                        workspaceCapability);
+                result.RestoreAttemptStatus = attempt.Status;
+            }
+        }
+
+        if (attempt.IsUsable() && attempt.State)
         {
             const auto& currentAttempt = *attempt.State;
             const auto strongJournalPath = attempt.JournalPath;
