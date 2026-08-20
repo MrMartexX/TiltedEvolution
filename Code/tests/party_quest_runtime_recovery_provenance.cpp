@@ -1,7 +1,11 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
 
+#include <party_quest_runtime_apply_session_test_access.h>
+#include <party_quest_runtime_process_owner_test_support.h>
 #include <party_quest_runtime_recovery_coordinator_test_access.h>
+#include <party_quest_runtime_safety_test_access.h>
 
 #include <catch2/catch.hpp>
 
@@ -82,6 +86,37 @@ PartyQuestRuntimeApplySession BuildBlockedSession(
     return session;
 }
 
+PartyQuestRuntimeApplyRequest BuildLiveRequest(
+    uint64_t aTransactionId,
+    uint64_t aWorldRevision)
+{
+    QuestSnapshot snapshot;
+    snapshot.QuestId = GameId(78, 0x2300);
+    snapshot.Status = QuestSnapshotStatus::Running;
+    snapshot.CurrentStage = 40;
+    snapshot.Revision = 12;
+    snapshot.InitiatorPlayerId = 24;
+    snapshot.CompletedStages = {10, 20, 40};
+    snapshot.Objectives = {{40, QuestObjectiveState::Displayed}};
+    snapshot.Canonicalize();
+
+    PartyQuestRuntimeApplyRequest request;
+    request.TransactionId = aTransactionId;
+    request.TargetWorldRevision = aWorldRevision;
+    request.SidecarManifestFingerprint =
+        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
+    request.CanonicalSnapshot = snapshot;
+    request.Plan.Safety.Status = PartyQuestRuntimeSafetyStatus::RuntimeSafe;
+    request.Plan.Safety.Reason =
+        PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;
+    request.Plan.Actions = PartyQuestApplyAction::StageTransition |
+        PartyQuestApplyAction::WaitForPapyrusQuiescence |
+        PartyQuestApplyAction::ResnapshotAndVerify;
+    PartyQuestRuntimeSafetyTestAccess::AuthorizePlan(request.Plan, snapshot);
+    REQUIRE(request.Plan.MutationAuthorization.IsVerified());
+    return request;
+}
+
 PartyQuestCoopSavePaths BuildPaths(const Sandbox& acSandbox)
 {
     const auto paths = PartyQuestCoopSaveLayout::Build(
@@ -119,26 +154,48 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "live recovery keeps restore identity unset while crash recovery owns the barrier",
+    "live recovery keeps restore identity unset before a restore domain is selected",
     "[quest.party-state.runtime-recovery][provenance][live-recovery]")
 {
     Sandbox sandbox;
     const auto paths = BuildPaths(sandbox);
     constexpr uint64_t transactionId = 28302;
     constexpr uint64_t worldRevision = 1950;
-    auto session = BuildBlockedSession(transactionId, worldRevision);
 
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
+        kCampaign,
+        kPlayer,
+        paths);
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+
+    const auto request = BuildLiveRequest(transactionId, worldRevision);
+    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                transactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status ==
+        PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(processGuard.GetTransactionId() == transactionId);
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
+
+    // Deliberately do not publish the claimed PreRepair checkpoint. The live
+    // recovery record and physical SaveGuard are real, but no filesystem restore
+    // domain has been selected when manifest lookup fails.
     const auto result =
         PartyQuestRuntimeRecoveryCoordinatorTestAccess::ResolveLiveRecovery(
             session,
             paths);
 
-    REQUIRE(result.Status ==
-        PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState);
+    REQUIRE(result.Status == PartyQuestRuntimeRecoveryStatus::CheckpointMissing);
     REQUIRE(result.TransactionId == transactionId);
     REQUIRE(result.TargetWorldRevision == worldRevision);
     REQUIRE(result.RestoreDomain ==
         PartyQuestRuntimeRestoreDurabilityDomain::None);
     REQUIRE(result.RestoreId == 0);
-    REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
+    REQUIRE(session.GetCoordinator().GetActive()->TransactionId == transactionId);
+    REQUIRE(processGuard.GetTransactionId() == transactionId);
 }
