@@ -190,7 +190,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
     {
         const auto& coordinator = aSession.GetCoordinator();
         const PartyQuestRuntimeApplyEntry* pRecovery = coordinator.GetActive();
-        const uint64_t candidateRestoreId = pRecovery ? pRecovery->TransactionId : 0;
+        constexpr uint64_t candidateRestoreId = 0;
 
         if (!aSession.GetCampaignId().IsValid() ||
             !aSession.GetPlayerProfileId().IsValid())
@@ -233,7 +233,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
         PartyQuestRuntimeRecoveryResult result = MakeLiveRecoveryResult(
             PartyQuestRuntimeRecoveryStatus::CheckpointMissing,
             pRecovery,
-            transactionId,
+            candidateRestoreId,
             manifestPath,
             legacyJournalPath);
 
@@ -292,10 +292,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
             return result;
         }
 
-        // Keep one exact workspace capability alive through restore, the
-        // independent live-byte reverify and the durable barrier clear. The
-        // capability itself pins the native lease state, so a temporary lease
-        // can hand off ownership without opening a TOCTOU window.
         auto workspaceCapability =
             PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
                 aSession,
@@ -329,9 +325,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
             }
         }
 
-        // Persisted attempt identity is authoritative before the transaction-id
-        // path is interpreted as legacy. RestoreId may numerically equal the
-        // runtime TransactionId, but a persisted attempt makes that path v4.
         auto attempt = PartyQuestRuntimeRestoreAttemptStore::Load(
             acPaths,
             aSession.GetCampaignId(),
@@ -339,10 +332,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
             transactionId);
         result.RestoreAttemptStatus = attempt.Status;
 
-        // The staged strong attempt mapping is itself recoverable durable
-        // evidence. Detect it without publication before legacy routing; only a
-        // legacy-free workspace is allowed to let EnsureInitializedAuthorized()
-        // complete the pending rename.
         if (attempt.Status == PartyQuestRuntimeRestoreAttemptStatus::FileNotFound)
         {
             const auto pendingPublication =
@@ -560,6 +549,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
                     return result;
                 }
 
+                result.RestoreId = transactionId;
                 result.RestoreDomain =
                     PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient;
                 auto restoreReport = PartyQuestReplicaRestoreExecutor::RecoverAuthorized(
@@ -590,8 +580,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
                 PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
             {
 #ifdef _WIN32
-                // Windows fresh live recovery remains explicit v3 until its
-                // strong directory/delete durability contract is accepted.
+                result.RestoreId = transactionId;
                 result.RestoreDomain =
                     PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient;
                 auto restoreReport = PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(
@@ -680,8 +669,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
         }
         else
         {
-            // Corrupt/mismatched attempt identity is authoritative local recovery
-            // evidence. Never ignore it and silently create/resume legacy state.
             result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
             return result;
         }
@@ -723,12 +710,12 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
         return MakeLiveRecoveryResult(
             PartyQuestRuntimeRecoveryStatus::RestoreFailed,
             recovery,
-            recovery ? recovery->TransactionId : 0);
+            0);
     }
 
     const auto* recovery = aSession.GetCoordinator().GetActive();
     return MakeLiveRecoveryResult(
         PartyQuestRuntimeRecoveryStatus::RestoreFailed,
         recovery,
-        recovery ? recovery->TransactionId : 0);
+        0);
 }

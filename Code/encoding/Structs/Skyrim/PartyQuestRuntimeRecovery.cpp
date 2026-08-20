@@ -171,7 +171,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
     {
         const auto& coordinator = aSession.GetCoordinator();
         const PartyQuestRuntimeApplyEntry* pRecovery = coordinator.GetRecoveryRecord();
-        const uint64_t candidateRestoreId = pRecovery ? pRecovery->TransactionId : 0;
+        constexpr uint64_t candidateRestoreId = 0;
 
         if (!aSession.GetCampaignId().IsValid() ||
             !aSession.GetPlayerProfileId().IsValid())
@@ -213,7 +213,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         PartyQuestRuntimeRecoveryResult result = MakeResult(
             PartyQuestRuntimeRecoveryStatus::CheckpointMissing,
             pRecovery,
-            transactionId,
+            candidateRestoreId,
             manifestPath,
             legacyJournalPath);
 
@@ -272,10 +272,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             return result;
         }
 
-        // Keep the exact workspace capability alive until the live bytes have
-        // been independently reverified and the durable crash barrier is
-        // cleared. A RuntimeSessionOwner capability is reused; otherwise a
-        // temporary OS lease hands its pinned native state to this capability.
         auto workspaceCapability =
             PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
                 aSession,
@@ -309,10 +305,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             }
         }
 
-        // Detect persisted strong attempt identity before interpreting the
-        // transaction-id path as legacy. A strong attempt may legitimately have
-        // allocated RestoreId == TransactionId; in that case the same physical
-        // path is v4 and must never be sent through legacy Load()/Recover().
         auto attempt = PartyQuestRuntimeRestoreAttemptStore::Load(
             acPaths,
             aSession.GetCampaignId(),
@@ -320,11 +312,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
             transactionId);
         result.RestoreAttemptStatus = attempt.Status;
 
-        // A durable staged attempt-state publication is recoverable strong
-        // evidence even when the primary mapping rename did not complete. Check
-        // it before a transaction-id journal can be interpreted or executed as
-        // legacy. Conflict detection is deliberately non-mutating: only when no
-        // legacy evidence exists may the authorized store finish publication.
         if (attempt.Status == PartyQuestRuntimeRestoreAttemptStatus::FileNotFound)
         {
             const auto pendingPublication =
@@ -535,6 +522,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
                     return result;
                 }
 
+                result.RestoreId = transactionId;
                 result.RestoreDomain =
                     PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient;
                 auto restoreReport = PartyQuestReplicaRestoreExecutor::RecoverAuthorized(
@@ -565,9 +553,7 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
                 PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
             {
 #ifdef _WIN32
-                // Windows has no accepted strong directory/delete durability
-                // contract yet. Fresh recovery remains in the explicit v3 domain;
-                // this is not a downgrade because no strong attempt exists.
+                result.RestoreId = transactionId;
                 result.RestoreDomain =
                     PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient;
                 auto restoreReport = PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(
@@ -655,9 +641,6 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         }
         else
         {
-            // Corrupt/mismatched attempt identity is authoritative local recovery
-            // evidence. Never ignore it and silently create or resume a legacy
-            // transaction with the same runtime TransactionId.
             result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
             return result;
         }
@@ -699,12 +682,12 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveCrashRecovery(
         return MakeResult(
             PartyQuestRuntimeRecoveryStatus::RestoreFailed,
             recovery,
-            recovery ? recovery->TransactionId : 0);
+            0);
     }
 
     const auto* recovery = aSession.GetCoordinator().GetRecoveryRecord();
     return MakeResult(
         PartyQuestRuntimeRecoveryStatus::RestoreFailed,
         recovery,
-        recovery ? recovery->TransactionId : 0);
+        0);
 }
