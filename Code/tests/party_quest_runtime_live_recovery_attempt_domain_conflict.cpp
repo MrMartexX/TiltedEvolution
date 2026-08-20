@@ -273,3 +273,99 @@ TEST_CASE(
         PartyQuestReplicaRestoreJournalPhase::Prepared);
 #endif
 }
+
+TEST_CASE(
+    "simultaneous valid strong and legacy live recovery domains fail closed",
+    "[quest.party-state.runtime-recovery][live-recovery][restore-journal-domain][restore-attempt][dual-valid][conflict]")
+{
+    Sandbox sandbox;
+    const auto paths = PartyQuestCoopSaveLayout::Build(
+        sandbox.Root / "CoopCampaigns",
+        kCampaign,
+        kPlayer);
+    REQUIRE(paths.has_value());
+
+    constexpr uint64_t transactionId = 28103;
+    constexpr uint64_t worldRevision = 1910;
+    const auto restorePlan = PublishCheckpoint(*paths, worldRevision);
+    const auto liveSave = paths->SavesDirectory / "Hero.ess";
+    const std::string liveBytes = "MUTATED_LIVE_DUAL_VALID_DOMAIN_CONFLICT";
+    WriteText(liveSave, liveBytes);
+
+    const auto strongAttempt = InitializeStrongAttempt(*paths, transactionId);
+#ifdef _WIN32
+    REQUIRE(strongAttempt.Status ==
+        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
+#else
+    REQUIRE(strongAttempt.IsUsable());
+    REQUIRE(strongAttempt.State.has_value());
+    const auto strongState = *strongAttempt.State;
+    REQUIRE(strongState.CurrentRestoreId != 0);
+    REQUIRE(strongState.CurrentRestoreId != transactionId);
+    REQUIRE(std::filesystem::exists(strongAttempt.StatePath));
+    REQUIRE_FALSE(std::filesystem::exists(strongAttempt.JournalPath));
+
+    const auto legacyJournalPath =
+        PersistLegacyJournal(*paths, restorePlan, transactionId);
+    REQUIRE(std::filesystem::exists(legacyJournalPath));
+    REQUIRE(legacyJournalPath.lexically_normal() !=
+        strongAttempt.JournalPath.lexically_normal());
+
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
+        kCampaign,
+        kPlayer,
+        *paths);
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+
+    const auto request = BuildRequest(transactionId, worldRevision);
+    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                transactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status ==
+        PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(processGuard.GetTransactionId() == transactionId);
+
+    const auto result = guarded.ResolveLiveRecovery(*paths);
+    REQUIRE(result.Status ==
+        PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict);
+    REQUIRE(result.TransactionId == transactionId);
+    REQUIRE(result.TargetWorldRevision == worldRevision);
+    REQUIRE(result.RestoreAttemptStatus ==
+        PartyQuestRuntimeRestoreAttemptStatus::Success);
+    REQUIRE(result.RestoreStatus ==
+        PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed);
+
+    // No restore executor may run and the physical process safety envelope must
+    // remain held when two independently valid durability domains conflict.
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
+    REQUIRE(session.GetCoordinator().GetActive()->TransactionId == transactionId);
+    REQUIRE(processGuard.GetTransactionId() == transactionId);
+    REQUIRE(ReadText(liveSave) == liveBytes);
+    REQUIRE_FALSE(std::filesystem::exists(strongAttempt.JournalPath));
+
+    // Conflict detection must preserve both evidence sources exactly so a later
+    // authority/provenance fix can resolve the ambiguity without information loss.
+    const auto strongAfter = PartyQuestRuntimeRestoreAttemptStore::Load(
+        *paths,
+        kCampaign,
+        kPlayer,
+        transactionId);
+    REQUIRE(strongAfter.Status == PartyQuestRuntimeRestoreAttemptStatus::Success);
+    REQUIRE(strongAfter.State.has_value());
+    REQUIRE(*strongAfter.State == strongState);
+
+    const auto legacyAfter =
+        PartyQuestReplicaRestoreJournalPersistence::Load(legacyJournalPath);
+    REQUIRE(legacyAfter.Status ==
+        PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
+    REQUIRE(legacyAfter.ArchiveDurability ==
+        PartyQuestReplicaRestoreJournalArchiveDurability::ProcessCrashResilient);
+    REQUIRE(legacyAfter.State.has_value());
+    REQUIRE(legacyAfter.State->Phase ==
+        PartyQuestReplicaRestoreJournalPhase::Prepared);
+#endif
+}
