@@ -486,7 +486,6 @@ public:
             {
                 result.TransactionId = active->TransactionId;
                 result.TargetWorldRevision = active->TargetWorldRevision;
-                result.RestoreId = active->TransactionId;
             }
             return result;
         }
