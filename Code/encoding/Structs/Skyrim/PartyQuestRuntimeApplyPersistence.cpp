@@ -627,15 +627,19 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Load(
         return primaryResult;
     }
 
-    // Primary is authoritative whenever it is intact.
+    // Primary is authoritative whenever it is intact. A present but invalid
+    // primary is conflicting evidence and must not be hidden by a valid .tmp.
     primaryResult = DecodeFile(acPath);
     if (primaryResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
         return primaryResult;
+    const bool primaryMissing =
+        primaryResult.Status == PartyQuestRuntimeApplyPersistenceStatus::FileNotFound;
 
     // SaveAtomically writes and flushes the complete new archive to .tmp before
-    // moving the old primary to .bak. If a process dies between those renames,
-    // the valid .tmp is the newest complete recovery journal and is safer than
-    // rolling back to the older backup.
+    // moving the old primary to .bak. Only the physical missing-primary window
+    // proves that .tmp is the newest complete recovery journal. If a corrupt
+    // primary is still present, retain both evidence sources and continue to the
+    // explicit backup-recovery check below rather than adopting the temporary.
     auto temporaryPath = acPath;
     temporaryPath += ".tmp";
     if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(temporaryPath))
@@ -646,7 +650,8 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Load(
     }
 
     PartyQuestRuntimeApplyPersistenceResult temporaryResult = DecodeFile(temporaryPath);
-    if (temporaryResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
+    if (primaryMissing &&
+        temporaryResult.Status == PartyQuestRuntimeApplyPersistenceStatus::Success)
     {
         temporaryResult.UsedTemporary = true;
         return temporaryResult;
