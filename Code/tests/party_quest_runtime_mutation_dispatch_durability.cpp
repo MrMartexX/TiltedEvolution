@@ -1,9 +1,15 @@
+#include <Structs/Skyrim/PartyQuestCoopSaveLayout.h>
 #include <Structs/Skyrim/PartyQuestRuntimeMutationDispatch.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 #include <party_quest_runtime_apply_session_test_access.h>
 #include <party_quest_runtime_safety_test_access.h>
+#include <party_quest_runtime_session_owner_test_access.h>
 
 #include <catch2/catch.hpp>
+
+#include <chrono>
+#include <filesystem>
 
 namespace
 {
@@ -79,26 +85,44 @@ PartyQuestRuntimeApplyRequest BuildRequest(
 }
 
 TEST_CASE(
-    "runtime mutation dispatch refuses process-crash durability before observation or arm",
-    "[quest.party-state.runtime-dispatch][durability]")
+    "process-owned mutation dispatch refuses process-crash durability before observation or arm",
+    "[quest.party-state.runtime-dispatch][durability][runtime-owner]")
 {
+    const auto nonce =
+        std::chrono::high_resolution_clock::now().time_since_epoch().count();
+    const auto root = std::filesystem::temp_directory_path() /
+        ("tp_party_quest_dispatch_durability_" + std::to_string(nonce));
+
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    ec.clear();
+    std::filesystem::create_directories(root, ec);
+    REQUIRE_FALSE(ec);
+
+    const auto paths = PartyQuestCoopSaveLayout::Build(
+        root / "CoopCampaigns",
+        kCampaign,
+        kPlayer);
+    REQUIRE(paths.has_value());
+
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto bound = owner.Bind(kCampaign, kPlayer, *paths);
+    REQUIRE(bound.IsBound());
+    REQUIRE(owner.IsBound());
+    REQUIRE(owner.GetRuntimeSession() != nullptr);
+    REQUIRE(owner.GetRuntimeSession()->GetPersistenceGuarantee() ==
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
+
+    auto* guarded = owner.GetGuardedSession();
+    REQUIRE(guarded != nullptr);
+    auto& session = guarded->GetRuntimeSession();
+
     const auto requirement = BuildRequirement(GameId(96, 0x9100));
     const auto request = BuildRequest(26101, requirement);
     const auto facts = BuildFacts(requirement);
 
-    PartyQuestRuntimeApplySession session(
-        kCampaign,
-        kPlayer,
-        [](const PartyQuestRuntimeRecoveryState&)
-        {
-            return true;
-        },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
-    PartyQuestSaveGuard saveGuard;
-    PartyQuestRuntimeGenerationFence generationFence;
-    PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
-
-    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(guarded->Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
                 session,
                 request.TransactionId) ==
@@ -110,10 +134,9 @@ TEST_CASE(
     size_t observations{};
     size_t executions{};
     const auto result = PartyQuestRuntimeMutationDispatchGate::Dispatch(
-        guarded,
+        *guarded,
         request,
         requirement,
-        generationFence,
         [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
         {
             ++observations;
@@ -134,6 +157,11 @@ TEST_CASE(
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::ReadyToApply);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
-    REQUIRE(saveGuard.IsActive());
-    REQUIRE(saveGuard.GetTransactionId() == request.TransactionId);
+    REQUIRE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
+    REQUIRE(PartyQuestSaveGuard::GetProcessGuard().GetTransactionId() ==
+        request.TransactionId);
+
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    REQUIRE_FALSE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
+    std::filesystem::remove_all(root, ec);
 }
