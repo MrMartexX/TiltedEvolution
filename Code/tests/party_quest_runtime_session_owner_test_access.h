@@ -30,4 +30,10 @@ public:
         PartyQuestRuntimeSessionOwner::GetProcessOwner()
             .m_allowNextDirectProcessBindForTesting = false;
     }
+
+    [[nodiscard]] static PartyQuestRuntimeApplySession*
+    GetMutableProcessSessionForTesting() noexcept
+    {
+        return PartyQuestRuntimeSessionOwner::GetProcessOwner().m_session.get();
+    }
 };
