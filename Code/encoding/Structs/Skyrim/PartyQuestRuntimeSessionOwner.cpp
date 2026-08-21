@@ -178,15 +178,35 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
             return result;
         }
 
-        // Finish all potentially throwing path copies before reconciliation can
-        // acquire the physical process SaveGuard for a RecoveryRequired journal.
+        auto publicationCapability = workspaceLease.CreatePublicationCapability(
+            acPaths,
+            acCampaignId,
+            acPlayerProfileId);
+        if (!publicationCapability.IsVerified())
+        {
+            PartyQuestRuntimeSessionOwnerBindResult result;
+            result.Status =
+                PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure;
+            result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
+            result.GuardHeld = false;
+            result.LeaseStatus = leaseStatus;
+            result.WorkspaceRecovery = workspaceRecovery;
+            return result;
+        }
+
+        // Finish all potentially throwing path/capability copies before
+        // reconciliation can acquire the physical process SaveGuard for a
+        // RecoveryRequired journal. The store receives the exact lease-backed
+        // capability before hydration so its selected writer and restart cleanup
+        // share one namespace/durability contract from the first transition.
         PartyQuestCoopSavePaths ownedPaths = acPaths;
         auto session = std::make_unique<PartyQuestRuntimeApplySession>(
             acCampaignId,
             acPlayerProfileId);
         const auto store = PartyQuestRuntimeSessionStore::BindAndLoad(
             *session,
-            acPaths);
+            acPaths,
+            publicationCapability);
 
         PartyQuestRuntimeSessionOwnerBindResult result;
         result.Store = store;
@@ -213,12 +233,7 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
         m_session = std::move(session);
         m_guardedSession = std::move(guardedSession);
 
-        auto publicationCapability = m_workspaceLease.CreatePublicationCapability(
-            acPaths,
-            acCampaignId,
-            acPlayerProfileId);
-        if (!publicationCapability.IsVerified() ||
-            !PartyQuestRuntimeWorkspacePublicationAuthority::Bind(
+        if (!PartyQuestRuntimeWorkspacePublicationAuthority::Bind(
                 *m_session,
                 acPaths,
                 std::move(publicationCapability)))

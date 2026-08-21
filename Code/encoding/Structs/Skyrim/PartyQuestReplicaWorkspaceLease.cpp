@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestReplicaWorkspaceLease.h>
 #include <Structs/Skyrim/PartyQuestReplicaFiles.h>
+#include <Structs/Skyrim/PartyQuestStableStorage.h>
 
 #include <cerrno>
 #include <optional>
@@ -160,6 +161,29 @@ bool PartyQuestReplicaWorkspacePublicationCapability::Protects(
         acPaths,
         acCampaignId,
         acPlayerProfileId);
+}
+
+bool PartyQuestReplicaWorkspacePublicationCapability::PreparePowerLossDurableRuntimeNamespace(
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acPlayerProfileId) const noexcept
+{
+    if (!Protects(acPaths, acCampaignId, acPlayerProfileId))
+        return false;
+
+#if defined(_WIN32)
+    return false;
+#else
+    if (PartyQuestStableStorage::EnsureDirectoryTreeDurably(
+            acPaths.MetadataDirectory) != PartyQuestStableStorageStatus::Success)
+    {
+        return false;
+    }
+
+    return PartyQuestStableStorage::EnsureDirectoryTreeDurably(
+               acPaths.SidecarsDirectory) ==
+        PartyQuestStableStorageStatus::Success;
+#endif
 }
 
 PartyQuestReplicaWorkspaceLease::~PartyQuestReplicaWorkspaceLease() noexcept

@@ -1,7 +1,12 @@
 #include <Structs/Skyrim/PartyQuestRuntimeSessionStore.h>
 
+#include <functional>
+
 namespace
 {
+using PersistenceWriter = std::function<PartyQuestRuntimeApplyPersistenceStatus(
+    const PartyQuestRuntimeRecoveryState&)>;
+
 PartyQuestRuntimeSessionStoreResult MakeStoreResult(
     PartyQuestRuntimeSessionStoreStatus aStatus,
     PartyQuestRuntimeApplyPersistenceStatus aPersistenceStatus,
@@ -25,11 +30,11 @@ PartyQuestRuntimeSessionStoreResult FailClosed(
     aSession.SetDurableStateHandler({});
     return MakeStoreResult(aStatus, aPersistenceStatus, aDisposition);
 }
-} // namespace
 
-PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
+PartyQuestRuntimeSessionStoreResult BindAndLoadInternal(
     PartyQuestRuntimeApplySession& aSession,
-    const PartyQuestCoopSavePaths& acPaths) noexcept
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestReplicaWorkspacePublicationCapability* apCapability) noexcept
 {
     try
     {
@@ -53,16 +58,89 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
                 PartyQuestRuntimeApplyPersistenceStatus::InvalidData);
         }
 
+        if (apCapability &&
+            !apCapability->Protects(
+                acPaths,
+                aSession.GetCampaignId(),
+                aSession.GetPlayerProfileId()))
+        {
+            return FailClosed(
+                aSession,
+                PartyQuestRuntimeSessionStoreStatus::InvalidLayout,
+                PartyQuestRuntimeApplyPersistenceStatus::InvalidData);
+        }
+
         const std::filesystem::path sidecarPath = acPaths.RuntimeApplySidecar;
-        aSession.SetDurableStateHandler(
-            [sidecarPath](const PartyQuestRuntimeRecoveryState& acState)
+        PartyQuestPersistenceGuarantee persistenceGuarantee =
+            PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee;
+        bool powerLossDurableNamespace = false;
+        if (apCapability)
+        {
+            powerLossDurableNamespace =
+                apCapability->PreparePowerLossDurableRuntimeNamespace(
+                    acPaths,
+                    aSession.GetCampaignId(),
+                    aSession.GetPlayerProfileId());
+            if (powerLossDurableNamespace)
+            {
+                persistenceGuarantee =
+                    PartyQuestPersistenceGuarantee::PowerLossDurable;
+            }
+        }
+
+        PersistenceWriter persist;
+        if (apCapability)
+        {
+            auto capability = *apCapability;
+            const PartyQuestCoopSavePaths protectedPaths = acPaths;
+            const PartyQuestCampaignId campaignId = aSession.GetCampaignId();
+            const PartyQuestPlayerProfileId playerProfileId =
+                aSession.GetPlayerProfileId();
+            persist = [
+                sidecarPath,
+                protectedPaths,
+                campaignId,
+                playerProfileId,
+                capability = std::move(capability),
+                powerLossDurableNamespace](
+                    const PartyQuestRuntimeRecoveryState& acState)
+                -> PartyQuestRuntimeApplyPersistenceStatus
+            {
+                if (!capability.Protects(
+                        protectedPaths,
+                        campaignId,
+                        playerProfileId))
+                {
+                    return PartyQuestRuntimeApplyPersistenceStatus::IoError;
+                }
+
+                return powerLossDurableNamespace
+                    ? PartyQuestRuntimeApplyPersistence::SavePowerLossDurably(
+                          sidecarPath,
+                          acState)
+                    : PartyQuestRuntimeApplyPersistence::SaveAtomically(
+                          sidecarPath,
+                          acState);
+            };
+        }
+        else
+        {
+            persist = [sidecarPath](const PartyQuestRuntimeRecoveryState& acState)
+                -> PartyQuestRuntimeApplyPersistenceStatus
             {
                 return PartyQuestRuntimeApplyPersistence::SaveAtomically(
-                           sidecarPath,
-                           acState) ==
+                    sidecarPath,
+                    acState);
+            };
+        }
+
+        aSession.SetDurableStateHandler(
+            [persist](const PartyQuestRuntimeRecoveryState& acState)
+            {
+                return persist(acState) ==
                     PartyQuestRuntimeApplyPersistenceStatus::Success;
             },
-            PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee);
+            persistenceGuarantee);
 
         const auto loaded = PartyQuestRuntimeApplyPersistence::Load(sidecarPath);
         if (loaded.Status == PartyQuestRuntimeApplyPersistenceStatus::FileNotFound)
@@ -100,14 +178,13 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
         case PartyQuestRuntimeRecoveryDisposition::PreMutationRestartRequired:
         {
             // The coordinator deliberately dropped the stale active repair. Make
-            // that cleanup durable immediately so a second restart cannot load
-            // and discard the same old pre-mutation entry again.
+            // that cleanup durable immediately through the exact same selected
+            // writer as all later transitions. A strong bound session therefore
+            // cannot hide a process-crash-only restart cleanup.
             const auto cleaned = aSession.GetCoordinator().ExportRecoveryState(
                 aSession.GetCampaignId(),
                 aSession.GetPlayerProfileId());
-            const auto persisted = PartyQuestRuntimeApplyPersistence::SaveAtomically(
-                sidecarPath,
-                cleaned);
+            const auto persisted = persist(cleaned);
             if (persisted != PartyQuestRuntimeApplyPersistenceStatus::Success)
             {
                 return FailClosed(
@@ -160,4 +237,20 @@ PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
         aSession,
         PartyQuestRuntimeSessionStoreStatus::JournalInvalid,
         PartyQuestRuntimeApplyPersistenceStatus::InvalidData);
+}
+} // namespace
+
+PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
+    PartyQuestRuntimeApplySession& aSession,
+    const PartyQuestCoopSavePaths& acPaths) noexcept
+{
+    return BindAndLoadInternal(aSession, acPaths, nullptr);
+}
+
+PartyQuestRuntimeSessionStoreResult PartyQuestRuntimeSessionStore::BindAndLoad(
+    PartyQuestRuntimeApplySession& aSession,
+    const PartyQuestCoopSavePaths& acPaths,
+    const PartyQuestReplicaWorkspacePublicationCapability& acCapability) noexcept
+{
+    return BindAndLoadInternal(aSession, acPaths, &acCapability);
 }
