@@ -706,7 +706,6 @@ PartyQuestRuntimeRecoveryResult PartyQuestRuntimeGuardedSession::ResolveCrashRec
         result.Status = PartyQuestRuntimeRecoveryStatus::SaveGuardBusy;
         result.TransactionId = transactionId;
         result.TargetWorldRevision = targetWorldRevision;
-        result.RestoreId = transactionId;
         return result;
     }
 
