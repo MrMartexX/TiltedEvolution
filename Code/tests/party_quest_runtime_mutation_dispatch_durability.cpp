@@ -85,7 +85,7 @@ PartyQuestRuntimeApplyRequest BuildRequest(
 }
 
 TEST_CASE(
-    "process-owned mutation dispatch refuses process-crash durability before observation or arm",
+    "process-owned mutation dispatch requires both strong bound storage and global native policy",
     "[quest.party-state.runtime-dispatch][durability][runtime-owner]")
 {
     const auto nonce =
@@ -136,25 +136,28 @@ TEST_CASE(
 
     size_t observations{};
     size_t executions{};
-    const auto result = PartyQuestRuntimeMutationDispatchGate::Dispatch(
+    const auto observe = [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
+    {
+        ++observations;
+        return facts;
+    };
+    const auto execute = [&](const PartyQuestRuntimeApplyRequest&)
+    {
+        ++executions;
+        return true;
+    };
+
+    const auto weakResult = PartyQuestRuntimeMutationDispatchGate::Dispatch(
         *guarded,
         request,
         requirement,
-        [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
-        {
-            ++observations;
-            return facts;
-        },
-        [&](const PartyQuestRuntimeApplyRequest&)
-        {
-            ++executions;
-            return true;
-        });
+        observe,
+        execute);
 
-    REQUIRE(result.Status == PartyQuestRuntimeMutationDispatchStatus::ArmFailed);
-    REQUIRE(result.ArmResult.Status == PartyQuestRuntimeGuardStatus::InsufficientDurability);
-    REQUIRE_FALSE(result.MutationBarrierArmed);
-    REQUIRE_FALSE(result.MutationInvoked);
+    REQUIRE(weakResult.Status == PartyQuestRuntimeMutationDispatchStatus::ArmFailed);
+    REQUIRE(weakResult.ArmResult.Status == PartyQuestRuntimeGuardStatus::InsufficientDurability);
+    REQUIRE_FALSE(weakResult.MutationBarrierArmed);
+    REQUIRE_FALSE(weakResult.MutationInvoked);
     REQUIRE(observations == 0);
     REQUIRE(executions == 0);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
@@ -163,6 +166,37 @@ TEST_CASE(
     REQUIRE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
     REQUIRE(PartyQuestSaveGuard::GetProcessGuard().GetTransactionId() ==
         request.TransactionId);
+
+    // Model a future per-session strong writer without changing the global P0
+    // policy. Strong storage alone must not unlock generic production dispatch.
+    session.SetDurableStateHandler(
+        [](const PartyQuestRuntimeRecoveryState&)
+        {
+            return true;
+        },
+        PartyQuestPersistenceGuarantee::PowerLossDurable);
+    REQUIRE(session.GetPersistenceGuarantee() ==
+        PartyQuestPersistenceGuarantee::PowerLossDurable);
+    REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
+
+    const auto globallyBlocked = PartyQuestRuntimeMutationDispatchGate::Dispatch(
+        *guarded,
+        request,
+        requirement,
+        observe,
+        execute);
+    REQUIRE(globallyBlocked.Status ==
+        PartyQuestRuntimeMutationDispatchStatus::ArmFailed);
+    REQUIRE(globallyBlocked.ArmResult.Status ==
+        PartyQuestRuntimeGuardStatus::InsufficientDurability);
+    REQUIRE_FALSE(globallyBlocked.MutationBarrierArmed);
+    REQUIRE_FALSE(globallyBlocked.MutationInvoked);
+    REQUIRE(observations == 0);
+    REQUIRE(executions == 0);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::ReadyToApply);
+    REQUIRE_FALSE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
+    REQUIRE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
 
     PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
     REQUIRE_FALSE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
