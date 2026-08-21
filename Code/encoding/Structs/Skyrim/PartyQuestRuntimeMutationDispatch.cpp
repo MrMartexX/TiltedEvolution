@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestRuntimeMutationDispatch.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
+#include <Structs/Skyrim/PartyQuestPersistenceDurability.h>
 
 namespace
 {
@@ -98,6 +99,14 @@ bool HasValidProcessOwnership(
     return processOwner.IsBound() &&
         processOwner.GetGuardedSession() == &aGuardedSession;
 }
+
+bool UsesProcessMutationDomain(
+    PartyQuestRuntimeGuardedSession& aGuardedSession,
+    PartyQuestRuntimeGenerationFence& aGenerationFence) noexcept
+{
+    return &aGenerationFence == &PartyQuestRuntimeGenerationFence::GetProcessFence() ||
+        &aGuardedSession.GetSaveGuard() == &PartyQuestSaveGuard::GetProcessGuard();
+}
 } // namespace
 
 PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::Dispatch(
@@ -145,6 +154,24 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
     if (!HasValidProcessOwnership(aGuardedSession, aGenerationFence))
     {
         result.Status = PartyQuestRuntimeMutationDispatchStatus::ProcessOwnerMismatch;
+        return result;
+    }
+
+    // INV-DURABILITY-001: the explicit local guard/fence seam remains available
+    // for deterministic state-machine tests, but any path entering the shared
+    // process mutation domain must prove the session's actual bound persistence
+    // handler is PowerLossDurable before compatibility observation or arming.
+    if (UsesProcessMutationDomain(aGuardedSession, aGenerationFence) &&
+        !PartyQuestPersistenceDurabilityPolicy::IsProductionRuntimeMutationReady(
+            aGuardedSession.GetRuntimeSession().GetPersistenceGuarantee()))
+    {
+        result.Status = PartyQuestRuntimeMutationDispatchStatus::ArmFailed;
+        result.ArmResult.Status = PartyQuestRuntimeGuardStatus::InsufficientDurability;
+        result.ArmResult.TransitionStatus =
+            PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability;
+        result.ArmResult.GuardHeld = HasPhysicalGuard(
+            aGuardedSession,
+            acCurrentRequest.TransactionId);
         return result;
     }
 
