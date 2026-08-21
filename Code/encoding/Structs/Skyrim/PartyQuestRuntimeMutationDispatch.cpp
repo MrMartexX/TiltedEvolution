@@ -85,13 +85,9 @@ bool HasValidProcessOwnership(
     const bool usesProcessFence = &aGenerationFence == &processFence;
     const bool usesProcessGuard = &aGuardedSession.GetSaveGuard() == &processGuard;
 
-    // A fully local guard/fence pair is the deterministic unit-test seam.
     if (!usesProcessFence && !usesProcessGuard)
         return true;
 
-    // The process fence and process SaveGuard form one lifecycle domain. Mixing
-    // either with a private session or unrelated generation domain would let the
-    // lifecycle owner fence a different object than the one reaching dispatch.
     if (!usesProcessFence || !usesProcessGuard)
         return false;
 
@@ -119,10 +115,6 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
     PartyQuestRuntimeMutationDispatchResult result;
     result.ArmResult.TransactionId = acCurrentRequest.TransactionId;
 
-    // INV-LIFECYCLE-001: production mutation authority belongs to the exact
-    // process runtime owner that participates in LoadGame/disconnect/campaign
-    // switch/shutdown fencing. A private hydrated session may be useful for
-    // tests, but it must never become a parallel production mutation authority.
     auto& processOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
     if (!processOwner.IsBound() ||
         processOwner.GetGuardedSession() != &aGuardedSession)
@@ -157,13 +149,16 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
         return result;
     }
 
-    // INV-DURABILITY-001: the explicit local guard/fence seam remains available
-    // for deterministic state-machine tests, but any path entering the shared
-    // process mutation domain must prove the session's actual bound persistence
-    // handler is PowerLossDurable before compatibility observation or arming.
+    // Production dispatch is governed by two independent barriers. The exact
+    // bound session must have PowerLossDurable persistence, and the global P0
+    // policy must also permit native mutation. Per-session durability alone can
+    // never bypass lifecycle/compatibility/quiescence blockers represented by
+    // AllowsNativeRuntimeMutation(). The fully local guard/fence pair remains a
+    // deterministic diagnostic seam and grants no process mutation authority.
     if (UsesProcessMutationDomain(aGuardedSession, aGenerationFence) &&
-        !PartyQuestPersistenceDurabilityPolicy::IsProductionRuntimeMutationReady(
-            aGuardedSession.GetRuntimeSession().GetPersistenceGuarantee()))
+        (!PartyQuestPersistenceDurabilityPolicy::IsProductionRuntimeMutationReady(
+             aGuardedSession.GetRuntimeSession().GetPersistenceGuarantee()) ||
+         !PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation()))
     {
         result.Status = PartyQuestRuntimeMutationDispatchStatus::ArmFailed;
         result.ArmResult.Status = PartyQuestRuntimeGuardStatus::InsufficientDurability;
@@ -248,16 +243,12 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
         return result;
     }
 
-    // A lifecycle/resolver transition while the durable arm was being written
-    // invalidates the earlier observation. Stay behind the recovery barrier.
     if (GenerationChanged(aGenerationFence, expectedGeneration))
     {
         result.Status = PartyQuestRuntimeMutationDispatchStatus::RuntimeGenerationChanged;
         return result;
     }
 
-    // Observe again after the durability write. A runtime/load-order change that
-    // happens during this sample must never inherit the earlier compatibility result.
     facts = acObserver(identity->QuestId);
     if (GenerationChanged(aGenerationFence, expectedGeneration))
     {
@@ -292,9 +283,6 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
         return result;
     }
 
-    // Pin the exact observed generation across the final context validation and
-    // synchronous executor callback. Invalidation takes the exclusive side of
-    // the same process-local fence and therefore cannot cross this boundary.
     auto generationLease = aGenerationFence.TryAcquire(expectedGeneration);
     if (!generationLease || !generationLease->IsValid())
     {
