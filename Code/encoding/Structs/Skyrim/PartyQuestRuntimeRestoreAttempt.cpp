@@ -919,14 +919,6 @@ PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
             aTransactionId,
             &*loaded.State);
     }
-    if (current + 1 >= MaxAttemptsPerTransaction)
-    {
-        return MakeResult(
-            PartyQuestRuntimeRestoreAttemptStatus::AttemptLimitReached,
-            acPaths,
-            aTransactionId,
-            &*loaded.State);
-    }
 
     const auto terminal = VerifyTerminalRollback(
         acPaths,
@@ -935,6 +927,15 @@ PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
         loaded.State->CurrentRestoreId);
     if (terminal != PartyQuestRuntimeRestoreAttemptStatus::Success)
         return MakeResult(terminal, acPaths, aTransactionId, &*loaded.State);
+
+    if (current + 1 >= MaxAttemptsPerTransaction)
+    {
+        return MakeResult(
+            PartyQuestRuntimeRestoreAttemptStatus::AttemptLimitReached,
+            acPaths,
+            aTransactionId,
+            &*loaded.State);
+    }
 
     const uint64_t rolledBackRestoreId = loaded.State->CurrentRestoreId;
     const auto allocation = AllocateRestoreIdPowerLossDurably(
