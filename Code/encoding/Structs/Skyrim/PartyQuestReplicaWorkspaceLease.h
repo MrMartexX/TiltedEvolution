@@ -44,6 +44,22 @@ public:
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestPlayerProfileId& acPlayerProfileId) const noexcept;
 
+    /**
+     * Establishes the exact metadata + sidecar directory namespace needed by
+     * the runtime control plane as power-loss durable while this capability
+     * pins the kernel-backed workspace lease.
+     *
+     * POSIX uses PartyQuestStableStorage's component-wise directory publication
+     * proof. Windows deliberately returns false because no reviewed generic
+     * directory creation/flush contract exists there yet. Failure never weakens
+     * the lease or grants strong durability; callers may retain a separately
+     * labelled process-crash writer when their policy permits it.
+     */
+    [[nodiscard]] bool PreparePowerLossDurableRuntimeNamespace(
+        const PartyQuestCoopSavePaths& acPaths,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acPlayerProfileId) const noexcept;
+
 private:
     explicit PartyQuestReplicaWorkspacePublicationCapability(
         std::shared_ptr<const PartyQuestReplicaWorkspaceLeaseState> aState) noexcept
