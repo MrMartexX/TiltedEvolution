@@ -116,7 +116,10 @@ TEST_CASE(
 
     auto* guarded = owner.GetGuardedSession();
     REQUIRE(guarded != nullptr);
-    auto& session = guarded->GetRuntimeSession();
+    auto* pSession =
+        PartyQuestRuntimeSessionOwnerTestAccess::GetMutableProcessSessionForTesting();
+    REQUIRE(pSession != nullptr);
+    auto& session = *pSession;
 
     const auto requirement = BuildRequirement(GameId(96, 0x9100));
     const auto request = BuildRequest(26101, requirement);
