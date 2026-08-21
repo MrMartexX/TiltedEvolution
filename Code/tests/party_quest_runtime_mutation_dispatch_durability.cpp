@@ -20,6 +20,15 @@ const PartyQuestPlayerProfileId kPlayer{
     0xAC11AC12AC13AC14ull,
     0xAC21AC22AC23AC24ull};
 
+PartyQuestPersistenceGuarantee ExpectedOwnerGuarantee() noexcept
+{
+#ifdef _WIN32
+    return PartyQuestPersistenceGuarantee::ProcessCrashResilient;
+#else
+    return PartyQuestPersistenceGuarantee::PowerLossDurable;
+#endif
+}
+
 PartyQuestRuntimeCompatibilityRequirement BuildRequirement(GameId aQuestId)
 {
     PartyQuestRuntimeCompatibilityRequirement requirement;
@@ -112,7 +121,7 @@ TEST_CASE(
     REQUIRE(owner.IsBound());
     REQUIRE(owner.GetRuntimeSession() != nullptr);
     REQUIRE(owner.GetRuntimeSession()->GetPersistenceGuarantee() ==
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
+        ExpectedOwnerGuarantee());
 
     auto* guarded = owner.GetGuardedSession();
     REQUIRE(guarded != nullptr);
@@ -120,6 +129,21 @@ TEST_CASE(
         PartyQuestRuntimeSessionOwnerTestAccess::GetMutableProcessSessionForTesting();
     REQUIRE(pSession != nullptr);
     auto& session = *pSession;
+
+    // Exercise the local-durability gate independently of the production
+    // platform's bound writer. Linux now legitimately binds a reviewed strong
+    // runtime namespace, while Windows remains process-crash resilient. An
+    // explicit weak test handler keeps this proof cross-platform and makes the
+    // first refusal about local durability rather than whichever writer the
+    // current platform happens to provide.
+    session.SetDurableStateHandler(
+        [](const PartyQuestRuntimeRecoveryState&)
+        {
+            return true;
+        },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
+    REQUIRE(session.GetPersistenceGuarantee() ==
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
 
     const auto requirement = BuildRequirement(GameId(96, 0x9100));
     const auto request = BuildRequest(26101, requirement);
