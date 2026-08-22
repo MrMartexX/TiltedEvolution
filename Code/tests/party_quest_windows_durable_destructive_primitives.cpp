@@ -51,7 +51,7 @@ std::vector<uint8_t> ReadAll(const std::filesystem::path& acPath)
 } // namespace
 
 TEST_CASE(
-    "stable storage durably copies and removes exact confined entries",
+    "stable storage durably copies and removes exact confined files",
     "[quest.party-state.durability][copy][remove]")
 {
     DestructiveStorageSandbox sandbox;
@@ -82,9 +82,19 @@ TEST_CASE(
     REQUIRE_FALSE(std::filesystem::exists(destination));
     REQUIRE(ReadAll(source) == payload);
 
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileCopyPrimitive());
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileRemovalPrimitive());
+
     const auto empty = workspace / "empty";
     REQUIRE(PartyQuestStableStorage::EnsureDirectoryTreeDurably(empty) ==
         PartyQuestStableStorageStatus::Success);
+#ifdef _WIN32
+    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
+    REQUIRE(PartyQuestStableStorage::RemoveEmptyDirectoryDurably(empty) ==
+        PartyQuestStableStorageStatus::Unsupported);
+    REQUIRE(std::filesystem::is_directory(empty));
+#else
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
     REQUIRE(PartyQuestStableStorage::RemoveEmptyDirectoryDurably(empty) ==
         PartyQuestStableStorageStatus::Success);
     REQUIRE_FALSE(std::filesystem::exists(empty));
@@ -110,10 +120,8 @@ TEST_CASE(
     REQUIRE(PartyQuestStableStorage::RemoveEmptyDirectoryDurably(nonEmpty) ==
         PartyQuestStableStorageStatus::Success);
     REQUIRE_FALSE(std::filesystem::exists(nonEmpty));
+#endif
 
-    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileCopyPrimitive());
-    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileRemovalPrimitive());
-    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
