@@ -206,8 +206,10 @@ TEST_CASE(
         paths, plan, kSuccessRestoreId);
 
 #ifdef _WIN32
-    REQUIRE(prepared.Status ==
-        PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
+    // Preparation is now strong on NTFS, while the executor remains deliberately
+    // closed until its complete replacement/rollback fault matrix is enabled.
+    REQUIRE(prepared.IsBackupsReady());
+    REQUIRE(prepared.State.has_value());
 
     PartyQuestReplicaWorkspacePublicationCapability missingCapability;
     const auto unsupported =
@@ -215,7 +217,7 @@ TEST_CASE(
             paths,
             kCampaign,
             kPlayer,
-            paths.MetadataDirectory / "restore" / "missing" / "journal.bin",
+            prepared.JournalPath,
             missingCapability);
     REQUIRE(unsupported.Status == PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform);
 #else
@@ -288,8 +290,8 @@ TEST_CASE(
         paths, plan, kRollbackRestoreId);
 
 #ifdef _WIN32
-    REQUIRE(prepared.Status ==
-        PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
+    REQUIRE(prepared.IsBackupsReady());
+    REQUIRE(prepared.State.has_value());
 
     PartyQuestReplicaWorkspacePublicationCapability missingCapability;
     const auto unsupported =
@@ -297,7 +299,7 @@ TEST_CASE(
             paths,
             kCampaign,
             kPlayer,
-            paths.MetadataDirectory / "restore" / "missing" / "journal.bin",
+            prepared.JournalPath,
             missingCapability);
     REQUIRE(unsupported.Status == PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform);
 #else
