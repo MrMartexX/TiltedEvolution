@@ -336,12 +336,6 @@ TEST_CASE(
         kPlayer,
         PartyQuestCheckpointKind::PreRepair,
         3001);
-#ifdef _WIN32
-    REQUIRE(promotion.Status ==
-        PartyQuestReplicaDurableSnapshotStatus::UnsupportedPlatform);
-    REQUIRE(promotion.ManifestStatus ==
-        PartyQuestReplicaManifestPersistenceStatus::PowerLossDurabilityUnsupported);
-#else
     REQUIRE(promotion.IsPromoted());
     REQUIRE(promotion.ManifestStatus ==
         PartyQuestReplicaManifestPersistenceStatus::Success);
@@ -355,7 +349,6 @@ TEST_CASE(
         PartyQuestCheckpointKind::PreRepair,
         3001);
     REQUIRE(repeated.IsPromoted());
-#endif
 
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);
