@@ -15,6 +15,7 @@
 
 #include <Structs/Skyrim/PartyQuestAdmission.h>
 #include <Structs/Skyrim/PartyQuestCampaignPersistence.h>
+#include <Structs/Skyrim/PartyQuestStableStorage.h>
 #include <Structs/Skyrim/PartyQuestStatePersistence.h>
 
 #include <Setting.h>
@@ -49,6 +50,27 @@ Console::StringSetting sPartyQuestStatePath{
     "Path to the equal-party canonical quest-state archive, relative to the server working directory unless absolute.",
     "state/party_quest_campaign.bin"};
 
+const char* StableStorageStatusName(PartyQuestStableStorageStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestStableStorageStatus::Success: return "success";
+    case PartyQuestStableStorageStatus::Unsupported: return "unsupported";
+    case PartyQuestStableStorageStatus::InvalidPath: return "invalid-path";
+    case PartyQuestStableStorageStatus::CrossDirectoryRename: return "cross-directory-rename";
+    case PartyQuestStableStorageStatus::OpenFailed: return "open-failed";
+    case PartyQuestStableStorageStatus::NodeValidationFailed: return "node-validation-failed";
+    case PartyQuestStableStorageStatus::WriteFailed: return "write-failed";
+    case PartyQuestStableStorageStatus::FlushFailed: return "flush-failed";
+    case PartyQuestStableStorageStatus::CloseFailed: return "close-failed";
+    case PartyQuestStableStorageStatus::RenameFailed: return "rename-failed";
+    case PartyQuestStableStorageStatus::RemoveFailed: return "remove-failed";
+    case PartyQuestStableStorageStatus::CreateDirectoryFailed: return "create-directory-failed";
+    }
+
+    return "unknown";
+}
+
 const char* PersistenceStatusName(PartyQuestPersistenceStatus aStatus) noexcept
 {
     switch (aStatus)
@@ -63,6 +85,7 @@ const char* PersistenceStatusName(PartyQuestPersistenceStatus aStatus) noexcept
     case PartyQuestPersistenceStatus::InvalidData: return "invalid-data";
     case PartyQuestPersistenceStatus::ReplayMismatch: return "replay-mismatch";
     case PartyQuestPersistenceStatus::BackupRecoveryRequired: return "backup-recovery-required";
+    case PartyQuestPersistenceStatus::PowerLossDurabilityUnsupported: return "power-loss-durability-unsupported";
     }
 
     return "unknown";
@@ -80,6 +103,7 @@ const char* CampaignPersistenceStatusName(PartyQuestCampaignPersistenceStatus aS
     case PartyQuestCampaignPersistenceStatus::Truncated: return "truncated";
     case PartyQuestCampaignPersistenceStatus::ChecksumMismatch: return "checksum-mismatch";
     case PartyQuestCampaignPersistenceStatus::InvalidData: return "invalid-data";
+    case PartyQuestCampaignPersistenceStatus::PowerLossDurabilityUnsupported: return "power-loss-durability-unsupported";
     }
 
     return "unknown";
@@ -153,6 +177,28 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
     m_partyQuestCampaignIdPath = m_partyQuestStatePath;
     m_partyQuestCampaignIdPath += ".campaign-id";
 
+    std::error_code pathError;
+    const auto absoluteStatePath =
+        std::filesystem::absolute(m_partyQuestStatePath, pathError).lexically_normal();
+    if (pathError || absoluteStatePath.empty() || absoluteStatePath.parent_path().empty())
+    {
+        spdlog::error(
+            "PartyQuestProtocol could not resolve persistence namespace for path='{}'; protocol messages will be rejected",
+            m_partyQuestStatePath.string());
+        return false;
+    }
+
+    const auto namespaceStatus = PartyQuestStableStorage::EnsureDirectoryTreeDurably(
+        absoluteStatePath.parent_path());
+    if (namespaceStatus != PartyQuestStableStorageStatus::Success)
+    {
+        spdlog::error(
+            "PartyQuestProtocol could not establish power-loss-durable persistence namespace: path='{}' status={}; protocol messages will be rejected",
+            absoluteStatePath.parent_path().string(),
+            StableStorageStatusName(namespaceStatus));
+        return false;
+    }
+
     bool hadStateArchive = false;
     auto loadResult = PartyQuestStatePersistence::Load(m_partyQuestStatePath);
     if (loadResult.Status == PartyQuestPersistenceStatus::FileNotFound)
@@ -219,52 +265,56 @@ bool QuestService::InitializePartyQuestPersistence() noexcept
             publishCampaignMetadata))
         return false;
 
-    if (initializeCanonicalArchive || (hadStateArchive && !loadResult.CampaignId))
+    // Every successful persistent startup republishes the selected canonical
+    // state through the strong writer. This covers first bootstrap, legacy v1
+    // migration, recovery from a verified .tmp, and archives created by an older
+    // process-crash-resilient build. Surviving a restart is not itself evidence
+    // that an earlier publication crossed the stable-storage barrier.
+    const auto canonicalStatus = PartyQuestStatePersistence::SavePowerLossDurably(
+        m_partyQuestStatePath,
+        m_campaignId,
+        m_partyQuestCoordinator.GetCanonicalState());
+    if (canonicalStatus != PartyQuestPersistenceStatus::Success)
     {
-        const auto migrationStatus = PartyQuestStatePersistence::SaveAtomically(
-            m_partyQuestStatePath,
-            m_campaignId,
-            m_partyQuestCoordinator.GetCanonicalState());
-        if (migrationStatus != PartyQuestPersistenceStatus::Success)
-        {
-            spdlog::error(
-                "PartyQuestProtocol could not bind legacy canonical state to campaign={:016X}{:016X}: path='{}' status={}; protocol messages will be rejected",
-                m_campaignId.High,
-                m_campaignId.Low,
-                m_partyQuestStatePath.string(),
-                PersistenceStatusName(migrationStatus));
-            return false;
-        }
-
-        spdlog::info(
-            "PartyQuestProtocol published campaign-bound canonical archive: campaign={:016X}{:016X} path='{}' initializedEmpty={} migratedLegacy={}",
+        spdlog::error(
+            "PartyQuestProtocol could not establish power-loss-durable canonical state: campaign={:016X}{:016X} path='{}' status={}; protocol messages will be rejected",
             m_campaignId.High,
             m_campaignId.Low,
             m_partyQuestStatePath.string(),
-            initializeCanonicalArchive,
-            hadStateArchive && !loadResult.CampaignId);
+            PersistenceStatusName(canonicalStatus));
+        return false;
     }
 
-    if (publishCampaignMetadata)
+    spdlog::info(
+        "PartyQuestProtocol power-loss-durable canonical archive ready: campaign={:016X}{:016X} path='{}' initializedEmpty={} migratedLegacy={} recoveredTemporary={}",
+        m_campaignId.High,
+        m_campaignId.Low,
+        m_partyQuestStatePath.string(),
+        initializeCanonicalArchive,
+        hadStateArchive && !loadResult.CampaignId,
+        loadResult.UsedTemporary);
+
+    // Campaign identity is published only after the matching canonical archive
+    // is strong. Republish on every startup to promote older weak metadata and to
+    // normalize any backup/.tmp recovery before the protocol can accept work.
+    const auto metadataStatus = PartyQuestCampaignPersistence::SavePowerLossDurably(
+        m_partyQuestCampaignIdPath,
+        m_campaignId);
+    if (metadataStatus != PartyQuestCampaignPersistenceStatus::Success)
     {
-        const auto metadataStatus = PartyQuestCampaignPersistence::SaveAtomically(
-            m_partyQuestCampaignIdPath,
-            m_campaignId);
-        if (metadataStatus != PartyQuestCampaignPersistenceStatus::Success)
-        {
-            spdlog::error(
-                "PartyQuestProtocol could not publish archive-required campaign metadata '{}': status={}; protocol messages will be rejected",
-                m_partyQuestCampaignIdPath.string(),
-                CampaignPersistenceStatusName(metadataStatus));
-            return false;
-        }
-
-        spdlog::info(
-            "PartyQuestProtocol campaign metadata now requires canonical archive: campaign={:016X}{:016X} path='{}'",
-            m_campaignId.High,
-            m_campaignId.Low,
-            m_partyQuestCampaignIdPath.string());
+        spdlog::error(
+            "PartyQuestProtocol could not establish power-loss-durable archive-required campaign metadata '{}': status={}; protocol messages will be rejected",
+            m_partyQuestCampaignIdPath.string(),
+            CampaignPersistenceStatusName(metadataStatus));
+        return false;
     }
+
+    spdlog::info(
+        "PartyQuestProtocol power-loss-durable campaign metadata ready: campaign={:016X}{:016X} path='{}' refreshRequested={}",
+        m_campaignId.High,
+        m_campaignId.Low,
+        m_partyQuestCampaignIdPath.string(),
+        publishCampaignMetadata);
 
     m_partyQuestCoordinator.SetDurableCommitHandler(
         [this](const PartyQuestState& acState)
@@ -349,14 +399,14 @@ bool QuestService::PersistPartyQuestState(const PartyQuestState& acState) noexce
         return true;
 
     const PartyQuestPersistenceStatus status =
-        PartyQuestStatePersistence::SaveAtomically(
+        PartyQuestStatePersistence::SavePowerLossDurably(
             m_partyQuestStatePath,
             m_campaignId,
             acState);
     if (status != PartyQuestPersistenceStatus::Success)
     {
         spdlog::error(
-            "PartyQuestProtocol persistence save failed: path='{}' status={} candidateWorldRevision={}; canonical commit rejected",
+            "PartyQuestProtocol power-loss-durable persistence save failed: path='{}' status={} candidateWorldRevision={}; canonical commit rejected",
             m_partyQuestStatePath.string(),
             PersistenceStatusName(status),
             acState.GetWorldRevision());
@@ -364,7 +414,7 @@ bool QuestService::PersistPartyQuestState(const PartyQuestState& acState) noexce
     }
 
     spdlog::debug(
-        "PartyQuestProtocol persistence saved: campaign={:016X}{:016X} path='{}' worldRevision={} quests={} journalEntries={}",
+        "PartyQuestProtocol power-loss-durable persistence saved: campaign={:016X}{:016X} path='{}' worldRevision={} quests={} journalEntries={}",
         m_campaignId.High,
         m_campaignId.Low,
         m_partyQuestStatePath.string(),
