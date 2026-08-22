@@ -106,6 +106,12 @@ bool IsWindowsNtfsHandle(HANDLE aFile) noexcept
                -1,
                TRUE) == CSTR_EQUAL;
 }
+
+bool IsMissingWindowsPathError(DWORD aError) noexcept
+{
+    return aError == ERROR_FILE_NOT_FOUND ||
+        aError == ERROR_PATH_NOT_FOUND;
+}
 #endif
 } // namespace
 
@@ -440,7 +446,78 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::RemoveFileDurably(
         if (ec || path.empty() || path.parent_path().empty())
             return PartyQuestStableStorageStatus::InvalidPath;
 #ifdef _WIN32
-        return PartyQuestStableStorageStatus::Unsupported;
+        // Deletion has no namespace-creation authority. Promote the already
+        // existing parent first so NTFS + exact directory flush support are
+        // established before the destructive operation begins.
+        const DWORD parentAttributes = ::GetFileAttributesW(path.parent_path().c_str());
+        if (parentAttributes == INVALID_FILE_ATTRIBUTES)
+            return PartyQuestStableStorageStatus::OpenFailed;
+        if ((parentAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+            (parentAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+        {
+            return PartyQuestStableStorageStatus::NodeValidationFailed;
+        }
+        const auto parentPromotion = EnsureDirectoryTreeDurably(path.parent_path());
+        if (parentPromotion != PartyQuestStableStorageStatus::Success)
+            return parentPromotion;
+
+        const HANDLE file = ::CreateFileW(
+            path.c_str(),
+            DELETE | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr);
+        if (file == INVALID_HANDLE_VALUE)
+            return PartyQuestStableStorageStatus::OpenFailed;
+
+        const auto validation = ValidateWindowsRegularHandle(file);
+        if (validation != PartyQuestStableStorageStatus::Success)
+        {
+            ::CloseHandle(file);
+            return validation;
+        }
+
+        BY_HANDLE_FILE_INFORMATION information{};
+        if (!::GetFileInformationByHandle(file, &information) ||
+            information.nNumberOfLinks != 1)
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::NodeValidationFailed;
+        }
+        if (!IsWindowsNtfsHandle(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::Unsupported;
+        }
+
+        FILE_DISPOSITION_INFO disposition{};
+        disposition.DeleteFile = TRUE;
+        if (!::SetFileInformationByHandle(
+                file,
+                FileDispositionInfo,
+                &disposition,
+                sizeof(disposition)))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::RemoveFailed;
+        }
+        if (!::CloseHandle(file))
+            return PartyQuestStableStorageStatus::CloseFailed;
+
+        // FileDispositionInfo marks deletion for close. Do not claim success if
+        // another sharing handle delayed namespace removal: recovery must see a
+        // failure rather than a false durable-absence assertion.
+        if (::GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES)
+            return PartyQuestStableStorageStatus::RemoveFailed;
+        const DWORD removeError = ::GetLastError();
+        if (!IsMissingWindowsPathError(removeError))
+            return PartyQuestStableStorageStatus::RemoveFailed;
+
+        // The exact name is now absent. Cross the reviewed NTFS directory
+        // metadata barrier so successful return means that absence is stable.
+        return EnsureDirectoryTreeDurably(path.parent_path());
 #else
         struct stat status{};
         if (::lstat(path.c_str(), &status) != 0)
