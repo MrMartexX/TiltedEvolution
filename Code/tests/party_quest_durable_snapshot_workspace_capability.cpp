@@ -156,12 +156,6 @@ TEST_CASE(
                 PartyQuestCheckpointKind::PreRepair,
                 revision,
                 capability);
-#ifdef _WIN32
-        REQUIRE(promoted.Status ==
-            PartyQuestReplicaDurableSnapshotStatus::UnsupportedPlatform);
-        REQUIRE(promoted.ManifestStatus ==
-            PartyQuestReplicaManifestPersistenceStatus::PowerLossDurabilityUnsupported);
-#else
         REQUIRE(promoted.IsPromoted());
         REQUIRE(promoted.ManifestStatus ==
             PartyQuestReplicaManifestPersistenceStatus::Success);
@@ -177,7 +171,6 @@ TEST_CASE(
                 revision,
                 capability);
         REQUIRE(repeated.IsPromoted());
-#endif
 
         const PartyQuestCampaignId wrongCampaign{
             kDurableCapabilityCampaign.High ^ 1ull,
