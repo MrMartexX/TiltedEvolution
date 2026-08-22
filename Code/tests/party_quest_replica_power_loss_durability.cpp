@@ -169,24 +169,27 @@ std::vector<PartyQuestReplicaFileSpec> BuildSoloFiles(
 } // namespace
 
 TEST_CASE(
-    "stable storage promotes directory namespace only on a reviewed platform",
+    "stable storage promotes exact directory namespace without widening destructive Windows primitives",
     "[quest.party-state.durability][directory]")
 {
     DurabilitySandbox sandbox;
     const auto nested = sandbox.Root / "a" / "b" / "c";
 
-#ifdef _WIN32
-    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableDirectoryTreePrimitive());
-    REQUIRE(PartyQuestStableStorage::EnsureDirectoryTreeDurably(nested) ==
-        PartyQuestStableStorageStatus::Unsupported);
-    REQUIRE_FALSE(std::filesystem::exists(nested));
-#else
     REQUIRE(PartyQuestStableStorage::HasDocumentedDurableDirectoryTreePrimitive());
     REQUIRE(PartyQuestStableStorage::EnsureDirectoryTreeDurably(nested) ==
         PartyQuestStableStorageStatus::Success);
     REQUIRE(std::filesystem::is_directory(nested));
     REQUIRE(PartyQuestStableStorage::EnsureDirectoryTreeDurably(nested) ==
         PartyQuestStableStorageStatus::Success);
+
+#ifdef _WIN32
+    // Windows only gains the reviewed NTFS directory-tree promotion contract.
+    // Generic directory flush and destructive restore primitives remain outside
+    // the current evidence envelope and must continue to fail closed.
+    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedParentDirectoryFlushPrimitive());
+    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableFileCopyPrimitive());
+    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableFileRemovalPrimitive());
+    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
 #endif
 
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
