@@ -167,13 +167,6 @@ PartyQuestReplicaDurableRestorePreparation::Prepare(
     if (aRestoreId == 0)
         return Failure(PartyQuestReplicaDurableRestorePreparationStatus::InvalidRestoreId);
 
-#ifdef _WIN32
-    // Do not even acquire the persistent workspace lock on the unsupported
-    // strong-restore platform path. Windows checkpoint directory promotion and
-    // durable deletion are both still intentionally unproved.
-    (void)acPaths;
-    return Failure(PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
-#else
     PartyQuestReplicaWorkspaceLease workspace;
     const auto leaseStatus = workspace.Acquire(
         acPaths,
@@ -196,7 +189,6 @@ PartyQuestReplicaDurableRestorePreparation::Prepare(
     }
 
     return PrepareAuthorized(acPaths, acPlan, aRestoreId, capability);
-#endif
 }
 
 PartyQuestReplicaDurableRestorePreparationReport
@@ -213,11 +205,6 @@ PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(
     if (aRestoreId == 0)
         return Failure(PartyQuestReplicaDurableRestorePreparationStatus::InvalidRestoreId);
 
-#ifdef _WIN32
-    (void)acPaths;
-    (void)acWorkspaceCapability;
-    return Failure(PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
-#else
     if (!acWorkspaceCapability.Protects(
             acPaths,
             acPlan.CampaignId,
@@ -563,5 +550,4 @@ PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(
     }
 
     return ReadyReport(std::move(backupsReady), completedBackups);
-#endif
 }
