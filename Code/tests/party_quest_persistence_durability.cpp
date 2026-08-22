@@ -42,12 +42,13 @@ TEST_CASE("stable-storage primitives keep the platform publication boundary expl
     REQUIRE(PartyQuestStableStorage::HasDocumentedFileFlushPrimitive());
     REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileWritePrimitive());
     REQUIRE(PartyQuestStableStorage::HasDocumentedAtomicFilePublicationPrimitive());
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileCopyPrimitive());
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileRemovalPrimitive());
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
 #ifdef _WIN32
     REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedParentDirectoryFlushPrimitive());
-    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableFileRemovalPrimitive());
 #else
     REQUIRE(PartyQuestStableStorage::HasDocumentedParentDirectoryFlushPrimitive());
-    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileRemovalPrimitive());
 #endif
 
     REQUIRE(PartyQuestStableStorage::FlushFile({}) ==
@@ -201,7 +202,7 @@ TEST_CASE("stable rename publication is same-directory and rejects accidental ov
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
 }
 
-TEST_CASE("durable file removal is explicit and never inferred on Windows", "[quest.party-state.durability][publication]")
+TEST_CASE("durable file removal crosses the reviewed platform namespace barrier", "[quest.party-state.durability][publication]")
 {
     const auto nonce = static_cast<uint64_t>(
         std::chrono::high_resolution_clock::now().time_since_epoch().count());
@@ -218,15 +219,11 @@ TEST_CASE("durable file removal is explicit and never inferred on Windows", "[qu
         file.write("obsolete", 8);
     }
 
-#ifdef _WIN32
-    REQUIRE(PartyQuestStableStorage::RemoveFileDurably(path) ==
-        PartyQuestStableStorageStatus::Unsupported);
-    REQUIRE(std::filesystem::exists(path));
-#else
+    REQUIRE(PartyQuestStableStorage::EnsureDirectoryTreeDurably(root) ==
+        PartyQuestStableStorageStatus::Success);
     REQUIRE(PartyQuestStableStorage::RemoveFileDurably(path) ==
         PartyQuestStableStorageStatus::Success);
     REQUIRE_FALSE(std::filesystem::exists(path));
-#endif
 
     std::filesystem::remove_all(root, ec);
     REQUIRE_FALSE(ec);
