@@ -115,7 +115,7 @@ TEST_CASE(
     PartyQuestReplicaWorkspaceLease lease;
     REQUIRE(lease.Acquire(paths, kCampaign, kPlayer) ==
         PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
-    const auto capability = lease.CreatePublicationCapability(
+    auto capability = lease.CreatePublicationCapability(
         paths,
         kCampaign,
         kPlayer);
@@ -144,9 +144,15 @@ TEST_CASE(
     REQUIRE(competing.Acquire(paths, kCampaign, kPlayer) ==
         PartyQuestReplicaWorkspaceLeaseStatus::Busy);
 
-    // Removing the handler releases its capability copy; only then may another
-    // owner acquire the same kernel-backed workspace lease.
+    // Removing the handler releases only the store's capability copy. The
+    // caller's still-live capability must continue to pin the same kernel lease.
     session.SetDurableStateHandler({});
+    REQUIRE(competing.Acquire(paths, kCampaign, kPlayer) ==
+        PartyQuestReplicaWorkspaceLeaseStatus::Busy);
+
+    // Only after every capability holder has released authority may another
+    // owner acquire the same kernel-backed workspace lease.
+    capability = {};
     REQUIRE(competing.Acquire(paths, kCampaign, kPlayer) ==
         PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
 }
