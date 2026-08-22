@@ -179,17 +179,12 @@ TEST_CASE(
         plan,
         kRestoreId);
 
-#ifdef _WIN32
-    REQUIRE(prepared.Status ==
-        PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
-    REQUIRE_FALSE(prepared.State.has_value());
-    REQUIRE_FALSE(std::filesystem::exists(transaction));
-#else
     REQUIRE(prepared.IsBackupsReady());
     REQUIRE(prepared.State.has_value());
     REQUIRE(prepared.CompletedBackups == 2);
     REQUIRE(prepared.State->Phase == PartyQuestReplicaRestoreJournalPhase::BackupsReady);
     REQUIRE(std::filesystem::exists(prepared.JournalPath));
+    REQUIRE(std::filesystem::exists(transaction));
 
     REQUIRE(ReadText(paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
     REQUIRE(ReadText(paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
@@ -220,7 +215,6 @@ TEST_CASE(
     REQUIRE(duplicate.IsBackupsReady());
     REQUIRE(duplicate.CompletedBackups == 2);
     REQUIRE(duplicate.State == prepared.State);
-#endif
 
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);
@@ -237,17 +231,6 @@ TEST_CASE(
     constexpr uint64_t authorizedRestoreId = kRestoreId + 10;
     constexpr uint64_t rejectedRestoreId = kRestoreId + 11;
 
-#ifdef _WIN32
-    PartyQuestReplicaWorkspacePublicationCapability capability;
-    const auto unsupported =
-        PartyQuestReplicaDurableRestorePreparationTestAccess::PrepareAuthorized(
-            paths,
-            plan,
-            authorizedRestoreId,
-            capability);
-    REQUIRE(unsupported.Status ==
-        PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
-#else
     PartyQuestReplicaWorkspaceLease heldLease;
     REQUIRE(heldLease.Acquire(paths, kCampaign, kPlayer) ==
         PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
@@ -297,7 +280,6 @@ TEST_CASE(
     REQUIRE(ReadText(paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
     REQUIRE(heldLease.IsHeld());
     REQUIRE(heldLease.Protects(paths, kCampaign, kPlayer));
-#endif
 }
 
 TEST_CASE(
@@ -313,10 +295,6 @@ TEST_CASE(
         plan,
         kRestoreId + 1);
 
-#ifdef _WIN32
-    REQUIRE(initial.Status ==
-        PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
-#else
     REQUIRE(initial.IsBackupsReady());
     REQUIRE(initial.State.has_value());
     REQUIRE(initial.State->Operations.size() == 2);
@@ -354,7 +332,6 @@ TEST_CASE(
     REQUIRE(persisted.State.has_value());
     REQUIRE(persisted.State->Phase ==
         PartyQuestReplicaRestoreJournalPhase::BackupsReady);
-#endif
 }
 
 TEST_CASE(
@@ -370,10 +347,6 @@ TEST_CASE(
         plan,
         kRestoreId + 2);
 
-#ifdef _WIN32
-    REQUIRE(initial.Status ==
-        PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform);
-#else
     REQUIRE(initial.IsBackupsReady());
     REQUIRE(initial.State.has_value());
     PartyQuestReplicaRestoreJournalState interrupted = *initial.State;
@@ -405,5 +378,4 @@ TEST_CASE(
         PartyQuestReplicaRestoreJournalPersistenceStatus::Success);
     REQUIRE(persisted.State.has_value());
     REQUIRE(persisted.State->Phase == PartyQuestReplicaRestoreJournalPhase::Prepared);
-#endif
 }
