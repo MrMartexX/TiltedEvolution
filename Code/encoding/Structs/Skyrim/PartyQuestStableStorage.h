@@ -113,12 +113,6 @@ struct PartyQuestStableStorage
      * uncertain and the result remains failure. Callers must preserve recovery
      * authority rather than rolling logical state forward. Cross-directory moves
      * are rejected because they require a different durability proof.
-     *
-     * aReplaceExisting is intended for durable primary -> backup rotation. It
-     * does not weaken same-directory or regular-source validation.
-     *
-     * This method is not path authorization and must only be used after the
-     * existing confinement proof.
      */
     [[nodiscard]] static PartyQuestStableStorageStatus PublishFileRename(
         const std::filesystem::path& acSource,
@@ -142,11 +136,9 @@ struct PartyQuestStableStorage
      * Durably removes one already-empty directory namespace entry.
      *
      * POSIX validates the final node as a real directory, calls rmdir(), then
-     * fsyncs the containing directory. Windows opens the exact non-reparse NTFS
-     * directory with DELETE authority, marks FileDispositionInfo, requires the
-     * name to be absent after close, then crosses the parent-directory metadata
-     * barrier. A non-empty directory fails closed; recursive deletion is never
-     * implied by this primitive.
+     * fsyncs the containing directory. Windows remains unsupported until this
+     * destructive namespace authority is promoted together with the restore
+     * compaction/recovery state machine and its fault matrix.
      */
     [[nodiscard]] static PartyQuestStableStorageStatus RemoveEmptyDirectoryDurably(
         const std::filesystem::path& acDirectory) noexcept;
@@ -206,6 +198,10 @@ struct PartyQuestStableStorage
 
     [[nodiscard]] static constexpr bool HasDocumentedDurableEmptyDirectoryRemovalPrimitive() noexcept
     {
+#ifdef _WIN32
+        return false;
+#else
         return true;
+#endif
     }
 };
