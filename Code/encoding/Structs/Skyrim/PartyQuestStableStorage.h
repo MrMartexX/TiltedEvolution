@@ -54,10 +54,13 @@ struct PartyQuestStableStorage
      * at each step. Existing components are also parent-fsync'd so a directory
      * created by an earlier crash-resilient path can be promoted later.
      *
-     * Windows deliberately remains Unsupported. CreateDirectory does not expose
-     * the same reviewed write-through creation contract as the NTFS file rename
-     * path used below, and a generic directory FlushFileBuffers contract is not
-     * assumed by this project.
+     * Windows validates every traversed component as a non-reparse directory.
+     * Missing descendants are created one at a time and the affected parent and
+     * child directories are flushed with NtFlushBuffersFileEx Flags=0 on NTFS.
+     * An already-existing final directory is promoted by flushing its parent and
+     * itself. Unsupported filesystems, unavailable native flush support or
+     * insufficient directory write access fail closed instead of being relabeled
+     * PowerLossDurable.
      */
     [[nodiscard]] static PartyQuestStableStorageStatus EnsureDirectoryTreeDurably(
         const std::filesystem::path& acDirectory) noexcept;
@@ -88,8 +91,9 @@ struct PartyQuestStableStorage
      * into memory merely to create rollback evidence.
      *
      * Windows deliberately remains Unsupported because the current restore path
-     * also lacks a reviewed durable directory-tree/delete contract; this method
-     * must not be used to imply that Windows destructive restore is ready.
+     * also lacks a reviewed durable delete/copy publication contract; this method
+     * must not be used to imply that Windows destructive restore is ready merely
+     * because runtime metadata directories can now be promoted durably.
      */
     [[nodiscard]] static PartyQuestStableStorageStatus CopyFileDurably(
         const std::filesystem::path& acSource,
@@ -136,9 +140,10 @@ struct PartyQuestStableStorage
      * POSIX validates the final node as a real directory, calls rmdir(), then
      * fsyncs the containing directory so successful return proves the removed
      * child name crossed the stable-storage barrier. Windows remains Unsupported
-     * for the same directory-metadata reason as EnsureDirectoryTreeDurably.
-     * Callers must prove the directory is inside their confined namespace and
-     * must never use this primitive as recursive deletion authority.
+     * for destructive directory removal; durable namespace creation/promotion is
+     * a separate, narrower contract. Callers must prove the directory is inside
+     * their confined namespace and must never use this primitive as recursive
+     * deletion authority.
      */
     [[nodiscard]] static PartyQuestStableStorageStatus RemoveEmptyDirectoryDurably(
         const std::filesystem::path& acDirectory) noexcept;
@@ -162,20 +167,18 @@ struct PartyQuestStableStorage
 #endif
     }
 
+    /** Implementation exists on both build platforms; Windows is runtime-gated to NTFS + NtFlushBuffersFileEx. */
     [[nodiscard]] static constexpr bool HasDocumentedDurableDirectoryTreePrimitive() noexcept
     {
-#ifdef _WIN32
-        return false;
-#else
         return true;
-#endif
     }
 
     /**
      * Linux exposes fsync() on directory file descriptors for persisting
-     * directory-entry changes. The current Windows implementation deliberately
-     * reports Unsupported for a generic directory flush; NTFS file creation and
-     * rename durability use narrower write-through primitives instead.
+     * directory-entry changes. Generic Windows FlushDirectory intentionally
+     * remains Unsupported: the Windows durable-tree path uses a narrower,
+     * runtime-gated NTFS NtFlushBuffersFileEx contract instead of granting a
+     * generic directory-flush capability to arbitrary callers.
      */
     [[nodiscard]] static constexpr bool HasDocumentedParentDirectoryFlushPrimitive() noexcept
     {

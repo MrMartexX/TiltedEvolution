@@ -22,11 +22,7 @@ const PartyQuestPlayerProfileId kPlayer{
 
 PartyQuestPersistenceGuarantee ExpectedOwnerGuarantee() noexcept
 {
-#ifdef _WIN32
-    return PartyQuestPersistenceGuarantee::ProcessCrashResilient;
-#else
     return PartyQuestPersistenceGuarantee::PowerLossDurable;
-#endif
 }
 
 PartyQuestRuntimeCompatibilityRequirement BuildRequirement(GameId aQuestId)
@@ -130,12 +126,10 @@ TEST_CASE(
     REQUIRE(pSession != nullptr);
     auto& session = *pSession;
 
-    // Exercise the local-durability gate independently of the production
-    // platform's bound writer. Linux now legitimately binds a reviewed strong
-    // runtime namespace, while Windows remains process-crash resilient. An
-    // explicit weak test handler keeps this proof cross-platform and makes the
-    // first refusal about local durability rather than whichever writer the
-    // current platform happens to provide.
+    // Exercise the local-durability gate independently of the production bound
+    // writer. Supported Linux and Windows NTFS workspaces now legitimately bind
+    // a reviewed strong runtime namespace. An explicit weak test handler makes
+    // the first refusal specifically about local durability.
     session.SetDurableStateHandler(
         [](const PartyQuestRuntimeRecoveryState&)
         {

@@ -59,11 +59,7 @@ PartyQuestCoopSavePaths BuildPaths(
 
 PartyQuestPersistenceGuarantee ExpectedOwnerGuarantee() noexcept
 {
-#ifdef _WIN32
-    return PartyQuestPersistenceGuarantee::ProcessCrashResilient;
-#else
     return PartyQuestPersistenceGuarantee::PowerLossDurable;
-#endif
 }
 } // namespace
 
@@ -90,19 +86,12 @@ TEST_CASE(
         kCampaign,
         kOtherPlayer));
 
-#ifdef _WIN32
-    REQUIRE_FALSE(capability.PreparePowerLossDurableRuntimeNamespace(
-        paths,
-        kCampaign,
-        kPlayer));
-#else
     REQUIRE(capability.PreparePowerLossDurableRuntimeNamespace(
         paths,
         kCampaign,
         kPlayer));
     REQUIRE(std::filesystem::is_directory(paths.MetadataDirectory));
     REQUIRE(std::filesystem::is_directory(paths.SidecarsDirectory));
-#endif
 }
 
 TEST_CASE(
@@ -186,7 +175,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "runtime session owner uses strong namespace only on the reviewed platform",
+    "runtime session owner promotes an exact supported workspace without changing global policy",
     "[quest.party-state.runtime-owner][workspace-capability][durability]")
 {
     RuntimeNamespaceSandbox sandbox;
@@ -200,10 +189,8 @@ TEST_CASE(
     REQUIRE(owner.GetRuntimeSession()->GetPersistenceGuarantee() ==
         ExpectedOwnerGuarantee());
 
-#ifndef _WIN32
     REQUIRE(std::filesystem::is_directory(paths.MetadataDirectory));
     REQUIRE(std::filesystem::is_directory(paths.SidecarsDirectory));
-#endif
 
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);

@@ -171,9 +171,6 @@ bool PartyQuestReplicaWorkspacePublicationCapability::PreparePowerLossDurableRun
     if (!Protects(acPaths, acCampaignId, acPlayerProfileId))
         return false;
 
-#if defined(_WIN32)
-    return false;
-#else
     if (PartyQuestStableStorage::EnsureDirectoryTreeDurably(
             acPaths.MetadataDirectory) != PartyQuestStableStorageStatus::Success)
     {
@@ -183,7 +180,6 @@ bool PartyQuestReplicaWorkspacePublicationCapability::PreparePowerLossDurableRun
     return PartyQuestStableStorage::EnsureDirectoryTreeDurably(
                acPaths.SidecarsDirectory) ==
         PartyQuestStableStorageStatus::Success;
-#endif
 }
 
 PartyQuestReplicaWorkspaceLease::~PartyQuestReplicaWorkspaceLease() noexcept
