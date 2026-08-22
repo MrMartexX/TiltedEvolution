@@ -169,7 +169,7 @@ std::vector<PartyQuestReplicaFileSpec> BuildSoloFiles(
 } // namespace
 
 TEST_CASE(
-    "stable storage promotes exact directory namespace without widening destructive Windows primitives",
+    "stable storage promotes exact directory namespace without widening generic Windows directory flush",
     "[quest.party-state.durability][directory]")
 {
     DurabilitySandbox sandbox;
@@ -183,14 +183,14 @@ TEST_CASE(
         PartyQuestStableStorageStatus::Success);
 
 #ifdef _WIN32
-    // Windows only gains the reviewed NTFS directory-tree promotion contract.
-    // Generic directory flush and destructive restore primitives remain outside
-    // the current evidence envelope and must continue to fail closed.
+    // Windows stable-storage authority remains deliberately decomposed. The
+    // exact NTFS copy/remove primitives are now reviewed, but arbitrary callers
+    // still cannot obtain a generic directory-handle flush capability.
     REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedParentDirectoryFlushPrimitive());
-    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableFileCopyPrimitive());
-    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableFileRemovalPrimitive());
-    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
 #endif
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileCopyPrimitive());
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileRemovalPrimitive());
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
 
     REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
 }
