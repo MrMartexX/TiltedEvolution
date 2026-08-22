@@ -84,16 +84,16 @@ struct PartyQuestStableStorage
      * Streams one exact regular file into a new/truncated regular destination and
      * establishes both destination data and its directory entry as stable.
      *
-     * The POSIX implementation uses O_NOFOLLOW handles for both source and
-     * destination, validates the source as a regular file, copies with bounded
-     * memory, fsyncs the exact destination, closes both descriptors, then fsyncs
-     * the destination parent. This avoids loading Skyrim save/sidecar sized files
-     * into memory merely to create rollback evidence.
+     * POSIX uses O_NOFOLLOW handles for both source and destination, validates the
+     * source as a regular file, copies with bounded memory, fsyncs the destination,
+     * closes both descriptors, then fsyncs the destination parent.
      *
-     * Windows deliberately remains Unsupported because the current restore path
-     * also lacks a reviewed durable delete/copy publication contract; this method
-     * must not be used to imply that Windows destructive restore is ready merely
-     * because runtime metadata directories can now be promoted durably.
+     * Windows requires an already-existing reviewed NTFS destination namespace,
+     * pins the source against concurrent write/delete, rejects reparse/non-regular
+     * and hard-linked source/destination nodes, compares exact file identity before
+     * truncation, streams through exclusive FILE_FLAG_WRITE_THROUGH destination
+     * authority, flushes that handle, then crosses the NTFS parent-directory
+     * metadata barrier. The primitive never creates a missing parent directory.
      */
     [[nodiscard]] static PartyQuestStableStorageStatus CopyFileDurably(
         const std::filesystem::path& acSource,
@@ -126,10 +126,14 @@ struct PartyQuestStableStorage
         bool aReplaceExisting = false) noexcept;
 
     /**
-     * Durably removes one regular file namespace entry when the platform has a
-     * reviewed primitive. POSIX performs unlink followed by fsync(parent).
-     * Windows deliberately remains Unsupported until delete-on-close / metadata
-     * publication semantics are accepted with the same confidence as NTFS rename.
+     * Durably removes one regular file namespace entry.
+     *
+     * POSIX performs unlink followed by fsync(parent). Windows requires an exact
+     * non-reparse, single-link regular file on a reviewed NTFS namespace, marks
+     * it through FileDispositionInfo using DELETE access, closes the exact
+     * handle, verifies that the name is actually absent (so delayed deletion is
+     * never mislabeled success), then crosses the NTFS parent-directory metadata
+     * barrier. This is single-entry authority only and never follows aliases.
      */
     [[nodiscard]] static PartyQuestStableStorageStatus RemoveFileDurably(
         const std::filesystem::path& acPath) noexcept;
@@ -138,12 +142,11 @@ struct PartyQuestStableStorage
      * Durably removes one already-empty directory namespace entry.
      *
      * POSIX validates the final node as a real directory, calls rmdir(), then
-     * fsyncs the containing directory so successful return proves the removed
-     * child name crossed the stable-storage barrier. Windows remains Unsupported
-     * for destructive directory removal; durable namespace creation/promotion is
-     * a separate, narrower contract. Callers must prove the directory is inside
-     * their confined namespace and must never use this primitive as recursive
-     * deletion authority.
+     * fsyncs the containing directory. Windows opens the exact non-reparse NTFS
+     * directory with DELETE authority, marks FileDispositionInfo, requires the
+     * name to be absent after close, then crosses the parent-directory metadata
+     * barrier. A non-empty directory fails closed; recursive deletion is never
+     * implied by this primitive.
      */
     [[nodiscard]] static PartyQuestStableStorageStatus RemoveEmptyDirectoryDurably(
         const std::filesystem::path& acDirectory) noexcept;
@@ -160,11 +163,7 @@ struct PartyQuestStableStorage
 
     [[nodiscard]] static constexpr bool HasDocumentedDurableFileCopyPrimitive() noexcept
     {
-#ifdef _WIN32
-        return false;
-#else
         return true;
-#endif
     }
 
     /** Implementation exists on both build platforms; Windows is runtime-gated to NTFS + NtFlushBuffersFileEx. */
@@ -176,9 +175,10 @@ struct PartyQuestStableStorage
     /**
      * Linux exposes fsync() on directory file descriptors for persisting
      * directory-entry changes. Generic Windows FlushDirectory intentionally
-     * remains Unsupported: the Windows durable-tree path uses a narrower,
-     * runtime-gated NTFS NtFlushBuffersFileEx contract instead of granting a
-     * generic directory-flush capability to arbitrary callers.
+     * remains Unsupported: Windows stable-storage operations use the narrower,
+     * runtime-gated NTFS NtFlushBuffersFileEx contract through
+     * EnsureDirectoryTreeDurably instead of granting a generic directory-flush
+     * capability to arbitrary callers.
      */
     [[nodiscard]] static constexpr bool HasDocumentedParentDirectoryFlushPrimitive() noexcept
     {
@@ -201,19 +201,11 @@ struct PartyQuestStableStorage
 
     [[nodiscard]] static constexpr bool HasDocumentedDurableFileRemovalPrimitive() noexcept
     {
-#ifdef _WIN32
-        return false;
-#else
         return true;
-#endif
     }
 
     [[nodiscard]] static constexpr bool HasDocumentedDurableEmptyDirectoryRemovalPrimitive() noexcept
     {
-#ifdef _WIN32
-        return false;
-#else
         return true;
-#endif
     }
 };
