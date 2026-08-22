@@ -81,7 +81,6 @@ PartyQuestReplicaDurableSnapshotResult PromoteProtected(
     if (preflight.Status != PartyQuestReplicaDurableSnapshotStatus::Promoted)
         return preflight;
 
-#ifndef _WIN32
     try
     {
         const auto manifestPath =
@@ -148,6 +147,10 @@ PartyQuestReplicaDurableSnapshotResult PromoteProtected(
                 return result;
             }
 
+            // Establish the exact containing name-space before and after the
+            // data barrier. POSIX implements this with directory fsync; Windows
+            // uses the narrower reviewed NTFS NtFlushBuffersFileEx tree barrier.
+            // Generic Windows FlushDirectory remains deliberately unavailable.
             stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(
                 candidate->parent_path());
             if (stable != PartyQuestStableStorageStatus::Success)
@@ -156,7 +159,9 @@ PartyQuestReplicaDurableSnapshotResult PromoteProtected(
             stable = PartyQuestStableStorage::FlushFile(*candidate);
             if (stable != PartyQuestStableStorageStatus::Success)
                 return StableFailure(stable);
-            stable = PartyQuestStableStorage::FlushParentDirectory(*candidate);
+
+            stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(
+                candidate->parent_path());
             if (stable != PartyQuestStableStorageStatus::Success)
                 return StableFailure(stable);
 
@@ -216,14 +221,6 @@ PartyQuestReplicaDurableSnapshotResult PromoteProtected(
         result.Status = PartyQuestReplicaDurableSnapshotStatus::ManifestInvalid;
         return result;
     }
-#else
-    (void)acPaths;
-    (void)aKind;
-    result.Status = PartyQuestReplicaDurableSnapshotStatus::UnsupportedPlatform;
-    result.ManifestStatus =
-        PartyQuestReplicaManifestPersistenceStatus::PowerLossDurabilityUnsupported;
-    return result;
-#endif
 }
 } // namespace
 
