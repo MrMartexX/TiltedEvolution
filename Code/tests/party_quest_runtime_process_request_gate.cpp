@@ -274,7 +274,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "process request gate drops a plan when canonical published head changes during fresh evidence sampling",
+    "process request gate drops a plan before issuing authority when canonical published head changes during fresh evidence sampling",
     "[quest.party-state.runtime-request][revalidation][race]")
 {
     PartyQuestRuntimeProcessOwnerTestScope scope(
@@ -312,7 +312,7 @@ TEST_CASE(
         });
 
     REQUIRE(result.Status ==
-        PartyQuestRuntimeProcessRequestStatus::CanonicalAuthorizationUnavailable);
+        PartyQuestRuntimeProcessRequestStatus::PostPlanRevalidationFailed);
     REQUIRE_FALSE(result.Request.has_value());
     REQUIRE_FALSE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
     REQUIRE(scope.RuntimeSession().GetCoordinator().GetActive() == nullptr);
