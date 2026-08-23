@@ -204,23 +204,6 @@ TEST_CASE(
 
     const auto prepared = PartyQuestReplicaDurableRestorePreparation::Prepare(
         paths, plan, kSuccessRestoreId);
-
-#ifdef _WIN32
-    // Preparation is now strong on NTFS, while the executor remains deliberately
-    // closed until its complete replacement/rollback fault matrix is enabled.
-    REQUIRE(prepared.IsBackupsReady());
-    REQUIRE(prepared.State.has_value());
-
-    PartyQuestReplicaWorkspacePublicationCapability missingCapability;
-    const auto unsupported =
-        PartyQuestReplicaDurableRestoreExecutorTestAccess::ContinueAuthorized(
-            paths,
-            kCampaign,
-            kPlayer,
-            prepared.JournalPath,
-            missingCapability);
-    REQUIRE(unsupported.Status == PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform);
-#else
     REQUIRE(prepared.IsBackupsReady());
     REQUIRE(prepared.State.has_value());
 
@@ -263,11 +246,11 @@ TEST_CASE(
     REQUIRE(continued.Status == PartyQuestReplicaDurableRestoreStatus::Success);
     REQUIRE(continued.Phase == PartyQuestReplicaRestoreJournalPhase::Committed);
     REQUIRE_FALSE(continued.RequiresRecovery);
+    REQUIRE_FALSE(continued.CleanupPending);
     REQUIRE(ReadText(paths.SavesDirectory / "Hero.ess") == "CHECKPOINT_ESS");
     REQUIRE(ReadText(paths.SavesDirectory / "Hero.skse") == "CHECKPOINT_SKSE");
     REQUIRE(heldLease.IsHeld());
     REQUIRE(heldLease.Protects(paths, kCampaign, kPlayer));
-#endif
 
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);
@@ -288,22 +271,8 @@ TEST_CASE(
 
     const auto prepared = PartyQuestReplicaDurableRestorePreparation::Prepare(
         paths, plan, kRollbackRestoreId);
-
-#ifdef _WIN32
     REQUIRE(prepared.IsBackupsReady());
     REQUIRE(prepared.State.has_value());
-
-    PartyQuestReplicaWorkspacePublicationCapability missingCapability;
-    const auto unsupported =
-        PartyQuestReplicaDurableRestoreExecutorTestAccess::RecoverAuthorized(
-            paths,
-            kCampaign,
-            kPlayer,
-            prepared.JournalPath,
-            missingCapability);
-    REQUIRE(unsupported.Status == PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform);
-#else
-    REQUIRE(prepared.IsBackupsReady());
 
     PartyQuestReplicaWorkspaceLease heldLease;
     REQUIRE(heldLease.Acquire(paths, kCampaign, kPlayer) ==
@@ -358,6 +327,7 @@ TEST_CASE(
     REQUIRE(recovered.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
     REQUIRE(recovered.RollbackPerformed);
     REQUIRE_FALSE(recovered.RequiresRecovery);
+    REQUIRE_FALSE(recovered.CleanupPending);
     REQUIRE(ReadText(paths.SavesDirectory / "Hero.ess") == "RECOVERY_ORIGINAL_ESS");
     REQUIRE(ReadText(paths.SavesDirectory / "Hero.skse") == "RECOVERY_ORIGINAL_SKSE");
 
@@ -370,5 +340,4 @@ TEST_CASE(
     REQUIRE(terminal.State->Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
     REQUIRE(heldLease.IsHeld());
     REQUIRE(heldLease.Protects(paths, kCampaign, kPlayer));
-#endif
 }
