@@ -136,9 +136,24 @@ PartyQuestRuntimeProcessRequestGate::PlanLatest(
             return result;
         }
 
+        // Sampling local evidence may synchronously re-enter protocol/runtime
+        // integrations. Revalidate the exact candidate before issuing any new
+        // canonical authorization so a newer head cannot mint authority that is
+        // then accidentally paired with this stale candidate.
+        if (!MatchesProcessOwnerCampaign(campaignId) ||
+            aInbox.GetCampaignId() != campaignId ||
+            !MatchesLatestCandidate(aInbox, candidate) ||
+            !MatchesPublishedHead(candidate, acPublishedReplica))
+        {
+            result.Status =
+                PartyQuestRuntimeProcessRequestStatus::PostPlanRevalidationFailed;
+            return result;
+        }
+
         // Issue canonical provenance only after all independent local evidence
-        // exists. This avoids treating a transient missing provider as a reason
-        // to consume/construct planning authority.
+        // exists and the original candidate has survived point-of-authority
+        // revalidation. A transient missing provider or reentrant canonical
+        // advance therefore cannot consume/redirect planning authority.
         auto authorization = aInbox.TryAuthorizeLatest(
             acQuestId,
             acPublishedReplica);
