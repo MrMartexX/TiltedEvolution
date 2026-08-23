@@ -171,10 +171,8 @@ PreparedFixture PrepareFixture(
         fixture.Paths,
         fixture.Plan,
         aRestoreId);
-#ifndef _WIN32
     REQUIRE(fixture.Prepared.IsBackupsReady());
     REQUIRE(fixture.Prepared.State.has_value());
-#endif
     return fixture;
 }
 
@@ -225,16 +223,6 @@ TEST_CASE(
     "[quest.party-state.replica-restore][durability][commit]")
 {
     Sandbox sandbox;
-
-#ifdef _WIN32
-    PartyQuestCoopSavePaths paths;
-    const auto result = PartyQuestReplicaDurableRestoreExecutor::Continue(
-        paths,
-        kCampaign,
-        kPlayer,
-        sandbox.Root / "journal.bin");
-    REQUIRE(result.Status == PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform);
-#else
     constexpr uint64_t restoreId = 0x61010001;
     auto fixture = PrepareFixture(sandbox, restoreId);
     const auto rollbackPaths = [&]() {
@@ -287,7 +275,6 @@ TEST_CASE(
         fixture.Prepared.JournalPath);
     REQUIRE(recovered.Status == PartyQuestReplicaDurableRestoreStatus::AlreadyCommitted);
     REQUIRE_FALSE(recovered.CleanupPending);
-#endif
 
     RequireGlobalMutationGateClosed();
 }
@@ -296,7 +283,6 @@ TEST_CASE(
     "durable MutationStarted cut reaches compact RolledBack tombstone idempotently",
     "[quest.party-state.replica-restore][durability][rollback][fault]")
 {
-#ifndef _WIN32
     Sandbox sandbox;
     constexpr uint64_t restoreId = 0x61010002;
     auto fixture = PrepareFixture(sandbox, restoreId);
@@ -351,7 +337,6 @@ TEST_CASE(
         restoreId);
     REQUIRE(duplicate.Status ==
         PartyQuestReplicaDurableRestorePreparationStatus::RestoreIdConflict);
-#endif
 
     RequireGlobalMutationGateClosed();
 }
@@ -360,7 +345,6 @@ TEST_CASE(
     "durable partial destination publication rolls back all originals",
     "[quest.party-state.replica-restore][durability][rollback][partial]")
 {
-#ifndef _WIN32
     Sandbox sandbox;
     auto fixture = PrepareFixture(sandbox, 0x61010003);
 
@@ -389,7 +373,6 @@ TEST_CASE(
     REQUIRE_FALSE(recovered.CleanupPending);
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
-#endif
 
     RequireGlobalMutationGateClosed();
 }
@@ -398,7 +381,6 @@ TEST_CASE(
     "durable Restored cut verifies then commits during recovery",
     "[quest.party-state.replica-restore][durability][recover-commit]")
 {
-#ifndef _WIN32
     Sandbox sandbox;
     auto fixture = PrepareFixture(sandbox, 0x61010004);
 
@@ -428,7 +410,6 @@ TEST_CASE(
     REQUIRE(committed.Phase == PartyQuestReplicaRestoreJournalPhase::Committed);
     for (const auto& operation : committed.Operations)
         REQUIRE_FALSE(std::filesystem::exists(operation.RollbackPath));
-#endif
 
     RequireGlobalMutationGateClosed();
 }
@@ -437,7 +418,6 @@ TEST_CASE(
     "corrupted Restored state rolls back and terminates RolledBack",
     "[quest.party-state.replica-restore][durability][recover-rollback][restored]")
 {
-#ifndef _WIN32
     Sandbox sandbox;
     auto fixture = PrepareFixture(sandbox, 0x61010009);
 
@@ -467,7 +447,6 @@ TEST_CASE(
 
     const auto terminal = LoadStrongJournal(fixture.Prepared.JournalPath);
     REQUIRE(terminal.Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
-#endif
 
     RequireGlobalMutationGateClosed();
 }
@@ -476,7 +455,6 @@ TEST_CASE(
     "durable RolledBack cut resumes only compaction and keeps restore id tombstone",
     "[quest.party-state.replica-restore][durability][rollback-terminal][fault]")
 {
-#ifndef _WIN32
     Sandbox sandbox;
     constexpr uint64_t restoreId = 0x6101000A;
     auto fixture = PrepareFixture(sandbox, restoreId);
@@ -536,7 +514,6 @@ TEST_CASE(
         restoreId);
     REQUIRE(duplicate.Status ==
         PartyQuestReplicaDurableRestorePreparationStatus::RestoreIdConflict);
-#endif
 
     RequireGlobalMutationGateClosed();
 }
@@ -545,7 +522,6 @@ TEST_CASE(
     "durable Committed cut resumes only compaction and never rolls back",
     "[quest.party-state.replica-restore][durability][commit][fault]")
 {
-#ifndef _WIN32
     Sandbox sandbox;
     auto fixture = PrepareFixture(sandbox, 0x61010005);
 
@@ -570,7 +546,6 @@ TEST_CASE(
     REQUIRE(recovered.IsCheckpointRestored());
     REQUIRE_FALSE(recovered.RollbackPerformed);
     REQUIRE_FALSE(recovered.CleanupPending);
-#endif
 
     RequireGlobalMutationGateClosed();
 }
@@ -579,7 +554,6 @@ TEST_CASE(
     "durable continuation rejects stale live destination before mutation barrier",
     "[quest.party-state.replica-restore][durability][stale]")
 {
-#ifndef _WIN32
     Sandbox sandbox;
     auto fixture = PrepareFixture(sandbox, 0x61010006);
     WriteText(fixture.Paths.SavesDirectory / "Hero.ess", "EXTERNAL_CHANGE");
@@ -602,7 +576,6 @@ TEST_CASE(
         fixture.Prepared.JournalPath);
     REQUIRE(recovered.Status == PartyQuestReplicaDurableRestoreStatus::ResumeBeforeMutation);
     REQUIRE(recovered.Phase == PartyQuestReplicaRestoreJournalPhase::BackupsReady);
-#endif
 
     RequireGlobalMutationGateClosed();
 }
@@ -611,7 +584,6 @@ TEST_CASE(
     "durable continuation rejects changed promoted checkpoint before mutation barrier",
     "[quest.party-state.replica-restore][durability][checkpoint]")
 {
-#ifndef _WIN32
     Sandbox sandbox;
     auto fixture = PrepareFixture(sandbox, 0x61010007);
     REQUIRE(fixture.Prepared.State.has_value());
@@ -630,7 +602,6 @@ TEST_CASE(
     REQUIRE_FALSE(result.RequiresRecovery);
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
-#endif
 
     RequireGlobalMutationGateClosed();
 }
@@ -639,7 +610,6 @@ TEST_CASE(
     "rollback durably removes destination that was absent before mutation",
     "[quest.party-state.replica-restore][durability][rollback][missing]")
 {
-#ifndef _WIN32
     Sandbox sandbox;
     auto fixture = PrepareFixture(sandbox, 0x61010008, true);
     REQUIRE(fixture.Prepared.State.has_value());
@@ -678,7 +648,6 @@ TEST_CASE(
     REQUIRE_FALSE(recovered.CleanupPending);
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
     REQUIRE_FALSE(std::filesystem::exists(fixture.Paths.SavesDirectory / "Hero.skse"));
-#endif
 
     RequireGlobalMutationGateClosed();
 }
