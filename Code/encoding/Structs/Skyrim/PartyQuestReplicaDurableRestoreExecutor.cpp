@@ -290,7 +290,7 @@ bool EnsureFileDurableAndMatches(
     if (!MatchesFile(acPath, aExpectedSize, aExpectedDigest))
         return false;
     if (PartyQuestStableStorage::FlushFile(acPath) != PartyQuestStableStorageStatus::Success ||
-        PartyQuestStableStorage::FlushDirectory(acPath.parent_path()) !=
+        PartyQuestStableStorage::EnsureDirectoryTreeDurably(acPath.parent_path()) !=
             PartyQuestStableStorageStatus::Success)
     {
         return false;
@@ -323,7 +323,7 @@ bool EnsureOriginalDurableAndMatches(
     }
 
     if (InspectNode(acOperation.ReplicaDestinationPath) != NodeState::Missing ||
-        PartyQuestStableStorage::FlushDirectory(
+        PartyQuestStableStorage::EnsureDirectoryTreeDurably(
             acOperation.ReplicaDestinationPath.parent_path()) !=
             PartyQuestStableStorageStatus::Success)
     {
@@ -409,8 +409,17 @@ bool RemoveDirectoryIfPresentDurably(const std::filesystem::path& acPath) noexce
         return true;
     if (state != NodeState::Directory)
         return false;
+#ifdef _WIN32
+    // Terminal correctness does not depend on deleting empty rollback
+    // directories. Their authoritative files and transient journals have
+    // already been durably removed, while the primary terminal journal keeps
+    // the RestoreId tombstone non-reusable. Keep empty directories as inert GC
+    // residue rather than widening Windows directory-delete authority.
+    return true;
+#else
     return PartyQuestStableStorage::RemoveEmptyDirectoryDurably(acPath) ==
         PartyQuestStableStorageStatus::Success;
+#endif
 }
 
 PartyQuestReplicaDurableRestoreStatus MapLeaseStatus(
@@ -713,7 +722,7 @@ bool CompactTerminalTransaction(
 
     if (PartyQuestStableStorage::FlushFile(acJournalPath) !=
             PartyQuestStableStorageStatus::Success ||
-        PartyQuestStableStorage::FlushDirectory(acState.TransactionDirectory) !=
+        PartyQuestStableStorage::EnsureDirectoryTreeDurably(acState.TransactionDirectory) !=
             PartyQuestStableStorageStatus::Success)
     {
         success = false;
@@ -928,15 +937,6 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::C
     const std::filesystem::path& acJournalPath,
     PartyQuestReplicaDurableRestoreHooks aHooks) noexcept
 {
-#ifdef _WIN32
-    (void)acPaths;
-    (void)acExpectedCampaignId;
-    (void)acExpectedPlayerProfileId;
-    (void)aHooks;
-    return MakeReport(
-        PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform,
-        acJournalPath);
-#else
     try
     {
         if (!ValidateExpectedIdentity(
@@ -986,7 +986,6 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::C
         report.RequiresRecovery = true;
         return report;
     }
-#endif
 }
 
 PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized(
@@ -997,16 +996,6 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::C
     const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
     PartyQuestReplicaDurableRestoreHooks aHooks) noexcept
 {
-#ifdef _WIN32
-    (void)acPaths;
-    (void)acExpectedCampaignId;
-    (void)acExpectedPlayerProfileId;
-    (void)acWorkspaceCapability;
-    (void)aHooks;
-    return MakeReport(
-        PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform,
-        acJournalPath);
-#else
     try
     {
         if (!ValidateExpectedIdentity(
@@ -1312,7 +1301,6 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::C
         report.RequiresRecovery = true;
         return report;
     }
-#endif
 }
 
 PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::Recover(
@@ -1322,15 +1310,6 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::R
     const std::filesystem::path& acJournalPath,
     PartyQuestReplicaDurableRestoreHooks aHooks) noexcept
 {
-#ifdef _WIN32
-    (void)acPaths;
-    (void)acExpectedCampaignId;
-    (void)acExpectedPlayerProfileId;
-    (void)aHooks;
-    return MakeReport(
-        PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform,
-        acJournalPath);
-#else
     try
     {
         if (!ValidateExpectedIdentity(
@@ -1380,7 +1359,6 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::R
         report.RequiresRecovery = true;
         return report;
     }
-#endif
 }
 
 PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::RecoverAuthorized(
@@ -1391,16 +1369,6 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::R
     const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
     PartyQuestReplicaDurableRestoreHooks aHooks) noexcept
 {
-#ifdef _WIN32
-    (void)acPaths;
-    (void)acExpectedCampaignId;
-    (void)acExpectedPlayerProfileId;
-    (void)acWorkspaceCapability;
-    (void)aHooks;
-    return MakeReport(
-        PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform,
-        acJournalPath);
-#else
     try
     {
         if (!ValidateExpectedIdentity(
@@ -1567,5 +1535,4 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::R
         report.RequiresRecovery = true;
         return report;
     }
-#endif
 }
