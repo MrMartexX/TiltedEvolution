@@ -9,6 +9,7 @@
 #include <Services/QuestSnapshotCollector.h>
 #include <Services/ImguiService.h>
 
+#include <PartyQuestSkyrimRuntimeCompatibilityEvidence.h>
 #include <PlayerCharacter.h>
 #include <Forms/TESQuest.h>
 #include <Games/TES.h>
@@ -19,6 +20,7 @@
 #include <Messages/RequestQuestUpdate.h>
 #include <Messages/NotifyQuestUpdate.h>
 #include <Messages/PartyQuestMessages.h>
+#include <Structs/Skyrim/PartyQuestRuntimeProcessRequestGate.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 static TESQuest* FindQuestByNameId(const String& name)
@@ -32,6 +34,9 @@ static TESQuest* FindQuestByNameId(const String& name)
 QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
     : m_world(aWorld)
 {
+    m_partyQuestRuntimeCompatibilityManifest =
+        PartyQuestSkyrimRuntimeCompatibilityEvidence::BuildReviewedManifest();
+
     m_joinedConnection = aDispatcher.sink<ConnectedEvent>().connect<&QuestService::OnConnected>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&QuestService::OnDisconnected>(this);
     m_partyJoinedConnection = aDispatcher.sink<PartyJoinedEvent>().connect<&QuestService::OnPartyJoined>(this);
@@ -48,6 +53,11 @@ QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
     auto* pEventList = EventDispatcherManager::Get();
     pEventList->questStartStopEvent.RegisterSink(this);
     pEventList->questStageEvent.RegisterSink(this);
+
+    spdlog::info(
+        "PartyQuestRuntime reviewed compatibility registry loaded: profiles={} nativeAdapter={:016X}",
+        m_partyQuestRuntimeCompatibilityManifest.GetRequirementCount(),
+        PartyQuestSkyrimRuntimeCompatibilityEvidence::NativeAdapterFingerprint);
 }
 
 void QuestService::OnConnected(const ConnectedEvent& acEvent) noexcept
@@ -499,6 +509,69 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
     }
 }
 
+void QuestService::PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexcept
+{
+    try
+    {
+        if (!m_partyQuestProtocolVerified || !m_partyQuestSession ||
+            !m_world.GetPartyService().IsInParty())
+        {
+            return;
+        }
+
+        const uint32_t formId = m_world.GetModSystem().GetGameId(aQuestId);
+        TESQuest* pQuest = Cast<TESQuest>(TESForm::GetById(formId));
+        if (!pQuest)
+        {
+            spdlog::warn(
+                "PartyQuestRuntime planning suppressed: quest={:016X} has no exact local TESQuest",
+                aQuestId.LogFormat());
+            return;
+        }
+
+        const auto result = PartyQuestRuntimeProcessRequestGate::PlanLatest(
+            m_partyQuestRuntimeCanonicalInbox,
+            m_partyQuestSession->GetReplica(),
+            aQuestId,
+            m_partyQuestRuntimeCompatibilityManifest,
+            [this, pQuest](const PartyQuestRuntimeCanonicalCandidate& acCandidate)
+                -> std::optional<PartyQuestRuntimeProcessPlanningEvidence>
+            {
+                return PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveFresh(
+                    pQuest,
+                    m_world.GetModSystem(),
+                    acCandidate);
+            });
+
+        if (result.IsPlanned())
+        {
+            // P0-D ends at a process-owned dry-run request. Native mutation stays
+            // physically disconnected until C/E/F and live validation are proven.
+            spdlog::info(
+                "PartyQuestRuntime dry-run request planned: quest={:016X} transaction={} worldRevision={} generation={} identity={:016X}",
+                aQuestId.LogFormat(),
+                result.Request->TransactionId,
+                result.Request->TargetWorldRevision,
+                result.RuntimeGeneration,
+                result.Request->RequestIdentity);
+            return;
+        }
+
+        spdlog::debug(
+            "PartyQuestRuntime planning rejected fail-closed: quest={:016X} status={} plannerStatus={} generation={}",
+            aQuestId.LogFormat(),
+            static_cast<unsigned>(result.Status),
+            static_cast<unsigned>(result.Planner.Status),
+            result.RuntimeGeneration);
+    }
+    catch (...)
+    {
+        spdlog::error(
+            "PartyQuestRuntime planning failed closed on unexpected exception: quest={:016X}",
+            aQuestId.LogFormat());
+    }
+}
+
 void QuestService::OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUpdate& acUpdate) noexcept
 {
     if (!m_partyQuestSession || !m_world.GetPartyService().IsInParty())
@@ -547,6 +620,21 @@ void QuestService::OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUp
                         campaignId.High,
                         campaignId.Low,
                         static_cast<unsigned>(observeStatus));
+                }
+                else if (observeStatus == PartyQuestRuntimeCanonicalObserveStatus::Accepted ||
+                         observeStatus == PartyQuestRuntimeCanonicalObserveStatus::Superseded ||
+                         observeStatus == PartyQuestRuntimeCanonicalObserveStatus::Duplicate)
+                {
+                    // Canonical network delivery owns no Skyrim observation
+                    // authority. Move the final consumption/evidence sampling to
+                    // the process update runner; PlanLatest revalidates the exact
+                    // inbox/replica head and generation again before and after the
+                    // fresh local observation.
+                    m_world.GetRunner().Queue(
+                        [this, questId = acUpdate.CanonicalSnapshot.QuestId]()
+                        {
+                            PlanPartyQuestCanonicalRuntimeRequest(questId);
+                        });
                 }
             }
             else
