@@ -1,7 +1,7 @@
 #include <Windows.h>
 #include <bcrypt.h>
 
-#include <Structs/Skyrim/PartyQuestLineageProviderAbi.h>
+#include "../encoding/Structs/Skyrim/PartyQuestLineageProviderAbi.h"
 
 #include <cstdint>
 #include <cstring>
