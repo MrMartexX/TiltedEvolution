@@ -71,6 +71,11 @@ public:
         size_t aMissingCount,
         uint64_t aGeneration) noexcept;
 
+    static void RecordCompatibilityObservation(
+        TESQuest* apQuest,
+        const GameId& acExpectedQuestId,
+        const ModSystem& acModSystem) noexcept;
+
     static void RecordQuestObservation(
         TESQuest* apQuest,
         const QuestSnapshot& acSnapshot,

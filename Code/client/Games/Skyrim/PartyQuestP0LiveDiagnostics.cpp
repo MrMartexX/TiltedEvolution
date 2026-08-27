@@ -474,6 +474,54 @@ void PartyQuestP0LiveDiagnostics::RecordModMappingEnd(
     WriteEvent("mod_mapping_rebuild_end", fields.str());
 }
 
+void PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(
+    TESQuest* apQuest,
+    const GameId& acExpectedQuestId,
+    const ModSystem& acModSystem) noexcept
+{
+    if (!apQuest || !acExpectedQuestId || !IsEnabled())
+        return;
+
+    const auto compatibility =
+        PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
+            apQuest,
+            acModSystem,
+            acExpectedQuestId);
+
+    std::ostringstream fields;
+    fields << "\"generation\":"
+           << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration()
+           << ",\"quest_id\":" << GameIdJson(acExpectedQuestId);
+
+    if (compatibility)
+    {
+        fields << ",\"available\":true"
+               << ",\"profile_version\":" << compatibility->ProfileVersion
+               << ",\"resolved_record_fingerprint\":"
+               << compatibility->ResolvedRecordFingerprint
+               << ",\"winning_override_fingerprint\":"
+               << compatibility->WinningOverrideFingerprint
+               << ",\"script_fingerprint\":"
+               << compatibility->ScriptFingerprint
+               << ",\"native_adapter_fingerprint\":"
+               << compatibility->NativeAdapterFingerprint
+               << ",\"adapter_mutation_components\":"
+               << static_cast<uint32_t>(compatibility->AdapterMutationComponents)
+               << ",\"reviewed_profile\":"
+               << (PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(
+                       acExpectedQuestId) ? "true" : "false");
+    }
+    else
+    {
+        fields << ",\"available\":false"
+               << ",\"reason\":\"live-observation-failed-closed\"";
+    }
+
+    fields << ",\"grants_planning_authority\":false"
+           << ",\"grants_mutation_authority\":false";
+    WriteEvent("runtime_compatibility_observed", fields.str());
+}
+
 void PartyQuestP0LiveDiagnostics::RecordQuestObservation(
     TESQuest* apQuest,
     const QuestSnapshot& acSnapshot,
@@ -492,12 +540,6 @@ void PartyQuestP0LiveDiagnostics::RecordQuestObservation(
     GameId roundTrip{};
     const bool roundTripMapped = localFormId != 0 && acModSystem.GetServerModId(localFormId, roundTrip);
     const bool roundTripMatches = roundTripMapped && roundTrip == acSnapshot.QuestId;
-    const auto compatibility =
-        PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
-            apQuest,
-            acModSystem,
-            acSnapshot.QuestId);
-
     std::ostringstream stages;
     stages << '[';
     bool firstStage = true;
@@ -540,33 +582,9 @@ void PartyQuestP0LiveDiagnostics::RecordQuestObservation(
            << ",\"runtime_safety\":\"" << SafetyName(applyPlan.Safety.Status) << "\""
            << ",\"runtime_safety_reason\":\"" << SafetyReasonName(applyPlan.Safety.Reason) << "\""
            << ",\"apply_actions\":" << static_cast<uint32_t>(applyPlan.Actions)
-           << ",\"dry_run_only\":" << (applyPlan.DryRunOnly ? "true" : "false");
-
-    if (compatibility)
-    {
-        fields << ",\"compatibility_facts\":{\"available\":true"
-               << ",\"profile_version\":" << compatibility->ProfileVersion
-               << ",\"resolved_record_fingerprint\":"
-               << compatibility->ResolvedRecordFingerprint
-               << ",\"winning_override_fingerprint\":"
-               << compatibility->WinningOverrideFingerprint
-               << ",\"script_fingerprint\":"
-               << compatibility->ScriptFingerprint
-               << ",\"native_adapter_fingerprint\":"
-               << compatibility->NativeAdapterFingerprint
-               << ",\"adapter_mutation_components\":"
-               << static_cast<uint32_t>(compatibility->AdapterMutationComponents)
-               << ",\"reviewed_profile\":"
-               << (PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(
-                       acSnapshot.QuestId) ? "true" : "false")
-               << '}';
-    }
-    else
-    {
-        fields << ",\"compatibility_facts\":{\"available\":false,\"reason\":\"live-observation-failed-closed\"}";
-    }
-
-    fields << ",\"canonical_mutation_attempted\":false";
+           << ",\"dry_run_only\":" << (applyPlan.DryRunOnly ? "true" : "false")
+           << ",\"compatibility_facts\":{\"available\":false,\"reason\":\"recorded-only-at-canonical-planning-boundary\"}"
+           << ",\"canonical_mutation_attempted\":false";
 
     WriteEvent("quest_observed", fields.str());
 }
