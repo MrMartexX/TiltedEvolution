@@ -27,6 +27,15 @@ public:
             aPersistedWithCharacterLineage,
             aFilenameIndependent);
     }
+
+    static PartyQuestPlayerProfileLineageAuthorization ResolveBridgeSnapshots(
+        const PartyQuestLineageBridgeSnapshot& acFirst,
+        const PartyQuestLineageBridgeSnapshot& acSecond,
+        uint64_t aRuntimeGeneration) noexcept
+    {
+        return PartyQuestSkyrimPlayerProfileLineageResolver::
+            ResolveStableSnapshots(acFirst, acSecond, aRuntimeGeneration);
+    }
 };
 
 class PartyQuestRuntimeSessionBootstrapTestAccess final
@@ -150,6 +159,59 @@ TEST_CASE(
     REQUIRE(filenameRejected.Status ==
         PartyQuestRuntimeSessionBootstrapStatus::UnverifiedPlayerProfile);
     REQUIRE_FALSE(owner.IsBound());
+}
+
+TEST_CASE(
+    "Skyrim lineage bridge requires a stable persisted ABI snapshot",
+    "[quest.party-state.runtime-bootstrap][identity][lineage-bridge]")
+{
+    PartyQuestLineageBridgeSnapshot persisted{
+        1u,
+        static_cast<uint32_t>(sizeof(PartyQuestLineageBridgeSnapshot)),
+        42u,
+        static_cast<uint32_t>(PartyQuestLineageBridgeEvidenceState::Persisted),
+        0u,
+        kBootstrapProfile.High,
+        kBootstrapProfile.Low};
+
+    const auto verified =
+        PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            persisted,
+            persisted,
+            7u);
+    REQUIRE(verified.IsVerified());
+    REQUIRE(verified.GetProfileId() == kBootstrapProfile);
+    REQUIRE(verified.GetRuntimeGeneration() == 7u);
+
+    auto changed = persisted;
+    ++changed.Sequence;
+    REQUIRE_FALSE(
+        PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            persisted,
+            changed,
+            7u).IsVerified());
+
+    changed = persisted;
+    changed.State = static_cast<uint32_t>(
+        PartyQuestLineageBridgeEvidenceState::CandidateUnpersisted);
+    REQUIRE_FALSE(
+        PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            changed,
+            changed,
+            7u).IsVerified());
+
+    changed = persisted;
+    changed.Reserved = 1u;
+    REQUIRE_FALSE(
+        PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            changed,
+            changed,
+            7u).IsVerified());
+    REQUIRE_FALSE(
+        PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            persisted,
+            persisted,
+            0u).IsVerified());
 }
 
 TEST_CASE(
