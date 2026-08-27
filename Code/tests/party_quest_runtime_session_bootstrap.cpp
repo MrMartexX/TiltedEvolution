@@ -29,12 +29,19 @@ public:
     }
 
     static PartyQuestPlayerProfileLineageAuthorization ResolveBridgeSnapshots(
+        const PartyQuestLineageProviderDescriptor& acProvider,
+        const PartyQuestLineageRuntimeVersion& acExpectedRuntime,
         const PartyQuestLineageBridgeSnapshot& acFirst,
         const PartyQuestLineageBridgeSnapshot& acSecond,
         uint64_t aRuntimeGeneration) noexcept
     {
         return PartyQuestSkyrimPlayerProfileLineageResolver::
-            ResolveStableSnapshots(acFirst, acSecond, aRuntimeGeneration);
+            ResolveStableSnapshots(
+                acProvider,
+                acExpectedRuntime,
+                acFirst,
+                acSecond,
+                aRuntimeGeneration);
     }
 };
 
@@ -165,6 +172,21 @@ TEST_CASE(
     "Skyrim lineage bridge requires a stable persisted ABI snapshot",
     "[quest.party-state.runtime-bootstrap][identity][lineage-bridge]")
 {
+    const PartyQuestLineageRuntimeVersion runtime =
+        PartyQuestLineageTargetRuntimeRegistry::Skyrim161170;
+    PartyQuestLineageProviderDescriptor provider{
+        kPartyQuestLineageProviderAbiVersion,
+        static_cast<uint32_t>(sizeof(PartyQuestLineageProviderDescriptor)),
+        static_cast<uint32_t>(PartyQuestLineageProviderKind::SkseCosave),
+        0u,
+        kPartyQuestRequiredLineageProviderCapabilities,
+        runtime.Major,
+        runtime.Minor,
+        runtime.Patch,
+        runtime.Build,
+        kPartyQuestSkseCosaveProviderFingerprintV2,
+        0u,
+        0u};
     PartyQuestLineageBridgeSnapshot persisted{
         1u,
         static_cast<uint32_t>(sizeof(PartyQuestLineageBridgeSnapshot)),
@@ -176,6 +198,8 @@ TEST_CASE(
 
     const auto verified =
         PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            provider,
+            runtime,
             persisted,
             persisted,
             7u);
@@ -187,6 +211,8 @@ TEST_CASE(
     ++changed.Sequence;
     REQUIRE_FALSE(
         PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            provider,
+            runtime,
             persisted,
             changed,
             7u).IsVerified());
@@ -196,6 +222,8 @@ TEST_CASE(
         PartyQuestLineageBridgeEvidenceState::CandidateUnpersisted);
     REQUIRE_FALSE(
         PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            provider,
+            runtime,
             changed,
             changed,
             7u).IsVerified());
@@ -204,14 +232,68 @@ TEST_CASE(
     changed.Reserved = 1u;
     REQUIRE_FALSE(
         PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            provider,
+            runtime,
             changed,
             changed,
             7u).IsVerified());
     REQUIRE_FALSE(
         PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            provider,
+            runtime,
             persisted,
             persisted,
             0u).IsVerified());
+
+    auto wrongProvider = provider;
+    wrongProvider.ProviderFingerprint ^= 1u;
+    REQUIRE_FALSE(
+        PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            wrongProvider,
+            runtime,
+            persisted,
+            persisted,
+            7u).IsVerified());
+
+    wrongProvider = provider;
+    wrongProvider.RuntimePatch = 99u;
+    REQUIRE_FALSE(
+        PartyQuestPlayerProfileLineageTestAccess::ResolveBridgeSnapshots(
+            wrongProvider,
+            runtime,
+            persisted,
+            persisted,
+            7u).IsVerified());
+}
+
+TEST_CASE(
+    "lineage target registry names three exact runtimes without approving unknown providers",
+    "[quest.party-state.runtime-bootstrap][identity][lineage-provider][versions]")
+{
+    REQUIRE(PartyQuestLineageTargetRuntimeRegistry::IsTarget(
+        PartyQuestLineageTargetRuntimeRegistry::Skyrim1597));
+    REQUIRE(PartyQuestLineageTargetRuntimeRegistry::IsTarget(
+        PartyQuestLineageTargetRuntimeRegistry::Skyrim161170));
+    REQUIRE(PartyQuestLineageTargetRuntimeRegistry::IsTarget(
+        PartyQuestLineageTargetRuntimeRegistry::Skyrim1799));
+    REQUIRE_FALSE(PartyQuestLineageTargetRuntimeRegistry::IsTarget(
+        {1u, 6u, 640u, 0u}));
+
+    for (const auto runtime : {
+             PartyQuestLineageTargetRuntimeRegistry::Skyrim1597,
+             PartyQuestLineageTargetRuntimeRegistry::Skyrim161170,
+             PartyQuestLineageTargetRuntimeRegistry::Skyrim1799})
+    {
+        REQUIRE(PartyQuestLineageTargetRuntimeRegistry::AllowsProvider(
+            runtime,
+            PartyQuestLineageProviderKind::SkseCosave));
+        REQUIRE_FALSE(PartyQuestLineageTargetRuntimeRegistry::AllowsProvider(
+            runtime,
+            PartyQuestLineageProviderKind::EmbeddedClient));
+        REQUIRE_FALSE(PartyQuestLineageTargetRuntimeRegistry::AllowsProvider(
+            runtime,
+            PartyQuestLineageProviderKind::Unknown));
+    }
 }
 
 TEST_CASE(

@@ -1,39 +1,12 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestLineageProviderAbi.h>
 #include <Structs/Skyrim/PartyQuestPlayerProfile.h>
 
 #include <cstdint>
 
 class PartyQuestSkyrimPlayerProfileLineageResolver;
 class PartyQuestPlayerProfileLineageTestAccess;
-
-enum class PartyQuestLineageBridgeEvidenceState : uint32_t
-{
-    Unavailable = 0,
-    CandidateUnpersisted = 1,
-    Persisted = 2,
-    Invalid = 3
-};
-
-/**
- * Fixed process ABI exported by SkyrimTogetherLineageBridge.dll.
- *
- * This is an observation record only. Numeric fields cannot mint lineage
- * authority unless the production resolver obtains two identical snapshots
- * from the already-loaded bridge while holding the current generation lease.
- */
-struct PartyQuestLineageBridgeSnapshot final
-{
-    uint32_t AbiVersion{};
-    uint32_t StructSize{};
-    uint64_t Sequence{};
-    uint32_t State{};
-    uint32_t Reserved{};
-    uint64_t ProfileHigh{};
-    uint64_t ProfileLow{};
-};
-
-static_assert(sizeof(PartyQuestLineageBridgeSnapshot) == 40u);
 
 /**
  * Process-local proof that one stable PlayerProfileId belongs to the currently
@@ -115,6 +88,8 @@ private:
     friend class PartyQuestPlayerProfileLineageTestAccess;
 
     [[nodiscard]] static PartyQuestPlayerProfileLineageAuthorization ResolveStableSnapshots(
+        const PartyQuestLineageProviderDescriptor& acProvider,
+        const PartyQuestLineageRuntimeVersion& acExpectedRuntime,
         const PartyQuestLineageBridgeSnapshot& acFirst,
         const PartyQuestLineageBridgeSnapshot& acSecond,
         uint64_t aRuntimeGeneration) noexcept
@@ -126,7 +101,10 @@ private:
         const PartyQuestPlayerProfileId profile{
             acFirst.ProfileHigh,
             acFirst.ProfileLow};
-        if (aRuntimeGeneration == 0 ||
+        if (!PartyQuestLineageTargetRuntimeRegistry::IsApprovedDescriptor(
+                acProvider,
+                acExpectedRuntime) ||
+            aRuntimeGeneration == 0 ||
             acFirst.AbiVersion != kAbiVersion ||
             acFirst.StructSize != kSnapshotSize ||
             acFirst.Sequence == 0 ||

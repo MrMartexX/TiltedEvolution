@@ -1,9 +1,26 @@
 #include <Windows.h>
 #include <bcrypt.h>
 
+#include <Structs/Skyrim/PartyQuestLineageProviderAbi.h>
+
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+
+struct PartyQuestSksePluginVersionData final
+{
+    uint32_t DataVersion;
+    uint32_t PluginVersion;
+    char Name[256];
+    char Author[256];
+    char SupportEmail[252];
+    uint32_t VersionIndependenceEx;
+    uint32_t VersionIndependence;
+    uint32_t CompatibleVersions[16];
+    uint32_t SkseVersionRequired;
+};
+
+static_assert(sizeof(PartyQuestSksePluginVersionData) == 0x350u);
 
 namespace
 {
@@ -13,12 +30,31 @@ using PluginHandle = UInt32;
 
 constexpr UInt32 kInvalidPluginHandle = 0xFFFFFFFFu;
 constexpr UInt32 kRuntimeVersion1597 = 0x01050610u;
+constexpr UInt32 kRuntimeVersion161170 = 0x01064920u;
+constexpr UInt32 kRuntimeVersion1799 = 0x01070630u;
 constexpr UInt32 kSerializationInterfaceId = 3u;
 constexpr UInt32 kMessagingInterfaceId = 5u;
 constexpr UInt32 kSerializationInterfaceVersion = 4u;
 constexpr UInt32 kMessagingInterfaceVersion = 2u;
 constexpr UInt32 kSnapshotAbiVersion = 1u;
 constexpr UInt32 kRecordVersion = 1u;
+
+constexpr bool IsSupportedRuntime(UInt32 aRuntimeVersion) noexcept
+{
+    return aRuntimeVersion == kRuntimeVersion1597 ||
+        aRuntimeVersion == kRuntimeVersion161170 ||
+        aRuntimeVersion == kRuntimeVersion1799;
+}
+
+constexpr PartyQuestLineageRuntimeVersion DecodeRuntimeVersion(
+    UInt32 aRuntimeVersion) noexcept
+{
+    return {
+        (aRuntimeVersion >> 24u) & 0xFFu,
+        (aRuntimeVersion >> 16u) & 0xFFu,
+        (aRuntimeVersion >> 4u) & 0xFFFu,
+        aRuntimeVersion & 0xFu};
+}
 
 constexpr UInt32 FourCC(char a, char b, char c, char d) noexcept
 {
@@ -105,13 +141,7 @@ struct SKSEMessagingInterface
     void* (*GetEventDispatcher)(UInt32 dispatcherId);
 };
 
-enum class EvidenceState : UInt32
-{
-    Unavailable = 0u,
-    CandidateUnpersisted = 1u,
-    Persisted = 2u,
-    Invalid = 3u
-};
+using EvidenceState = PartyQuestLineageBridgeEvidenceState;
 
 struct ProfileId
 {
@@ -131,19 +161,7 @@ struct ProfileBindingRecordV1
     UInt64 Checksum{};
 };
 
-struct PartyQuestLineageBridgeSnapshot
-{
-    UInt32 AbiVersion{};
-    UInt32 StructSize{};
-    UInt64 Sequence{};
-    UInt32 State{};
-    UInt32 Reserved{};
-    UInt64 ProfileHigh{};
-    UInt64 ProfileLow{};
-};
-
 static_assert(sizeof(ProfileBindingRecordV1) == 24u);
-static_assert(sizeof(PartyQuestLineageBridgeSnapshot) == 40u);
 
 constexpr UInt32 kRecordSize = static_cast<UInt32>(sizeof(ProfileBindingRecordV1));
 constexpr UInt32 kSnapshotSize = static_cast<UInt32>(sizeof(PartyQuestLineageBridgeSnapshot));
@@ -152,6 +170,7 @@ std::mutex g_stateMutex;
 EvidenceState g_state = EvidenceState::Unavailable;
 ProfileId g_profileId{};
 UInt64 g_sequence = 1u;
+UInt32 g_runtimeVersion{};
 
 void AdvanceSequenceLocked() noexcept
 {
@@ -363,6 +382,55 @@ void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
 }
 } // namespace
 
+extern "C" __declspec(dllexport)
+PartyQuestSksePluginVersionData SKSEPlugin_Version{
+    1u,
+    2u,
+    "SkyrimTogetherLineageBridge",
+    "Skyrim Together Reborn",
+    "",
+    0u,
+    0u,
+    {
+        kRuntimeVersion1597,
+        kRuntimeVersion161170,
+        kRuntimeVersion1799,
+        0u},
+    0u};
+
+extern "C" __declspec(dllexport) bool PartyQuestLineageProvider_GetDescriptor(
+    PartyQuestLineageProviderDescriptor* apDescriptor,
+    uint32_t aDescriptorSize)
+{
+    if (!apDescriptor ||
+        aDescriptorSize !=
+            static_cast<uint32_t>(sizeof(PartyQuestLineageProviderDescriptor)))
+    {
+        return false;
+    }
+
+    std::lock_guard lock(g_stateMutex);
+    if (!IsSupportedRuntime(g_runtimeVersion))
+        return false;
+
+    const auto runtime = DecodeRuntimeVersion(g_runtimeVersion);
+    PartyQuestLineageProviderDescriptor descriptor{};
+    descriptor.AbiVersion = kPartyQuestLineageProviderAbiVersion;
+    descriptor.StructSize =
+        static_cast<uint32_t>(sizeof(PartyQuestLineageProviderDescriptor));
+    descriptor.ProviderKind =
+        static_cast<uint32_t>(PartyQuestLineageProviderKind::SkseCosave);
+    descriptor.Capabilities = kPartyQuestRequiredLineageProviderCapabilities;
+    descriptor.RuntimeMajor = runtime.Major;
+    descriptor.RuntimeMinor = runtime.Minor;
+    descriptor.RuntimePatch = runtime.Patch;
+    descriptor.RuntimeBuild = runtime.Build;
+    descriptor.ProviderFingerprint =
+        kPartyQuestSkseCosaveProviderFingerprintV2;
+    std::memcpy(apDescriptor, &descriptor, sizeof(descriptor));
+    return true;
+}
+
 extern "C" __declspec(dllexport) bool PartyQuestLineageBridge_GetSnapshot(
     PartyQuestLineageBridgeSnapshot* apSnapshot,
     uint32_t aSnapshotSize)
@@ -397,14 +465,16 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Query(
         return false;
 
     return apSkse->isEditor == 0u &&
-        apSkse->runtimeVersion == kRuntimeVersion1597 &&
+        IsSupportedRuntime(apSkse->runtimeVersion) &&
         apSkse->QueryInterface != nullptr &&
         apSkse->GetPluginHandle != nullptr;
 }
 
 extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSkse)
 {
-    if (!apSkse || !apSkse->QueryInterface || !apSkse->GetPluginHandle)
+    if (!apSkse || apSkse->isEditor != 0u ||
+        !IsSupportedRuntime(apSkse->runtimeVersion) ||
+        !apSkse->QueryInterface || !apSkse->GetPluginHandle)
         return false;
 
     const PluginHandle pluginHandle = apSkse->GetPluginHandle();
@@ -438,6 +508,12 @@ extern "C" __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* apSks
     pSerialization->SetSaveCallback(pluginHandle, &OnSerializationSave);
     pSerialization->SetLoadCallback(pluginHandle, &OnSerializationLoad);
 
-    Publish(EvidenceState::Unavailable);
+    {
+        std::lock_guard lock(g_stateMutex);
+        g_runtimeVersion = apSkse->runtimeVersion;
+        g_state = EvidenceState::Unavailable;
+        g_profileId = {};
+        AdvanceSequenceLocked();
+    }
     return true;
 }
