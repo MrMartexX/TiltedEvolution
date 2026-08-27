@@ -32,6 +32,7 @@ constexpr UInt32 kInvalidPluginHandle = 0xFFFFFFFFu;
 constexpr UInt32 kRuntimeVersion1597 = 0x01050610u;
 constexpr UInt32 kRuntimeVersion161170 = 0x01064920u;
 constexpr UInt32 kRuntimeVersion1799 = 0x01070630u;
+constexpr UInt32 kRuntimeVersion17104 = 0x01070680u;
 constexpr UInt32 kSerializationInterfaceId = 3u;
 constexpr UInt32 kMessagingInterfaceId = 5u;
 constexpr UInt32 kSerializationInterfaceVersion = 4u;
@@ -43,7 +44,8 @@ constexpr bool IsSupportedRuntime(UInt32 aRuntimeVersion) noexcept
 {
     return aRuntimeVersion == kRuntimeVersion1597 ||
         aRuntimeVersion == kRuntimeVersion161170 ||
-        aRuntimeVersion == kRuntimeVersion1799;
+        aRuntimeVersion == kRuntimeVersion1799 ||
+        aRuntimeVersion == kRuntimeVersion17104;
 }
 
 constexpr PartyQuestLineageRuntimeVersion DecodeRuntimeVersion(
@@ -385,7 +387,7 @@ void OnSkseMessage(SKSEMessagingInterface::Message* apMessage)
 extern "C" __declspec(dllexport)
 PartyQuestSksePluginVersionData SKSEPlugin_Version{
     1u,
-    2u,
+    3u,
     "SkyrimTogetherLineageBridge",
     "Skyrim Together Reborn",
     "",
@@ -395,6 +397,7 @@ PartyQuestSksePluginVersionData SKSEPlugin_Version{
         kRuntimeVersion1597,
         kRuntimeVersion161170,
         kRuntimeVersion1799,
+        kRuntimeVersion17104,
         0u},
     0u};
 

@@ -98,13 +98,15 @@ struct PartyQuestLineageTargetRuntimeRegistry final
     static constexpr PartyQuestLineageRuntimeVersion Skyrim1597{1u, 5u, 97u, 0u};
     static constexpr PartyQuestLineageRuntimeVersion Skyrim161170{1u, 6u, 1170u, 0u};
     static constexpr PartyQuestLineageRuntimeVersion Skyrim1799{1u, 7u, 99u, 0u};
+    static constexpr PartyQuestLineageRuntimeVersion Skyrim17104{1u, 7u, 104u, 0u};
 
     [[nodiscard]] static constexpr bool IsTarget(
         const PartyQuestLineageRuntimeVersion& acVersion) noexcept
     {
         return acVersion == Skyrim1597 ||
             acVersion == Skyrim161170 ||
-            acVersion == Skyrim1799;
+            acVersion == Skyrim1799 ||
+            acVersion == Skyrim17104;
     }
 
     [[nodiscard]] static constexpr bool AllowsProvider(
@@ -117,8 +119,8 @@ struct PartyQuestLineageTargetRuntimeRegistry final
         if (aKind == PartyQuestLineageProviderKind::SkseCosave)
             return true;
 
-        // The 1.7.99 embedded provider is the intended no-SKSE fallback, but
-        // it remains unapproved until its concrete implementation and live
+        // An embedded provider remains an intended no-SKSE fallback, but it is
+        // unapproved until a concrete exact-runtime implementation and live
         // evidence exist. Merely naming the kind must not grant authority.
         return false;
     }

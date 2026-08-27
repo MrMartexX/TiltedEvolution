@@ -267,7 +267,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "lineage target registry names three exact runtimes without approving unknown providers",
+    "lineage target registry names exact runtimes without approving unknown providers",
     "[quest.party-state.runtime-bootstrap][identity][lineage-provider][versions]")
 {
     REQUIRE(PartyQuestLineageTargetRuntimeRegistry::IsTarget(
@@ -276,13 +276,16 @@ TEST_CASE(
         PartyQuestLineageTargetRuntimeRegistry::Skyrim161170));
     REQUIRE(PartyQuestLineageTargetRuntimeRegistry::IsTarget(
         PartyQuestLineageTargetRuntimeRegistry::Skyrim1799));
+    REQUIRE(PartyQuestLineageTargetRuntimeRegistry::IsTarget(
+        PartyQuestLineageTargetRuntimeRegistry::Skyrim17104));
     REQUIRE_FALSE(PartyQuestLineageTargetRuntimeRegistry::IsTarget(
         {1u, 6u, 640u, 0u}));
 
     for (const auto runtime : {
              PartyQuestLineageTargetRuntimeRegistry::Skyrim1597,
              PartyQuestLineageTargetRuntimeRegistry::Skyrim161170,
-             PartyQuestLineageTargetRuntimeRegistry::Skyrim1799})
+             PartyQuestLineageTargetRuntimeRegistry::Skyrim1799,
+             PartyQuestLineageTargetRuntimeRegistry::Skyrim17104})
     {
         REQUIRE(PartyQuestLineageTargetRuntimeRegistry::AllowsProvider(
             runtime,
