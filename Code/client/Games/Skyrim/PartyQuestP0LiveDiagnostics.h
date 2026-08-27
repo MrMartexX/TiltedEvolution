@@ -42,6 +42,9 @@ public:
     static void RecordTransportState(const char* acState) noexcept;
     static void RecordGamePresence(bool aInGame) noexcept;
 
+    /** Emit the current process-local hook installation ledger. */
+    static void RecordLifecycleCapabilities(const char* acPhase) noexcept;
+
     static void RecordEngineSave(
         const char* acPhase,
         const char* acFileName,

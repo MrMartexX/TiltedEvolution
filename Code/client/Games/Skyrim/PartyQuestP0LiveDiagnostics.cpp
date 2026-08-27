@@ -2,6 +2,7 @@
 
 #include <PartyQuestP0LiveDiagnostics.h>
 #include <PartyQuestSkyrimRuntimeCompatibilityEvidence.h>
+#include <SaveLoad.h>
 
 #include <Systems/ModSystem.h>
 #include <Services/QuestSnapshotCollector.h>
@@ -11,6 +12,7 @@
 
 #include <Structs/Skyrim/PartyQuestAdmission.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSafety.h>
 
 #include <algorithm>
@@ -340,13 +342,7 @@ void PartyQuestP0LiveDiagnostics::Initialize() noexcept
                 << ",\"canonical_set_stage_enabled\":false";
         WriteEvent("run_start", startup.str());
 
-        WriteEvent(
-            "lifecycle_capabilities",
-            "\"load_game_engine_hook\":{\"available\":false,\"reason\":\"verified-pre-transition-hook-not-wired\"},"
-            "\"new_game_engine_hook\":{\"available\":false,\"reason\":\"verified-pre-transition-hook-not-wired\"},"
-            "\"main_menu_engine_hook\":{\"available\":false,\"reason\":\"verified-pre-transition-hook-not-wired\"},"
-            "\"profile_switch_engine_hook\":{\"available\":false,\"reason\":\"verified-pre-transition-hook-not-wired\"},"
-            "\"save_engine_hook\":{\"instrumented\":true,\"runtime_installation_verified_only_by_observed_event\":true}");
+        RecordLifecycleCapabilities("startup");
     }
     catch (...)
     {
@@ -472,6 +468,43 @@ void PartyQuestP0LiveDiagnostics::RecordModMappingEnd(
            << ",\"missing_count\":" << aMissingCount
            << ",\"generation\":" << aGeneration;
     WriteEvent("mod_mapping_rebuild_end", fields.str());
+}
+
+void PartyQuestP0LiveDiagnostics::RecordLifecycleCapabilities(
+    const char* acPhase) noexcept
+{
+    const bool loadGame =
+        PartyQuestRuntimeLifecycleIntegrationPolicy::HasVerifiedPreTransitionHook(
+            PartyQuestRuntimeLifecycleEvent::LoadGame);
+    const bool newGame =
+        PartyQuestRuntimeLifecycleIntegrationPolicy::HasVerifiedPreTransitionHook(
+            PartyQuestRuntimeLifecycleEvent::NewGame);
+    const bool mainMenu =
+        PartyQuestRuntimeLifecycleIntegrationPolicy::HasVerifiedPreTransitionHook(
+            PartyQuestRuntimeLifecycleEvent::MainMenu);
+    const bool complete =
+        PartyQuestRuntimeLifecycleIntegrationPolicy::
+            HasCompleteCharacterIdentityCoverage();
+
+    std::ostringstream fields;
+    fields << "\"phase\":\"" << EscapeJson(acPhase ? acPhase : "unknown") << "\""
+           << ",\"load_game_engine_hook\":{\"installed\":"
+           << (loadGame ? "true" : "false") << '}'
+           << ",\"load_game_completion_sink\":{\"installed\":"
+           << (IsPartyQuestLoadCompletionSinkInstalled() ? "true" : "false") << '}'
+           << ",\"new_game_engine_hook\":{\"installed\":"
+           << (newGame ? "true" : "false") << '}'
+           << ",\"main_menu_engine_hook\":{\"installed\":"
+           << (mainMenu ? "true" : "false") << '}'
+           << ",\"complete_character_identity_coverage\":"
+           << (complete ? "true" : "false")
+           << ",\"save_engine_hook\":{\"installed\":"
+           << (IsPartyQuestSaveHookInstalled() ? "true" : "false")
+           << ",\"requires_observed_event_for_live_proof\":true}"
+           << ",\"profile_switch_engine_hook\":{\"installed\":false,"
+              "\"reason\":\"no-separate-profile-switch-boundary-approved\"}"
+           << ",\"grants_mutation_authority\":false";
+    WriteEvent("lifecycle_capabilities", fields.str());
 }
 
 void PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(

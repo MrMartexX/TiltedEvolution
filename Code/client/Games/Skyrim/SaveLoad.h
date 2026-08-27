@@ -10,6 +10,10 @@
  */
 void InstallPartyQuestLoadGameLifecycleFence() noexcept;
 
+/** Process-local installation evidence used only by read-only P0 diagnostics. */
+[[nodiscard]] bool IsPartyQuestSaveHookInstalled() noexcept;
+[[nodiscard]] bool IsPartyQuestLoadCompletionSinkInstalled() noexcept;
+
 struct PartyQuestEngineIdentityTransition
 {
     PartyQuestRuntimeLifecycleEvent Event{

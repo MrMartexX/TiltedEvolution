@@ -10,6 +10,7 @@
 
 #include <mutex>
 #include <optional>
+#include <atomic>
 
 TP_THIS_FUNCTION(
     TBGSSaveLoadManager_SaveImpl,
@@ -56,6 +57,8 @@ std::mutex s_partyQuestPendingLoadMutex;
 std::optional<PartyQuestPendingLoadTransition> s_partyQuestPendingLoad;
 std::mutex s_partyQuestLoadSinkMutex;
 bool s_partyQuestLoadSinkInstalled = false;
+std::atomic_bool s_partyQuestSaveHookInstalled{false};
+std::atomic_bool s_partyQuestLoadCompletionSinkInstalled{false};
 
 bool CompletePendingPartyQuestLoad(const char* acReason) noexcept
 {
@@ -254,6 +257,11 @@ void InstallPartyQuestLoadGameLifecycleFence() noexcept
 
         pEventList->loadGameEvent.RegisterSink(&s_partyQuestLoadGameEventSink);
         s_partyQuestLoadSinkInstalled = true;
+        s_partyQuestLoadCompletionSinkInstalled.store(
+            true,
+            std::memory_order_release);
+        PartyQuestP0LiveDiagnostics::RecordLifecycleCapabilities(
+            "load-completion-sink-installed");
         spdlog::info("PartyQuest TESLoadGameEvent lifecycle sink installed");
     }
     catch (...)
@@ -261,6 +269,17 @@ void InstallPartyQuestLoadGameLifecycleFence() noexcept
         spdlog::error(
             "PartyQuest failed to register TESLoadGameEvent lifecycle sink");
     }
+}
+
+bool IsPartyQuestSaveHookInstalled() noexcept
+{
+    return s_partyQuestSaveHookInstalled.load(std::memory_order_acquire);
+}
+
+bool IsPartyQuestLoadCompletionSinkInstalled() noexcept
+{
+    return s_partyQuestLoadCompletionSinkInstalled.load(
+        std::memory_order_acquire);
 }
 
 BGSSaveLoadManager* BGSSaveLoadManager::Get() noexcept
@@ -516,6 +535,9 @@ static TiltedPhoques::Initializer s_partyQuestSaveLoadGuardHook(
             TP_HOOK(
                 &RealBGSSaveLoadManager_SaveImpl,
                 PartyQuest_BGSSaveLoadManager_SaveImpl);
+            s_partyQuestSaveHookInstalled.store(
+                true,
+                std::memory_order_release);
         }
 
         RealBGSSaveLoadManager_LoadImpl = s_loadImpl.Get();
