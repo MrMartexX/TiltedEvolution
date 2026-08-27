@@ -4,6 +4,7 @@
 #include <PartyQuestP0LiveDiagnostics.h>
 #include <SaveLoad.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 #include <Structs/Skyrim/PartyQuestSaveGuard.h>
 
@@ -29,6 +30,19 @@ TP_THIS_FUNCTION(
 
 static TBGSSaveLoadManager_SaveImpl* RealBGSSaveLoadManager_SaveImpl = nullptr;
 static TBGSSaveLoadManager_LoadImpl* RealBGSSaveLoadManager_LoadImpl = nullptr;
+
+using TPartyQuestStartNewGame = void();
+static TPartyQuestStartNewGame* RealPartyQuestStartNewGame = nullptr;
+
+class PartyQuestSkyrimSaveLoadLifecycleHookInstaller final
+{
+public:
+    static void Mark(PartyQuestRuntimeLifecycleEvent aEvent) noexcept
+    {
+        PartyQuestRuntimeLifecycleIntegrationPolicy::
+            MarkVerifiedPreTransitionHook(aEvent);
+    }
+};
 
 namespace
 {
@@ -136,6 +150,91 @@ public:
 
 PartyQuestLoadGameEventSink s_partyQuestLoadGameEventSink;
 } // namespace
+
+PartyQuestEngineIdentityTransition BeginPartyQuestEngineIdentityTransition(
+    PartyQuestRuntimeLifecycleEvent aEvent,
+    const char* acReason) noexcept
+{
+    PartyQuestEngineIdentityTransition result;
+    result.Event = aEvent;
+
+    auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto lifecycle = runtimeOwner.PrepareAndRelease(aEvent);
+    if (!lifecycle.CanProceed())
+    {
+        spdlog::warn(
+            "PartyQuest blocked Skyrim identity transition: reason={} event={} status={} transaction={} guardHeld={}",
+            acReason ? acReason : "<unknown>",
+            static_cast<uint32_t>(aEvent),
+            static_cast<uint32_t>(lifecycle.Status),
+            lifecycle.TransactionId,
+            lifecycle.GuardHeld);
+        return result;
+    }
+
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t before = fence.GetGeneration();
+    const auto ticket = fence.BeginLifecycleTransition();
+    if (!ticket.IsValid())
+    {
+        spdlog::error(
+            "PartyQuest blocked Skyrim identity transition because generation admission failed: reason={} event={}",
+            acReason ? acReason : "<unknown>",
+            static_cast<uint32_t>(aEvent));
+        return result;
+    }
+
+    result.Ticket = ticket.Ticket;
+    result.Generation = ticket.Generation;
+    PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+        acReason ? acReason : "identity-transition",
+        "request-admitted",
+        before,
+        ticket.Generation);
+    return result;
+}
+
+void CompletePartyQuestEngineIdentityTransition(
+    PartyQuestEngineIdentityTransition aTransition,
+    const char* acReason) noexcept
+{
+    if (!aTransition.CanProceed())
+        return;
+
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t before = fence.GetGeneration();
+    const bool completed = fence.CompleteLifecycleTransition(
+        {aTransition.Ticket, aTransition.Generation});
+    const uint64_t after = fence.GetGeneration();
+    PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+        acReason ? acReason : "identity-transition",
+        completed ? "original-returned" : "completion-ticket-mismatch",
+        before,
+        after);
+    if (!completed)
+    {
+        spdlog::error(
+            "PartyQuest identity transition completion failed closed: reason={} event={} ticket={} generation={}",
+            acReason ? acReason : "<unknown>",
+            static_cast<uint32_t>(aTransition.Event),
+            aTransition.Ticket,
+            aTransition.Generation);
+    }
+}
+
+void PartyQuest_StartNewGame_Hook()
+{
+    const auto transition = BeginPartyQuestEngineIdentityTransition(
+        PartyQuestRuntimeLifecycleEvent::NewGame,
+        "new-game");
+    if (!transition.CanProceed())
+        return;
+
+    if (RealPartyQuestStartNewGame)
+        RealPartyQuestStartNewGame();
+
+    CompletePartyQuestEngineIdentityTransition(transition, "new-game");
+}
 
 void InstallPartyQuestLoadGameLifecycleFence() noexcept
 {
@@ -430,5 +529,24 @@ static TiltedPhoques::Initializer s_partyQuestSaveLoadGuardHook(
             TP_HOOK(
                 &RealBGSSaveLoadManager_LoadImpl,
                 PartyQuest_BGSSaveLoadManager_LoadImpl);
+            PartyQuestSkyrimSaveLoadLifecycleHookInstaller::Mark(
+                PartyQuestRuntimeLifecycleEvent::LoadGame);
+        }
+
+        // CommonLibSSE-NG / Address Library: StartNewGame is
+        // RELOCATION_ID(51246, 52118). SKSE 2.0.20 hooks inside this exact
+        // function; the function entry is the earlier pre-transition boundary.
+        POINTER_SKYRIMSE(TPartyQuestStartNewGame, s_startNewGame, 52118);
+        RealPartyQuestStartNewGame = s_startNewGame.Get();
+        if (!RealPartyQuestStartNewGame)
+        {
+            spdlog::error(
+                "PartyQuest runtime failed to resolve StartNewGame (Address Library id 52118); NewGame lifecycle interception not installed");
+        }
+        else
+        {
+            TP_HOOK(&RealPartyQuestStartNewGame, PartyQuest_StartNewGame_Hook);
+            PartyQuestSkyrimSaveLoadLifecycleHookInstaller::Mark(
+                PartyQuestRuntimeLifecycleEvent::NewGame);
         }
     });

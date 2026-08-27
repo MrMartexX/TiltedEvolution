@@ -1,10 +1,40 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestRuntimeLifecycleFence.h>
+
+#include <cstdint>
+
 /**
  * Register the process-lifetime TESLoadGameEvent sink used to close a pending
  * PartyQuest LoadGame lifecycle ticket. Safe to call more than once.
  */
 void InstallPartyQuestLoadGameLifecycleFence() noexcept;
+
+struct PartyQuestEngineIdentityTransition
+{
+    PartyQuestRuntimeLifecycleEvent Event{
+        PartyQuestRuntimeLifecycleEvent::LoadGame};
+    uint64_t Ticket{};
+    uint64_t Generation{};
+
+    [[nodiscard]] bool CanProceed() const noexcept
+    {
+        return Ticket != 0u && Generation != 0u;
+    }
+};
+
+/**
+ * Fence one synchronous identity-changing Skyrim engine entrypoint.
+ * Begin must run before the original function and Complete only after it
+ * returns. A failed Begin means the original transition must not be entered.
+ */
+[[nodiscard]] PartyQuestEngineIdentityTransition
+BeginPartyQuestEngineIdentityTransition(
+    PartyQuestRuntimeLifecycleEvent aEvent,
+    const char* acReason) noexcept;
+void CompletePartyQuestEngineIdentityTransition(
+    PartyQuestEngineIdentityTransition aTransition,
+    const char* acReason) noexcept;
 
 #pragma pack(push, 1)
 

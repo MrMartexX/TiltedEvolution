@@ -46,6 +46,21 @@ public:
     }
 };
 
+class PartyQuestRuntimeLifecycleIntegrationTestAccess final
+{
+public:
+    static void Mark(PartyQuestRuntimeLifecycleEvent aEvent) noexcept
+    {
+        PartyQuestRuntimeLifecycleIntegrationPolicy::
+            MarkVerifiedPreTransitionHook(aEvent);
+    }
+
+    static void Reset() noexcept
+    {
+        PartyQuestRuntimeLifecycleIntegrationPolicy::ResetForTests();
+    }
+};
+
 namespace
 {
 const PartyQuestCampaignId kBootstrapCampaign{
@@ -138,20 +153,21 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "Production runtime bootstrap remains blocked until all character identity transitions are fenced",
+    "Production runtime bootstrap requires all installed character identity hooks",
     "[quest.party-state.runtime-bootstrap][identity][lifecycle]")
 {
     BootstrapSandbox sandbox;
     PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
     auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
 
-    STATIC_REQUIRE(PartyQuestRuntimeLifecycleIntegrationPolicy::
+    PartyQuestRuntimeLifecycleIntegrationTestAccess::Reset();
+    REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
         HasVerifiedPreTransitionHook(PartyQuestRuntimeLifecycleEvent::LoadGame));
-    STATIC_REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
+    REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
         HasVerifiedPreTransitionHook(PartyQuestRuntimeLifecycleEvent::NewGame));
-    STATIC_REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
+    REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
         HasVerifiedPreTransitionHook(PartyQuestRuntimeLifecycleEvent::MainMenu));
-    STATIC_REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
+    REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
         HasCompleteCharacterIdentityCoverage());
 
     const auto authorization = IssueForCurrentGeneration();
@@ -164,6 +180,18 @@ TEST_CASE(
         PartyQuestRuntimeSessionBootstrapStatus::LifecycleCoverageIncomplete);
     REQUIRE_FALSE(blocked.IsBound());
     REQUIRE_FALSE(owner.IsBound());
+
+    PartyQuestRuntimeLifecycleIntegrationTestAccess::Mark(
+        PartyQuestRuntimeLifecycleEvent::LoadGame);
+    PartyQuestRuntimeLifecycleIntegrationTestAccess::Mark(
+        PartyQuestRuntimeLifecycleEvent::NewGame);
+    REQUIRE_FALSE(PartyQuestRuntimeLifecycleIntegrationPolicy::
+        HasCompleteCharacterIdentityCoverage());
+    PartyQuestRuntimeLifecycleIntegrationTestAccess::Mark(
+        PartyQuestRuntimeLifecycleEvent::MainMenu);
+    REQUIRE(PartyQuestRuntimeLifecycleIntegrationPolicy::
+        HasCompleteCharacterIdentityCoverage());
+    PartyQuestRuntimeLifecycleIntegrationTestAccess::Reset();
 }
 
 TEST_CASE(

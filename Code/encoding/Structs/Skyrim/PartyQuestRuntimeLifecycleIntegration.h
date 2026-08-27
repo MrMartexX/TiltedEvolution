@@ -2,8 +2,14 @@
 
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleFence.h>
 
+#include <cstdint>
+
+class PartyQuestSkyrimSaveLoadLifecycleHookInstaller;
+class PartyQuestSkyrimMainLoopLifecycleHookInstaller;
+class PartyQuestRuntimeLifecycleIntegrationTestAccess;
+
 /**
- * Compile-time evidence ledger for production lifecycle integration.
+ * Process-local evidence ledger for production lifecycle integration.
  *
  * PartyQuestRuntimeLifecycleFence defines what must happen before a transition;
  * this policy records which real process boundaries are actually wired early
@@ -12,32 +18,23 @@
  *
  * Character/save lineage authority may be published only when Load Game, New
  * Game and return-to-Main-Menu all have verified pre-transition coverage. Load
- * Game is currently wired in SaveLoad.cpp. New Game and Main Menu remain false
- * until equally strong pre-transition hooks are implemented and reviewed.
+ * A hook is recorded only after its exact Address Library entry resolved and
+ * the detour was installed in this process. Merely compiling a hook cannot make
+ * bootstrap authority available on an unsupported runtime.
  */
 struct PartyQuestRuntimeLifecycleIntegrationPolicy final
 {
-    [[nodiscard]] static constexpr bool HasVerifiedPreTransitionHook(
-        PartyQuestRuntimeLifecycleEvent aEvent) noexcept
-    {
-        switch (aEvent)
-        {
-        case PartyQuestRuntimeLifecycleEvent::LoadGame:
-            return true;
-        case PartyQuestRuntimeLifecycleEvent::NewGame:
-        case PartyQuestRuntimeLifecycleEvent::MainMenu:
-            return false;
-        default:
-            // Other lifecycle domains have separate network/process integration
-            // and are not substitutes for character/save identity transitions.
-            return false;
-        }
-    }
+    [[nodiscard]] static bool HasVerifiedPreTransitionHook(
+        PartyQuestRuntimeLifecycleEvent aEvent) noexcept;
 
-    [[nodiscard]] static constexpr bool HasCompleteCharacterIdentityCoverage() noexcept
-    {
-        return HasVerifiedPreTransitionHook(PartyQuestRuntimeLifecycleEvent::LoadGame) &&
-            HasVerifiedPreTransitionHook(PartyQuestRuntimeLifecycleEvent::NewGame) &&
-            HasVerifiedPreTransitionHook(PartyQuestRuntimeLifecycleEvent::MainMenu);
-    }
+    [[nodiscard]] static bool HasCompleteCharacterIdentityCoverage() noexcept;
+
+private:
+    static void MarkVerifiedPreTransitionHook(
+        PartyQuestRuntimeLifecycleEvent aEvent) noexcept;
+    static void ResetForTests() noexcept;
+
+    friend class PartyQuestSkyrimSaveLoadLifecycleHookInstaller;
+    friend class PartyQuestSkyrimMainLoopLifecycleHookInstaller;
+    friend class PartyQuestRuntimeLifecycleIntegrationTestAccess;
 };
