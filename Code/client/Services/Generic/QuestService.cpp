@@ -548,12 +548,11 @@ void QuestService::PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexce
             // P0-D ends at a process-owned dry-run request. Native mutation stays
             // physically disconnected until C/E/F and live validation are proven.
             spdlog::info(
-                "PartyQuestRuntime dry-run request planned: quest={:016X} transaction={} worldRevision={} generation={} identity={:016X}",
+                "PartyQuestRuntime dry-run request planned: quest={:016X} transaction={} worldRevision={} generation={}",
                 aQuestId.LogFormat(),
                 result.Request->TransactionId,
                 result.Request->TargetWorldRevision,
-                result.RuntimeGeneration,
-                result.Request->RequestIdentity);
+                result.RuntimeGeneration);
             return;
         }
 
