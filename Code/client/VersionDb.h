@@ -26,6 +26,10 @@ private:
     std::string _verStr;
     std::string _moduleName;
     unsigned long long _base;
+    uint32_t _databaseFormat{};
+    SkyrimAddressLibraryIdNamespace _idNamespace{
+        SkyrimAddressLibraryIdNamespace::Unknown};
+    size_t _entryCount{};
     bool _loaded{false};
 
     static void* ToPointer(unsigned long long v) { return (void*)v; }
@@ -38,6 +42,9 @@ public:
     const std::string& GetModuleName() const { return _moduleName; }
     const std::string& GetLoadedVersionString() const { return _verStr; }
     bool IsLoaded() const { return _loaded; }
+    uint32_t GetLoadedDatabaseFormat() const { return _databaseFormat; }
+    SkyrimAddressLibraryIdNamespace GetLoadedIdNamespace() const { return _idNamespace; }
+    size_t GetLoadedEntryCount() const { return _entryCount; }
 
     const std::map<unsigned long long, unsigned long long>& GetOffsetMap() const { return _data; }
 
@@ -151,6 +158,9 @@ public:
         _verStr.clear();
         _moduleName = std::string();
         _base = 0;
+        _databaseFormat = 0;
+        _idNamespace = SkyrimAddressLibraryIdNamespace::Unknown;
+        _entryCount = 0;
         _loaded = false;
     }
 
@@ -257,6 +267,9 @@ public:
             _verStr = versionName;
             _moduleName = std::move(image.ModuleName);
             _base = reinterpret_cast<unsigned long long>(handle);
+            _databaseFormat = image.Format;
+            _idNamespace = image.IdNamespace;
+            _entryCount = image.Entries.size();
             _loaded = true;
             return true;
         }

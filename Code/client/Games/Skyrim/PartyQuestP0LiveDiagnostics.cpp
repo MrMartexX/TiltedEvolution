@@ -326,13 +326,34 @@ void PartyQuestP0LiveDiagnostics::Initialize() noexcept
                 static_cast<uint32_t>(std::max(patch, 0)),
                 static_cast<uint32_t>(std::max(build, 0))};
             startup << ",\"version_db\":" << VersionJson(dbVersion);
+            const char* idNamespace = "unknown";
+            switch (versionDb.GetLoadedIdNamespace())
+            {
+            case SkyrimAddressLibraryIdNamespace::Se:
+                idNamespace = "se";
+                break;
+            case SkyrimAddressLibraryIdNamespace::Ae:
+                idNamespace = "ae";
+                break;
+            case SkyrimAddressLibraryIdNamespace::Unknown:
+                break;
+            }
+            startup << ",\"address_library\":{\"loaded\":true"
+                    << ",\"format\":"
+                    << versionDb.GetLoadedDatabaseFormat()
+                    << ",\"id_namespace\":\"" << idNamespace << "\""
+                    << ",\"entry_count\":"
+                    << versionDb.GetLoadedEntryCount()
+                    << ",\"module_name\":\""
+                    << EscapeJson(versionDb.GetModuleName().c_str()) << "\"}";
             if (const auto executableVersion = GetExecutableVersion())
                 startup << ",\"executable_version_matches_version_db\":"
                         << (dbVersion == *executableVersion ? "true" : "false");
         }
         else
         {
-            startup << ",\"version_db\":{\"available\":false,\"reason\":\"version-db-not-loaded\"}";
+            startup << ",\"version_db\":{\"available\":false,\"reason\":\"version-db-not-loaded\"}"
+                    << ",\"address_library\":{\"loaded\":false,\"reason\":\"version-db-not-loaded\"}";
         }
 
         startup << ",\"runtime_profile\":{\"approved\":false,\"reason\":\"no-approved-production-papyrus-profile\"}"
