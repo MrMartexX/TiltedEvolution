@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 
 #include <PartyQuestP0LiveDiagnostics.h>
+#include <PartyQuestSkyrimRuntimeCompatibilityEvidence.h>
 
 #include <Systems/ModSystem.h>
 #include <Services/QuestSnapshotCollector.h>
@@ -335,10 +336,7 @@ void PartyQuestP0LiveDiagnostics::Initialize() noexcept
         startup << ",\"runtime_profile\":{\"approved\":false,\"reason\":\"no-approved-production-papyrus-profile\"}"
                 << ",\"papyrus_generation_authority\":{\"available\":false,\"reason\":\"no-proven-production-generation-source\"}"
                 << ",\"papyrus_snapshot_authority\":{\"available\":false,\"reason\":\"no-proven-production-coherent-snapshot-source\"}"
-                << ",\"resolved_record_fingerprint\":{\"available\":false,\"reason\":\"trusted-live-manifest-pipeline-not-wired\"}"
-                << ",\"winning_override_fingerprint\":{\"available\":false,\"reason\":\"trusted-live-manifest-pipeline-not-wired\"}"
-                << ",\"script_fingerprint\":{\"available\":false,\"reason\":\"trusted-live-manifest-pipeline-not-wired\"}"
-                << ",\"native_adapter_fingerprint\":{\"available\":false,\"reason\":\"trusted-live-manifest-pipeline-not-wired\"}"
+                << ",\"compatibility_observation\":{\"available\":false,\"reason\":\"quest-scoped-observation-pending\"}"
                 << ",\"canonical_set_stage_enabled\":false";
         WriteEvent("run_start", startup.str());
 
@@ -494,6 +492,11 @@ void PartyQuestP0LiveDiagnostics::RecordQuestObservation(
     GameId roundTrip{};
     const bool roundTripMapped = localFormId != 0 && acModSystem.GetServerModId(localFormId, roundTrip);
     const bool roundTripMatches = roundTripMapped && roundTrip == acSnapshot.QuestId;
+    const auto compatibility =
+        PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
+            apQuest,
+            acModSystem,
+            acSnapshot.QuestId);
 
     std::ostringstream stages;
     stages << '[';
@@ -537,9 +540,33 @@ void PartyQuestP0LiveDiagnostics::RecordQuestObservation(
            << ",\"runtime_safety\":\"" << SafetyName(applyPlan.Safety.Status) << "\""
            << ",\"runtime_safety_reason\":\"" << SafetyReasonName(applyPlan.Safety.Reason) << "\""
            << ",\"apply_actions\":" << static_cast<uint32_t>(applyPlan.Actions)
-           << ",\"dry_run_only\":" << (applyPlan.DryRunOnly ? "true" : "false")
-           << ",\"compatibility_facts\":{\"available\":false,\"reason\":\"trusted-live-compatibility-observer-not-wired\"}"
-           << ",\"canonical_mutation_attempted\":false";
+           << ",\"dry_run_only\":" << (applyPlan.DryRunOnly ? "true" : "false");
+
+    if (compatibility)
+    {
+        fields << ",\"compatibility_facts\":{\"available\":true"
+               << ",\"profile_version\":" << compatibility->ProfileVersion
+               << ",\"resolved_record_fingerprint\":"
+               << compatibility->ResolvedRecordFingerprint
+               << ",\"winning_override_fingerprint\":"
+               << compatibility->WinningOverrideFingerprint
+               << ",\"script_fingerprint\":"
+               << compatibility->ScriptFingerprint
+               << ",\"native_adapter_fingerprint\":"
+               << compatibility->NativeAdapterFingerprint
+               << ",\"adapter_mutation_components\":"
+               << static_cast<uint32_t>(compatibility->AdapterMutationComponents)
+               << ",\"reviewed_profile\":"
+               << (PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(
+                       acSnapshot.QuestId) ? "true" : "false")
+               << '}';
+    }
+    else
+    {
+        fields << ",\"compatibility_facts\":{\"available\":false,\"reason\":\"live-observation-failed-closed\"}";
+    }
+
+    fields << ",\"canonical_mutation_attempted\":false";
 
     WriteEvent("quest_observed", fields.str());
 }

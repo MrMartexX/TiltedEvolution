@@ -40,6 +40,21 @@ public:
 
     [[nodiscard]] static bool HasReviewedProfile(const GameId& acQuestId) noexcept;
 
+    /**
+     * Collect the same live compatibility fingerprints used by production
+     * planning without minting planning or mutation authority.
+     *
+     * This diagnostic surface deliberately does not require the quest to be in
+     * the reviewed registry: its output is the evidence needed to review and
+     * add such an entry. Callers must never reinterpret the returned facts as a
+     * PartyQuestRuntimeCanonicalAuthorization or process planning request.
+     */
+    [[nodiscard]] static std::optional<PartyQuestRuntimeCompatibilityFacts>
+    ObserveDiagnostic(
+        TESQuest* apQuest,
+        const ModSystem& acModSystem,
+        const GameId& acExpectedQuestId) noexcept;
+
     [[nodiscard]] static std::optional<PartyQuestRuntimeProcessPlanningEvidence>
     ObserveFresh(
         TESQuest* apQuest,

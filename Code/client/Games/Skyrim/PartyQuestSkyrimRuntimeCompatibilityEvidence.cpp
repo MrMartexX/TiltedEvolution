@@ -409,6 +409,43 @@ bool PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(
     return false;
 }
 
+std::optional<PartyQuestRuntimeCompatibilityFacts>
+PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
+    TESQuest* apQuest,
+    const ModSystem& acModSystem,
+    const GameId& acExpectedQuestId) noexcept
+{
+    if (!apQuest || !acExpectedQuestId)
+        return std::nullopt;
+
+    const auto dataDirectory = GetSkyrimDataDirectory();
+    if (!dataDirectory)
+        return std::nullopt;
+
+    const uint64_t resolvedRecord = HashResolvedQuestTopology(
+        apQuest,
+        acModSystem,
+        acExpectedQuestId);
+    const uint64_t pluginEnvironment =
+        HashOrderedPluginEnvironment(*dataDirectory);
+    const uint64_t winningOverride = CombineWinningOverrideFingerprint(
+        resolvedRecord,
+        pluginEnvironment);
+    const uint64_t scriptEnvironment = HashScriptEnvironment(*dataDirectory);
+    if (resolvedRecord == 0 || winningOverride == 0 || scriptEnvironment == 0)
+        return std::nullopt;
+
+    PartyQuestRuntimeCompatibilityFacts facts;
+    facts.ProfileVersion = ProfileVersion;
+    facts.ResolvedRecordFingerprint = resolvedRecord;
+    facts.WinningOverrideFingerprint = winningOverride;
+    facts.ScriptFingerprint = scriptEnvironment;
+    facts.NativeAdapterFingerprint = NativeAdapterFingerprint;
+    facts.AdapterMutationComponents =
+        PartyQuestVerificationComponent::QuestSnapshot;
+    return facts;
+}
+
 std::optional<PartyQuestRuntimeProcessPlanningEvidence>
 PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveFresh(
     TESQuest* apQuest,
@@ -423,33 +460,16 @@ PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveFresh(
         return std::nullopt;
     }
 
-    const auto dataDirectory = GetSkyrimDataDirectory();
-    if (!dataDirectory)
-        return std::nullopt;
-
-    const uint64_t resolvedRecord = HashResolvedQuestTopology(
+    const auto compatibility = ObserveDiagnostic(
         apQuest,
         acModSystem,
         acCandidate.CanonicalSnapshot.QuestId);
-    const uint64_t pluginEnvironment =
-        HashOrderedPluginEnvironment(*dataDirectory);
-    const uint64_t winningOverride = CombineWinningOverrideFingerprint(
-        resolvedRecord,
-        pluginEnvironment);
-    const uint64_t scriptEnvironment = HashScriptEnvironment(*dataDirectory);
-    if (resolvedRecord == 0 || winningOverride == 0 || scriptEnvironment == 0)
+    if (!compatibility)
         return std::nullopt;
 
     PartyQuestRuntimeProcessPlanningEvidence evidence;
     evidence.SyncFacts = QuestSnapshotCollector::CollectSyncFacts(apQuest);
-    evidence.CompatibilityFacts.ProfileVersion = ProfileVersion;
-    evidence.CompatibilityFacts.ResolvedRecordFingerprint = resolvedRecord;
-    evidence.CompatibilityFacts.WinningOverrideFingerprint = winningOverride;
-    evidence.CompatibilityFacts.ScriptFingerprint = scriptEnvironment;
-    evidence.CompatibilityFacts.NativeAdapterFingerprint =
-        NativeAdapterFingerprint;
-    evidence.CompatibilityFacts.AdapterMutationComponents =
-        PartyQuestVerificationComponent::QuestSnapshot;
+    evidence.CompatibilityFacts = *compatibility;
 
     // The current narrow stage adapter has no external checkpoint sidecar
     // capability. The explicit empty manifest is still an exact, non-zero
