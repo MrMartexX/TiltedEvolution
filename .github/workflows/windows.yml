@@ -171,3 +171,14 @@ jobs:
           path: |
             ${{ env.STR_BUILD_DIR }}
             GameFiles/Skyrim/
+
+      - name: Upload short-lived PR live-validation build
+        if: ${{ github.event_name == 'pull_request' && steps.scope.outputs.full == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: equal-party-p0-live-windows-${{ github.sha }}
+          retention-days: 3
+          if-no-files-found: error
+          path: |
+            ${{ env.STR_BUILD_DIR }}
+            GameFiles/Skyrim/
