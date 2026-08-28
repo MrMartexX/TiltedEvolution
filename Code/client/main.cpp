@@ -1,6 +1,7 @@
 
 #include <TiltedOnlineApp.h>
 #include <TiltedOnlinePCH.h>
+#include <ScriptExtender.h>
 
 #include <Commctrl.h>
 #include <Windows.h>
@@ -45,6 +46,12 @@ void RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVe
 
     TiltedOnlineApp::InstallHooks2();
     TP_HOOK_COMMIT;
+
+    // SKSE installs hooks for both the pre- and post-CRT initialization
+    // boundaries. Install those hooks before control reaches Skyrim's entry
+    // point: BeginMain runs from GetStartupInfoW, after the pre-CRT boundary,
+    // which leaves SKSE's trampoline pools uninitialized.
+    LoadScriptExender();
 }
 
 void RunTiltedApp()
