@@ -2,7 +2,6 @@
 #include "SteamCeg.h"
 
 #include <algorithm>
-#include <assert.h>
 #include <cryptopp/aes.h>
 #include <cryptopp/filters.h>
 #include <cryptopp/modes.h>
@@ -30,7 +29,15 @@ uintptr_t CrackCEGInPlace(const CEGLocationInfo& acInfo)
     SteamStubHeaderV31 stub{};
     std::memcpy(&stub, acInfo.start - sizeof(SteamStubHeaderV31), sizeof(SteamStubHeaderV31));
     SteamXor(reinterpret_cast<uint8_t*>(&stub), sizeof(SteamStubHeaderV31), stub.XorKey);
-    assert(stub.Signature == 0xC0DEC0DF);
+    if (stub.Signature != 0xC0DEC0DF || stub.OriginalEntryPoint == 0)
+        return 0;
+
+    // SteamStub 3.1 retains the wrapper and decoded header when its
+    // NoEncryption flag is set. In that mode .text is already executable and
+    // the AES fields are intentionally empty. Decrypting it would corrupt the
+    // game image before the original entry point is called.
+    if (!HasEncryptedCodeSection(stub))
+        return stub.OriginalEntryPoint;
 
     // decrypt IV in place
     ECB_Mode<AES>::Decryption ecbDec(stub.AES_Key, sizeof(stub.AES_Key));

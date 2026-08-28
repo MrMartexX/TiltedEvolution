@@ -53,4 +53,15 @@ struct SteamStubHeaderV31
 };
 
 static_assert(sizeof(SteamStubHeaderV31) == 240);
+
+enum class SteamStubDrmFlags : uint32_t
+{
+    NoEncryption = 0x04
+};
+
+[[nodiscard]] constexpr bool HasEncryptedCodeSection(
+    const SteamStubHeaderV31& acHeader) noexcept
+{
+    return (acHeader.Flags & static_cast<uint32_t>(SteamStubDrmFlags::NoEncryption)) == 0;
+}
 } // namespace steam
