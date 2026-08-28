@@ -104,14 +104,14 @@ jobs:
 
       - name: Configure xmake and install dependencies
         if: steps.scope.outputs.full == 'true'
-        run: xmake config --arch=${{ matrix.arch }} --mode=${{ inputs.build-mode }} --yes -vD
+        run: xmake config --arch=${{ matrix.arch }} --mode=${{ inputs.build-mode || 'releasedbg' }} --yes -vD
 
       # Build the client
       - name: Build with xmake
         if: steps.scope.outputs.full == 'true'
         run: |
           xmake -y
-          echo "STR_BUILD_DIR=build/windows/${{ matrix.arch }}/${{ inputs.build-mode }}/" >> $env:GITHUB_ENV
+          echo "STR_BUILD_DIR=build/windows/${{ matrix.arch }}/${{ inputs.build-mode || 'releasedbg' }}/" >> $env:GITHUB_ENV
 
       # Create distrib
       - name: Output distrib binaries via xmake
