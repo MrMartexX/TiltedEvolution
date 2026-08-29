@@ -61,7 +61,10 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
         // Save for later
         if (res)
         {
-            pExtension->LatestAnimation = action;
+            // The engine call above may rebuild actor-side state. Never reuse
+            // an extension pointer captured across that call boundary.
+            if (auto* pCurrentExtension = pActor->GetExtension())
+                pCurrentExtension->LatestAnimation = action;
         }
 
         World::Get().GetRunner().Trigger(action);
