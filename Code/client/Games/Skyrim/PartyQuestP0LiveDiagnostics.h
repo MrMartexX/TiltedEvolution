@@ -45,6 +45,12 @@ public:
     /** Emit the current process-local hook installation ledger. */
     static void RecordLifecycleCapabilities(const char* acPhase) noexcept;
 
+    /**
+     * Samples the exact-version Papyrus diagnostic adapter. Calls are throttled
+     * internally and remain evidence-only; they cannot grant VM authority.
+     */
+    static void RecordPapyrusRuntimeObservation() noexcept;
+
     static void RecordEngineSave(
         const char* acPhase,
         const char* acFileName,

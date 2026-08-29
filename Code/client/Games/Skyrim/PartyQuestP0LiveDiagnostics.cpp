@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 
 #include <PartyQuestP0LiveDiagnostics.h>
+#include <PartyQuestSkyrimPapyrusRuntimeObserver.h>
 #include <PartyQuestSkyrimRuntimeCompatibilityEvidence.h>
 #include <SaveLoad.h>
 
@@ -280,6 +281,23 @@ const char* SafetyReasonName(PartyQuestRuntimeSafetyReason aReason) noexcept
     default: return "unknown";
     }
 }
+
+const char* PapyrusObservationStatusName(
+    PartyQuestPapyrusRuntimeObservationStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestPapyrusRuntimeObservationStatus::Unsupported:
+        return "unsupported";
+    case PartyQuestPapyrusRuntimeObservationStatus::Unknown:
+        return "unknown";
+    case PartyQuestPapyrusRuntimeObservationStatus::Busy:
+        return "busy";
+    case PartyQuestPapyrusRuntimeObservationStatus::Idle:
+        return "idle";
+    }
+    return "unknown";
+}
 } // namespace
 
 void PartyQuestP0LiveDiagnostics::Initialize() noexcept
@@ -356,9 +374,9 @@ void PartyQuestP0LiveDiagnostics::Initialize() noexcept
                     << ",\"address_library\":{\"loaded\":false,\"reason\":\"version-db-not-loaded\"}";
         }
 
-        startup << ",\"runtime_profile\":{\"approved\":false,\"reason\":\"no-approved-production-papyrus-profile\"}"
-                << ",\"papyrus_generation_authority\":{\"available\":false,\"reason\":\"no-proven-production-generation-source\"}"
-                << ",\"papyrus_snapshot_authority\":{\"available\":false,\"reason\":\"no-proven-production-coherent-snapshot-source\"}"
+        startup << ",\"runtime_profile\":{\"approved\":false,\"reason\":\"live-version-bound-papyrus-adapter-proof-pending\"}"
+                << ",\"papyrus_generation_authority\":{\"available\":false,\"reason\":\"diagnostic-ingress-source-does-not-issue-authority\"}"
+                << ",\"papyrus_snapshot_authority\":{\"available\":false,\"reason\":\"diagnostic-coherent-sampler-does-not-issue-authority\"}"
                 << ",\"compatibility_observation\":{\"available\":false,\"reason\":\"quest-scoped-observation-pending\"}"
                 << ",\"canonical_set_stage_enabled\":false";
         WriteEvent("run_start", startup.str());
@@ -526,6 +544,65 @@ void PartyQuestP0LiveDiagnostics::RecordLifecycleCapabilities(
               "\"reason\":\"no-separate-profile-switch-boundary-approved\"}"
            << ",\"grants_mutation_authority\":false";
     WriteEvent("lifecycle_capabilities", fields.str());
+}
+
+void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
+{
+    if (!IsEnabled())
+        return;
+
+    // Capture a short startup sequence to prove repeated observations, then a
+    // sparse heartbeat so a longer live run can show real ingress transitions
+    // without generating an unbounded per-frame log.
+    static uint64_t s_callCount = 0;
+    static PartyQuestSkyrimPapyrusDiagnosticStatus s_lastStatus =
+        PartyQuestSkyrimPapyrusDiagnosticStatus::VirtualMachineUnavailable;
+    ++s_callCount;
+    const bool startupWindow = s_callCount <= 24;
+    const bool heartbeat = (s_callCount % 300) == 0;
+
+    auto& observer =
+        PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver();
+    const auto sample = observer.SampleDiagnostics();
+    const bool statusChanged = sample.DiagnosticStatus != s_lastStatus;
+    s_lastStatus = sample.DiagnosticStatus;
+    if (!startupWindow && !heartbeat && !statusChanged)
+        return;
+
+    const auto& observation = sample.Observation;
+    const auto& counts = sample.Counts;
+    std::ostringstream fields;
+    fields << "\"sample_index\":" << s_callCount
+           << ",\"diagnostic_status\":\""
+           << PartyQuestSkyrimPapyrusRuntimeObserver::DiagnosticStatusName(
+                  sample.DiagnosticStatus)
+           << "\""
+           << ",\"observation_status\":\""
+           << PapyrusObservationStatusName(observation.Status) << "\""
+           << ",\"pending_work_count\":" << observation.PendingWorkCount
+           << ",\"papyrus_generation\":"
+           << observation.QuestEventGeneration
+           << ",\"observed_work_domains\":"
+           << observation.ObservedWorkDomains
+           << ",\"domain_counts\":{"
+              "\"function_messages\":"
+           << counts.FunctionMessageQueues
+           << ",\"vm_tasks\":" << counts.VmTaskQueue
+           << ",\"ui_waiting\":" << counts.UiWaitingQueue
+           << ",\"suspend_resume\":" << counts.SuspendResumeQueues
+           << ",\"running_stacks\":" << counts.RunningStacks
+           << ",\"latent_returns\":" << counts.LatentReturnQueue << '}'
+           << ",\"ingress_hook_invocations\":"
+           << sample.IngressHookInvocationCount
+           << ",\"exact_runtime_identity\":"
+           << (sample.ExactRuntimeIdentity ? "true" : "false")
+           << ",\"ingress_hooks_registered\":"
+           << (sample.IngressHooksRegistered ? "true" : "false")
+           << ",\"virtual_table_matched\":"
+           << (sample.VirtualTableMatched ? "true" : "false")
+           << ",\"authoritative\":false"
+           << ",\"grants_mutation_authority\":false";
+    WriteEvent("papyrus_runtime_observation", fields.str());
 }
 
 void PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(

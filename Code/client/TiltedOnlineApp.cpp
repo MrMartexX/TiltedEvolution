@@ -113,6 +113,7 @@ void TiltedOnlineApp::Update()
     // guarded Dispatch after it reaches this thread rather than carrying a
     // prevalidated capability across the queue boundary.
     (void)PartyQuestSkyrimRuntimeThread::ObserveCurrentUpdateThread();
+    PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation();
 
     // Reverting a change that used to be here to disable bUseFaceGenPreprocessedHeads==true (which is 
     // the default) handling. Extensive testing over months by multiple parties showed that enabling 
