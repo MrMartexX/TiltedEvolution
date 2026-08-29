@@ -2,8 +2,8 @@
 
 #include <PartyQuestSkyrimPapyrusRuntimeObserver.h>
 
-#include <GameVM.h>
 #include <Misc/BSScript.h>
+#include <Misc/GameVM.h>
 #include <Structs/Skyrim/PartyQuestSkyrimPapyrusRuntimeProfileResolver.h>
 #include <VersionDb.h>
 
