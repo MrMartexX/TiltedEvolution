@@ -276,10 +276,6 @@ TEST_CASE(
     WriteText(liveSave, mutatedBytes);
 
     const auto strongAttempt = InitializeStrongAttempt(*paths, transactionId);
-#ifdef _WIN32
-    REQUIRE(strongAttempt.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-#else
     REQUIRE(strongAttempt.IsUsable());
     REQUIRE(strongAttempt.State.has_value());
     const auto strongState = *strongAttempt.State;
@@ -363,7 +359,6 @@ TEST_CASE(
     REQUIRE(published.State.has_value());
     REQUIRE(*published.State == strongState);
     REQUIRE(published.State->CurrentRestoreId == strongState.CurrentRestoreId);
-#endif
 }
 
 TEST_CASE(
@@ -387,10 +382,6 @@ TEST_CASE(
     WriteText(liveSave, mutatedBytes);
 
     const auto strongAttempt = InitializeStrongAttempt(*paths, transactionId);
-#ifdef _WIN32
-    REQUIRE(strongAttempt.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-#else
     REQUIRE(strongAttempt.IsUsable());
     REQUIRE(strongAttempt.State.has_value());
     const auto strongState = *strongAttempt.State;
@@ -476,5 +467,4 @@ TEST_CASE(
     REQUIRE(published.State.has_value());
     REQUIRE(*published.State == strongState);
     REQUIRE(published.State->CurrentRestoreId == strongState.CurrentRestoreId);
-#endif
 }

@@ -434,22 +434,6 @@ TEST_CASE("Strong terminal rollback advances one persisted attempt and retries w
         "PRE_REPAIR_1640");
     WriteRecoveryBytes(paths.SavesDirectory / "Hero.ess", "MUTATED_1640");
 
-#ifdef _WIN32
-    PartyQuestReplicaWorkspaceLease lease;
-    REQUIRE(lease.Acquire(paths, kRecoveryCampaign, kRecoveryPlayer) ==
-        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
-    const auto capability = lease.CreatePublicationCapability(
-        paths, kRecoveryCampaign, kRecoveryPlayer);
-    const auto unsupported =
-        PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
-            paths,
-            kRecoveryCampaign,
-            kRecoveryPlayer,
-            kTransactionId,
-            capability);
-    REQUIRE(unsupported.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-#else
     uint64_t firstRestoreId{};
     {
         PartyQuestReplicaWorkspaceLease lease;
@@ -540,5 +524,4 @@ TEST_CASE("Strong terminal rollback advances one persisted attempt and retries w
     REQUIRE(oldTerminal.State.has_value());
     REQUIRE(oldTerminal.State->Phase == PartyQuestReplicaRestoreJournalPhase::RolledBack);
     REQUIRE(std::filesystem::exists(oldTerminal.State->TransactionDirectory));
-#endif
 }

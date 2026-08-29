@@ -164,24 +164,6 @@ TEST_CASE(
     const auto liveSave = paths->SavesDirectory / "Hero.ess";
     WriteStrongLiveBytes(liveSave, "MUTATED_STRONG_LIVE");
 
-#ifdef _WIN32
-    PartyQuestReplicaWorkspaceLease lease;
-    REQUIRE(lease.Acquire(*paths, kStrongLiveCampaign, kStrongLivePlayer) ==
-        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
-    const auto capability = lease.CreatePublicationCapability(
-        *paths,
-        kStrongLiveCampaign,
-        kStrongLivePlayer);
-    const auto unsupported =
-        PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
-            *paths,
-            kStrongLiveCampaign,
-            kStrongLivePlayer,
-            transactionId,
-            capability);
-    REQUIRE(unsupported.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-#else
     uint64_t firstRestoreId{};
     {
         PartyQuestReplicaWorkspaceLease lease;
@@ -297,5 +279,4 @@ TEST_CASE(
     REQUIRE(oldTerminal.State->Phase ==
         PartyQuestReplicaRestoreJournalPhase::RolledBack);
     REQUIRE(std::filesystem::exists(oldTerminal.State->TransactionDirectory));
-#endif
 }

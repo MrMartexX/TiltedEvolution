@@ -653,7 +653,7 @@ TEST_CASE(
 }
 
 TEST_CASE(
-    "empty directory durable removal stays POSIX-only",
+    "empty directory durable removal is supported by stable storage",
     "[quest.party-state.durability][directory-remove]")
 {
     Sandbox sandbox;
@@ -663,13 +663,8 @@ TEST_CASE(
     REQUIRE_FALSE(ec);
 
     const auto status = PartyQuestStableStorage::RemoveEmptyDirectoryDurably(directory);
-#ifdef _WIN32
-    REQUIRE(status == PartyQuestStableStorageStatus::Unsupported);
-    REQUIRE(std::filesystem::exists(directory));
-#else
     REQUIRE(status == PartyQuestStableStorageStatus::Success);
     REQUIRE_FALSE(std::filesystem::exists(directory));
-#endif
 
     RequireGlobalMutationGateClosed();
 }

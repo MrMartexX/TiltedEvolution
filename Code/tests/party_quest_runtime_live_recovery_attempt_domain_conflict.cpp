@@ -207,10 +207,6 @@ TEST_CASE(
     WriteText(liveSave, liveBytes);
 
     const auto strongAttempt = InitializeStrongAttempt(*paths, transactionId);
-#ifdef _WIN32
-    REQUIRE(strongAttempt.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-#else
     REQUIRE(strongAttempt.IsUsable());
     REQUIRE(strongAttempt.State.has_value());
     REQUIRE(strongAttempt.State->CurrentRestoreId != 0);
@@ -270,7 +266,6 @@ TEST_CASE(
     REQUIRE(legacyAfter.State.has_value());
     REQUIRE(legacyAfter.State->Phase ==
         PartyQuestReplicaRestoreJournalPhase::Prepared);
-#endif
 }
 
 TEST_CASE(
@@ -292,10 +287,6 @@ TEST_CASE(
     WriteText(liveSave, liveBytes);
 
     const auto strongAttempt = InitializeStrongAttempt(*paths, transactionId);
-#ifdef _WIN32
-    REQUIRE(strongAttempt.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-#else
     REQUIRE(strongAttempt.IsUsable());
     REQUIRE(strongAttempt.State.has_value());
     const auto strongState = *strongAttempt.State;
@@ -365,5 +356,4 @@ TEST_CASE(
     REQUIRE(legacyAfter.State.has_value());
     REQUIRE(legacyAfter.State->Phase ==
         PartyQuestReplicaRestoreJournalPhase::Prepared);
-#endif
 }
