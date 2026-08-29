@@ -121,13 +121,6 @@ TEST_CASE(
 
     constexpr uint64_t transactionId = 29101;
 
-#ifdef _WIN32
-    const auto unsupported = EnsureAttempt(*paths, transactionId);
-    REQUIRE(unsupported.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-    REQUIRE_FALSE(std::filesystem::exists(
-        PartyQuestRuntimeRestoreAttemptStore::GetStatePath(*paths, transactionId)));
-#else
     const auto published = EnsureAttempt(*paths, transactionId);
     REQUIRE(published.IsUsable());
     REQUIRE(published.State.has_value());
@@ -194,7 +187,6 @@ TEST_CASE(
         transactionId);
     REQUIRE(loaded.Status == PartyQuestRuntimeRestoreAttemptStatus::Success);
     REQUIRE(loaded.State == restarted.State);
-#endif
 }
 
 TEST_CASE(
@@ -211,11 +203,6 @@ TEST_CASE(
     constexpr uint64_t transactionId = 29102;
     constexpr uint64_t worldRevision = 1910;
 
-#ifdef _WIN32
-    const auto unsupported = EnsureAttempt(*paths, transactionId);
-    REQUIRE(unsupported.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-#else
     const auto initial = EnsureAttempt(*paths, transactionId);
     REQUIRE(initial.IsUsable());
     REQUIRE(initial.State.has_value());
@@ -342,5 +329,4 @@ TEST_CASE(
     REQUIRE(oldTerminal.State.has_value());
     REQUIRE(oldTerminal.State->Phase ==
         PartyQuestReplicaRestoreJournalPhase::RolledBack);
-#endif
 }

@@ -136,9 +136,9 @@ struct PartyQuestStableStorage
      * Durably removes one already-empty directory namespace entry.
      *
      * POSIX validates the final node as a real directory, calls rmdir(), then
-     * fsyncs the containing directory. Windows remains unsupported until this
-     * destructive namespace authority is promoted together with the restore
-     * compaction/recovery state machine and its fault matrix.
+     * fsyncs the containing directory. Windows opens the final node without
+     * following reparse points, requires NTFS, marks the exact handle for
+     * deletion, then durably promotes the containing directory.
      */
     [[nodiscard]] static PartyQuestStableStorageStatus RemoveEmptyDirectoryDurably(
         const std::filesystem::path& acDirectory) noexcept;
@@ -198,10 +198,6 @@ struct PartyQuestStableStorage
 
     [[nodiscard]] static constexpr bool HasDocumentedDurableEmptyDirectoryRemovalPrimitive() noexcept
     {
-#ifdef _WIN32
-        return false;
-#else
         return true;
-#endif
     }
 };

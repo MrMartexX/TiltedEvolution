@@ -167,11 +167,6 @@ TEST_CASE(
     constexpr uint64_t transactionId = 29201;
     constexpr uint64_t worldRevision = 1920;
 
-#ifdef _WIN32
-    const auto unsupported = EnsureAttempt(*paths, transactionId);
-    REQUIRE(unsupported.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-#else
     const auto first = EnsureAttempt(*paths, transactionId);
     REQUIRE(first.IsUsable());
     REQUIRE(first.State.has_value());
@@ -233,5 +228,4 @@ TEST_CASE(
     RequireTerminalRolledBack(*paths, firstRestoreId);
     RequireTerminalRolledBack(*paths, secondRestoreId);
     RequireTerminalRolledBack(*paths, thirdRestoreId);
-#endif
 }

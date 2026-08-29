@@ -120,10 +120,6 @@ TEST_CASE(
         transactionId,
         capability);
 
-#ifdef _WIN32
-    REQUIRE(current.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-#else
     REQUIRE(current.IsUsable());
     REQUIRE(current.State.has_value());
 
@@ -206,5 +202,4 @@ TEST_CASE(
     REQUIRE(next.Status == PartyQuestRuntimeRestoreAttemptStatus::Created);
     REQUIRE(next.State.has_value());
     REQUIRE(next.State->CurrentRestoreId == terminalRestoreId + 1);
-#endif
 }

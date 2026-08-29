@@ -88,12 +88,6 @@ TEST_CASE(
     const auto empty = workspace / "empty";
     REQUIRE(PartyQuestStableStorage::EnsureDirectoryTreeDurably(empty) ==
         PartyQuestStableStorageStatus::Success);
-#ifdef _WIN32
-    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
-    REQUIRE(PartyQuestStableStorage::RemoveEmptyDirectoryDurably(empty) ==
-        PartyQuestStableStorageStatus::Unsupported);
-    REQUIRE(std::filesystem::is_directory(empty));
-#else
     REQUIRE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
     REQUIRE(PartyQuestStableStorage::RemoveEmptyDirectoryDurably(empty) ==
         PartyQuestStableStorageStatus::Success);
@@ -120,7 +114,6 @@ TEST_CASE(
     REQUIRE(PartyQuestStableStorage::RemoveEmptyDirectoryDurably(nonEmpty) ==
         PartyQuestStableStorageStatus::Success);
     REQUIRE_FALSE(std::filesystem::exists(nonEmpty));
-#endif
 
     REQUIRE(PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee ==
         PartyQuestPersistenceGuarantee::ProcessCrashResilient);

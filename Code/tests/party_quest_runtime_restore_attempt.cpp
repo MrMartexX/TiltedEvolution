@@ -157,11 +157,6 @@ TEST_CASE(
         PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
             paths, kCampaign, kPlayer, transactionId, capability);
 
-#ifdef _WIN32
-    REQUIRE(initialized.Status == PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-    REQUIRE_FALSE(std::filesystem::exists(
-        PartyQuestRuntimeRestoreAttemptStore::GetStatePath(paths, transactionId)));
-#else
     REQUIRE(initialized.Status == PartyQuestRuntimeRestoreAttemptStatus::Created);
     REQUIRE(initialized.State.has_value());
     REQUIRE(initialized.State->TransactionId == transactionId);
@@ -191,7 +186,6 @@ TEST_CASE(
     REQUIRE(second.State->TransactionId == secondTransactionId);
     REQUIRE(second.State->CurrentRestoreId == 3);
     REQUIRE(second.RestoreId != initialized.RestoreId);
-#endif
 }
 
 TEST_CASE(
@@ -208,9 +202,6 @@ TEST_CASE(
         PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
             paths, kCampaign, kPlayer, transactionId, capability);
 
-#ifdef _WIN32
-    REQUIRE(initialized.Status == PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform);
-#else
     REQUIRE(initialized.Status == PartyQuestRuntimeRestoreAttemptStatus::Created);
     REQUIRE(initialized.State.has_value());
     const uint64_t firstRestoreId = initialized.State->CurrentRestoreId;
@@ -265,5 +256,4 @@ TEST_CASE(
     REQUIRE(nonterminal.State.has_value());
     REQUIRE(nonterminal.State->CurrentOrdinal == 1);
     REQUIRE(nonterminal.State->CurrentRestoreId == secondRestoreId);
-#endif
 }

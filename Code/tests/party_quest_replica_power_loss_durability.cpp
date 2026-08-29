@@ -184,13 +184,11 @@ TEST_CASE(
 
 #ifdef _WIN32
     // Windows stable-storage authority remains deliberately decomposed. The
-    // exact NTFS copy/remove primitives are now reviewed, but arbitrary callers
-    // still cannot obtain generic directory flush or directory-removal authority.
+    // exact NTFS namespace primitives are reviewed, but arbitrary callers still
+    // cannot obtain generic directory-flush authority.
     REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedParentDirectoryFlushPrimitive());
-    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
-#else
-    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
 #endif
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
     REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileCopyPrimitive());
     REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileRemovalPrimitive());
 

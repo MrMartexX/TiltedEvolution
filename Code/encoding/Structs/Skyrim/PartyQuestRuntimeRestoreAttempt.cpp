@@ -386,11 +386,6 @@ PartyQuestRuntimeRestoreAttemptStatus SaveBytesPowerLossDurably(
     const std::filesystem::path& acPath,
     const std::vector<uint8_t>& acBytes) noexcept
 {
-#ifdef _WIN32
-    (void)acPath;
-    (void)acBytes;
-    return PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform;
-#else
     if (acBytes.empty() ||
         !PartyQuestDurableResourcePolicy::IsMutableFilesystemPathWithinBudget(acPath))
     {
@@ -431,7 +426,6 @@ PartyQuestRuntimeRestoreAttemptStatus SaveBytesPowerLossDurably(
         return PartyQuestRuntimeRestoreAttemptStatus::PersistenceFailed;
     }
     return PartyQuestRuntimeRestoreAttemptStatus::Success;
-#endif
 }
 
 PartyQuestRuntimeRestoreAttemptStatus SaveStatePowerLossDurably(
@@ -474,18 +468,12 @@ PartyQuestRuntimeRestoreAttemptStatus RecoverTemporaryArchive(
     const std::filesystem::path& acPrimary,
     const std::filesystem::path& acTemporary) noexcept
 {
-#ifdef _WIN32
-    (void)acPrimary;
-    (void)acTemporary;
-    return PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform;
-#else
     if (PartyQuestStableStorage::PublishFileRename(
             acTemporary, acPrimary, true) != PartyQuestStableStorageStatus::Success)
     {
         return PartyQuestRuntimeRestoreAttemptStatus::PersistenceFailed;
     }
     return PartyQuestRuntimeRestoreAttemptStatus::Success;
-#endif
 }
 
 PartyQuestRuntimeRestoreAttemptStatus LoadOrRecoverAllocator(
@@ -551,12 +539,6 @@ std::pair<PartyQuestRuntimeRestoreAttemptStatus, uint64_t> AllocateRestoreIdPowe
     const PartyQuestCampaignId& acCampaignId,
     const PartyQuestPlayerProfileId& acPlayerProfileId) noexcept
 {
-#ifdef _WIN32
-    (void)acPaths;
-    (void)acCampaignId;
-    (void)acPlayerProfileId;
-    return {PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform, 0};
-#else
     RestoreIdAllocatorState allocator;
     const auto loaded = LoadOrRecoverAllocator(
         acPaths, acCampaignId, acPlayerProfileId, allocator);
@@ -615,7 +597,6 @@ std::pair<PartyQuestRuntimeRestoreAttemptStatus, uint64_t> AllocateRestoreIdPowe
     return {
         PartyQuestRuntimeRestoreAttemptStatus::RestoreIdAllocationLimitReached,
         0};
-#endif
 }
 
 bool JournalMatchesRestoreId(
@@ -778,12 +759,6 @@ PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
             aTransactionId);
     }
 
-#ifdef _WIN32
-    return MakeResult(
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform,
-        acPaths,
-        aTransactionId);
-#else
     auto loaded = Load(acPaths, acCampaignId, acPlayerProfileId, aTransactionId);
     if (loaded.Status == PartyQuestRuntimeRestoreAttemptStatus::Success)
         return loaded;
@@ -844,7 +819,6 @@ PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
         acPaths,
         aTransactionId,
         &initial);
-#endif
 }
 
 PartyQuestRuntimeRestoreAttemptResult
@@ -880,12 +854,6 @@ PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
             aTransactionId);
     }
 
-#ifdef _WIN32
-    return MakeResult(
-        PartyQuestRuntimeRestoreAttemptStatus::UnsupportedPlatform,
-        acPaths,
-        aTransactionId);
-#else
     auto loaded = Load(acPaths, acCampaignId, acPlayerProfileId, aTransactionId);
     if (loaded.Status != PartyQuestRuntimeRestoreAttemptStatus::Success || !loaded.State)
         return loaded;
@@ -959,5 +927,4 @@ PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
         acPaths,
         aTransactionId,
         &advanced);
-#endif
 }

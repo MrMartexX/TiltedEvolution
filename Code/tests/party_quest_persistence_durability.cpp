@@ -46,11 +46,10 @@ TEST_CASE("stable-storage primitives keep the platform publication boundary expl
     REQUIRE(PartyQuestStableStorage::HasDocumentedDurableFileRemovalPrimitive());
 #ifdef _WIN32
     REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedParentDirectoryFlushPrimitive());
-    REQUIRE_FALSE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
 #else
     REQUIRE(PartyQuestStableStorage::HasDocumentedParentDirectoryFlushPrimitive());
-    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
 #endif
+    REQUIRE(PartyQuestStableStorage::HasDocumentedDurableEmptyDirectoryRemovalPrimitive());
 
     REQUIRE(PartyQuestStableStorage::FlushFile({}) ==
         PartyQuestStableStorageStatus::InvalidPath);
