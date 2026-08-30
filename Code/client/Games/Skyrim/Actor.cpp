@@ -426,11 +426,12 @@ Actor* TP_MAKE_THISCALL(HookCharacterDestructor, Actor)
 {
     TP_EMPTY_HOOK_PLACEHOLDER;
 
-    auto pExtension = apThis->GetExtension();
-
-    if (pExtension)
+    // Only ordinary actors own a placement-new extension in their extended
+    // engine allocation. The player extension is process-owned and therefore
+    // must not be destroyed by the engine actor lifecycle hook.
+    if (auto* pExtendedActor = apThis->AsExActor())
     {
-        pExtension->~ActorExtension();
+        static_cast<ActorExtension*>(pExtendedActor)->~ActorExtension();
     }
 
     TiltedPhoques::ThisCall(RealCharacterDestructor, apThis);
