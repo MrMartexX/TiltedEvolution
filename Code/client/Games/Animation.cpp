@@ -63,8 +63,13 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
         {
             // The engine call above may rebuild actor-side state. Never reuse
             // an extension pointer captured across that call boundary.
-            if (auto* pCurrentExtension = pActor->GetExtension())
-                pCurrentExtension->LatestAnimation = action;
+            // Reload the actor through TESActionData as well: the native
+            // PerformAction target does not preserve the cached actor register.
+            if (auto* pCurrentActor = apAction->actor)
+            {
+                if (auto* pCurrentExtension = pCurrentActor->GetExtension())
+                    pCurrentExtension->LatestAnimation = action;
+            }
         }
 
         World::Get().GetRunner().Trigger(action);
