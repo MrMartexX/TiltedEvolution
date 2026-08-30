@@ -2,6 +2,8 @@
 
 #include <Misc/GameVM.h>
 
+#include <type_traits>
+
 struct TESForm;
 struct TESObjectREFR;
 struct PapyrusFunctionRegisterEvent;
@@ -35,7 +37,27 @@ template <class Return, class Type, class... Args> struct PapyrusFunction
     {
     }
 
-    Return operator()(const Type* apThis, Args... args) const noexcept { return m_pFunction(GameVM::Get()->virtualMachine, 0, apThis, std::forward<Args>(args)...); }
+    Return operator()(const Type* apThis, Args... args) const noexcept
+    {
+        if (!m_pFunction)
+        {
+            if constexpr (std::is_void_v<Return>)
+                return;
+            else
+                return Return{};
+        }
+
+        auto* const pGameVM = GameVM::Get();
+        if (!pGameVM || !pGameVM->virtualMachine)
+        {
+            if constexpr (std::is_void_v<Return>)
+                return;
+            else
+                return Return{};
+        }
+
+        return m_pFunction(pGameVM->virtualMachine, 0, apThis, std::forward<Args>(args)...);
+    }
 
 private:
     TFunction m_pFunction;
@@ -50,7 +72,27 @@ template <class Return, class... Args> struct GlobalPapyrusFunction
     {
     }
 
-    Return operator()(Args... args) const noexcept { return m_pFunction(GameVM::Get()->virtualMachine, std::forward<Args>(args)...); }
+    Return operator()(Args... args) const noexcept
+    {
+        if (!m_pFunction)
+        {
+            if constexpr (std::is_void_v<Return>)
+                return;
+            else
+                return Return{};
+        }
+
+        auto* const pGameVM = GameVM::Get();
+        if (!pGameVM || !pGameVM->virtualMachine)
+        {
+            if constexpr (std::is_void_v<Return>)
+                return;
+            else
+                return Return{};
+        }
+
+        return m_pFunction(pGameVM->virtualMachine, std::forward<Args>(args)...);
+    }
 
 private:
     TFunction m_pFunction;
@@ -74,9 +116,26 @@ template <class Return, class Type, class... Args> struct LatentPapyrusFunction
 
     Return operator()(const Type* apThis, Args... args) const noexcept
     {
+        if (!m_pFunction)
+        {
+            if constexpr (std::is_void_v<Return>)
+                return;
+            else
+                return Return{};
+        }
+
+        auto* const pGameVM = GameVM::Get();
+        if (!pGameVM || !pGameVM->virtualMachine)
+        {
+            if constexpr (std::is_void_v<Return>)
+                return;
+            else
+                return Return{};
+        }
+
         RefrOrInventoryObj self{apThis, nullptr, 0};
 
-        return m_pFunction(GameVM::Get()->virtualMachine, 0, self, std::forward<Args>(args)...);
+        return m_pFunction(pGameVM->virtualMachine, 0, self, std::forward<Args>(args)...);
     }
 
 private:
