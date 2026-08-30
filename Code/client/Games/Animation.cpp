@@ -61,11 +61,9 @@ uint8_t TP_MAKE_THISCALL(HookPerformAction, ActorMediator, TESActionData* apActi
         // Save for later
         if (res)
         {
-            // The engine call above may rebuild actor-side state. Never reuse
-            // an extension pointer captured across that call boundary.
-            // Reload the actor through TESActionData as well: the native
-            // PerformAction target does not preserve the cached actor register.
-            if (auto* pCurrentActor = apAction->actor)
+            // The engine call above may rebuild actor-side state. Reload both
+            // the actor reference and its extension across that boundary.
+            if (auto* pCurrentActor = *apAction->actor)
             {
                 if (auto* pCurrentExtension = pCurrentActor->GetExtension())
                     pCurrentExtension->LatestAnimation = action;

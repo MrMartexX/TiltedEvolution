@@ -232,7 +232,12 @@ ActorExtension* Actor::GetExtension() noexcept
 
     if (AsExPlayerCharacter())
     {
-        return static_cast<ActorExtension*>(AsExPlayerCharacter());
+        // The player singleton can be created through engine paths that do not
+        // pass the size-extending form allocator hook. Keeping its extension
+        // process-owned avoids treating bytes beyond the native runtime object
+        // as a constructed ActorExtension.
+        static ActorExtension s_playerExtension;
+        return &s_playerExtension;
     }
 
     return nullptr;
