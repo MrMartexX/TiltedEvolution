@@ -1,10 +1,13 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <utility>
+
+class PartyQuestRuntimeGenerationFenceTestAccess;
 
 class PartyQuestRuntimeGenerationFence final
 {
@@ -83,6 +86,8 @@ public:
     private:
         friend class PartyQuestRuntimeGenerationFence;
 
+        InvalidationLease() noexcept = default;
+
         InvalidationLease(
             std::unique_lock<std::shared_mutex>&& aLock,
             uint64_t aGeneration) noexcept
@@ -98,14 +103,27 @@ public:
     /** Shared process fence used by production lifecycle and dispatch code. */
     [[nodiscard]] static PartyQuestRuntimeGenerationFence& GetProcessFence() noexcept;
 
+    /** Zero means the synchronization domain has failed closed. */
     [[nodiscard]] uint64_t GetGeneration() const noexcept;
+    [[nodiscard]] bool IsPoisoned() const noexcept
+    {
+        return m_poisoned.load(std::memory_order_acquire);
+    }
 
     /** Advance the generation and release the invalidation barrier immediately. */
     [[nodiscard]] uint64_t Invalidate() noexcept;
 
     /**
-     * Advance the generation and retain the exclusive invalidation barrier until
-     * the returned lease is destroyed.
+     * Tries to acquire the exclusive lifecycle/resolver barrier. Any mutex-layer
+     * exception irreversibly poisons this fence so future runtime dispatch is
+     * denied rather than continuing without a proven synchronization domain.
+     */
+    [[nodiscard]] std::optional<InvalidationLease>
+    TryBeginInvalidation() noexcept;
+
+    /**
+     * Compatibility wrapper. Production state mutation must prefer
+     * TryBeginInvalidation() and explicitly reject an invalid lease.
      */
     [[nodiscard]] InvalidationLease BeginInvalidation() noexcept;
 
@@ -123,10 +141,18 @@ public:
         uint64_t aExpectedGeneration) const noexcept;
 
 private:
+    friend class PartyQuestRuntimeGenerationFenceTestAccess;
+
+    void Poison() const noexcept
+    {
+        m_poisoned.store(true, std::memory_order_release);
+    }
+
     [[nodiscard]] uint64_t AdvanceGenerationLocked() noexcept;
     [[nodiscard]] uint64_t AllocateLifecycleTicketLocked() noexcept;
 
     mutable std::shared_mutex m_mutex;
+    mutable std::atomic_bool m_poisoned{false};
     uint64_t m_generation{1};
     uint64_t m_lifecycleTicket{};
     uint64_t m_nextLifecycleTicket{1};
