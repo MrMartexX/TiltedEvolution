@@ -19,6 +19,10 @@
 
 #include <BranchInfo.h>
 
+#include <array>
+#include <cstdint>
+#include <cstring>
+
 // These symbols are defined within the client code skyrimtogetherclient
 extern void InstallStartHook();
 extern void RunTiltedApp();
@@ -32,6 +36,38 @@ HICON g_SharedWindowIcon = nullptr;
 namespace launcher
 {
 static LaunchContext* g_context = nullptr;
+
+namespace
+{
+constexpr std::size_t kGameEntryIntegrityProbeSize = 16;
+std::array<std::uint8_t, kGameEntryIntegrityProbeSize> g_gameEntrySnapshot{};
+bool g_gameEntrySnapshotValid = false;
+
+const std::uint8_t* GetGameEntryBytes(const LaunchContext& aContext)
+{
+    return reinterpret_cast<const std::uint8_t*>(reinterpret_cast<std::uintptr_t>(aContext.gameMain));
+}
+
+bool CaptureGameEntrySnapshot(const LaunchContext& aContext)
+{
+    const auto* pEntry = GetGameEntryBytes(aContext);
+    if (!pEntry)
+        return false;
+
+    std::memcpy(g_gameEntrySnapshot.data(), pEntry, g_gameEntrySnapshot.size());
+    g_gameEntrySnapshotValid = true;
+    return true;
+}
+
+bool IsGameEntrySnapshotIntact(const LaunchContext& aContext)
+{
+    if (!g_gameEntrySnapshotValid)
+        return false;
+
+    const auto* pEntry = GetGameEntryBytes(aContext);
+    return pEntry && std::memcmp(g_gameEntrySnapshot.data(), pEntry, g_gameEntrySnapshot.size()) == 0;
+}
+} // namespace
 
 LaunchContext* GetLaunchContext()
 {
@@ -113,9 +149,14 @@ int StartUp(int argc, char** argv)
         return 3;
 
     InstallStartHook();
+    if (!IsGameEntrySnapshotIntact(*LC))
+        DIE_NOW(L"Skyrim executable entry point was modified by launcher startup hooks. Startup aborted before executing corrupted game code.");
+
     // Initialize all hooks before calling game init
     // TiltedPhoques::Initializer::RunAll();
     RunTiltedInit(LC->gamePath, LC->Version);
+    if (!IsGameEntrySnapshotIntact(*LC))
+        DIE_NOW(L"Skyrim executable entry point was modified during client/SKSE pre-start initialization. This indicates an incompatible executable, address library, or invalid hook target. Startup aborted before executing corrupted game code.");
 
     // This shouldn't return until the game is killed
     LC->gameMain();
@@ -138,6 +179,9 @@ bool LoadProgram(LaunchContext& LC)
         DIE_NOW(L"Fatal error while mapping executable");
 
     LC.gameMain = loader.GetEntryPoint();
+    if (!CaptureGameEntrySnapshot(LC))
+        DIE_NOW(L"Failed to capture Skyrim executable entry point integrity snapshot");
+
     return true;
 }
 
