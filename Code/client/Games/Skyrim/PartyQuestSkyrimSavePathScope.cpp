@@ -51,8 +51,16 @@ void* PartyQuestSkyrimSavePathScope::FindLocalSavePathSetting() noexcept
     {
         // CommonLibSSE-NG: INISettingCollection::Singleton is
         // RELOCATION_ID(524557, 411155). STR VersionDb uses the AE-side ids.
+        // VersionDbPtr<T*> resolves to T**. Never dereference the relocation
+        // result until the Address Library lookup itself has succeeded: a
+        // missing/mismatched runtime id must fail closed rather than becoming a
+        // native null dereference that C++ catch(...) cannot reliably contain.
         POINTER_SKYRIMSE(RuntimeIniSettingCollection*, s_iniSettings, 411155);
-        RuntimeIniSettingCollection* pCollection = *s_iniSettings.Get();
+        RuntimeIniSettingCollection** ppCollection = s_iniSettings.Get();
+        if (!ppCollection)
+            return nullptr;
+
+        RuntimeIniSettingCollection* pCollection = *ppCollection;
         if (!pCollection)
             return nullptr;
 
