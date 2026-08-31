@@ -58,11 +58,20 @@ void RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVe
     g_appInstance = std::make_unique<TiltedOnlineApp>();
 
     TiltedOnlineApp::InstallHooks2();
+
+    // Do not let MinHook touch the mapped Skyrim image until every P0-critical
+    // relocation has first been proven to resolve inside executable main-module
+    // memory. This catches an incompatible executable / Address Library pair
+    // before any crash-sensitive native mutation is attempted.
+    if (!PartyQuestSkyrimNativeHookValidator::ValidateTargetsBeforeCommit())
+        ShowNativeHookValidationError();
+
     TP_HOOK_COMMIT;
 
     // The shared delayed hook manager historically discards MinHook creation /
-    // enable errors. Do not enter SKSE or Skyrim until the P0 crash-sensitive
-    // subset is proven to be executable and routed to our exact detours.
+    // enable errors. After commit, decode MinHook's relay and require every
+    // crash-sensitive target to route to our exact expected detour before SKSE
+    // or Skyrim is entered.
     if (!PartyQuestSkyrimNativeHookValidator::ValidateAndPublish())
         ShowNativeHookValidationError();
 
