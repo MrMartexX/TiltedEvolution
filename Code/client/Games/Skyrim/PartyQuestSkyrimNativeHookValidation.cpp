@@ -269,6 +269,11 @@ bool PartyQuestSkyrimNativeHookValidator::ValidateAndPublish() noexcept
             return false;
     }
 
+    // Save-hook installation evidence is intentionally two-phase. Resolving and
+    // queueing TP_HOOK is not proof that MinHook committed the expected detour;
+    // publish it only after every required live target above has been verified.
+    ConfirmPartyQuestSaveHookInstalled();
+
     // Installer callbacks have already recorded the exact required lifecycle
     // targets that resolved and were queued. Only now, after proving the live
     // MinHook patches route to our exact detours, may that evidence become

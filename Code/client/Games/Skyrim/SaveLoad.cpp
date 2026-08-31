@@ -276,6 +276,11 @@ bool IsPartyQuestSaveHookInstalled() noexcept
     return s_partyQuestSaveHookInstalled.load(std::memory_order_acquire);
 }
 
+void ConfirmPartyQuestSaveHookInstalled() noexcept
+{
+    s_partyQuestSaveHookInstalled.store(true, std::memory_order_release);
+}
+
 bool IsPartyQuestLoadCompletionSinkInstalled() noexcept
 {
     return s_partyQuestLoadCompletionSinkInstalled.load(
@@ -535,9 +540,6 @@ static TiltedPhoques::Initializer s_partyQuestSaveLoadGuardHook(
             TP_HOOK(
                 &RealBGSSaveLoadManager_SaveImpl,
                 PartyQuest_BGSSaveLoadManager_SaveImpl);
-            s_partyQuestSaveHookInstalled.store(
-                true,
-                std::memory_order_release);
         }
 
         RealBGSSaveLoadManager_LoadImpl = s_loadImpl.Get();
