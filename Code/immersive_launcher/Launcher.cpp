@@ -275,9 +275,19 @@ int StartUp(int argc, char** argv)
     if (!IsGameEntrySnapshotIntact(*LC))
         DIE_NOW(L"Skyrim executable entry point was modified by launcher startup hooks. Startup aborted before executing corrupted game code.");
 
-    // Initialize all hooks before calling game init
-    // TiltedPhoques::Initializer::RunAll();
-    RunTiltedInit(LC->gamePath, LC->Version);
+    // Run all client/address-library/native-hook/SKSE pre-entry initialization
+    // behind a C++ exception boundary. A standard C++ failure here is not an
+    // engine crash and must never escape into the mapped Skyrim entrypoint.
+    try
+    {
+        RunTiltedInit(LC->gamePath, LC->Version);
+    }
+    catch (...)
+    {
+        Die(L"Skyrim Together client pre-entry initialization threw a C++ exception. Startup aborted before entering Skyrim.");
+        return 6;
+    }
+
     if (!IsGameEntrySnapshotIntact(*LC))
         DIE_NOW(L"Skyrim executable entry point was modified during client/SKSE pre-start initialization. This indicates an incompatible executable, address library, or invalid hook target. Startup aborted before executing corrupted game code.");
 
