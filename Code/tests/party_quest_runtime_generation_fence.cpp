@@ -11,6 +11,15 @@
 
 using namespace std::chrono_literals;
 
+class PartyQuestRuntimeGenerationFenceTestAccess final
+{
+public:
+    static void Poison(PartyQuestRuntimeGenerationFence& aFence) noexcept
+    {
+        aFence.Poison();
+    }
+};
+
 TEST_CASE("Party quest process generation fence is shared and monotonic")
 {
     auto& first = PartyQuestRuntimeGenerationFence::GetProcessFence();
@@ -127,6 +136,41 @@ TEST_CASE("Synchronous invalidation cannot erase a pending async lifecycle trans
     auto execution = fence.TryAcquire(afterAdditionalInvalidation);
     REQUIRE(execution.has_value());
     CHECK(execution->IsValid());
+}
+
+TEST_CASE("Poisoned generation fence permanently denies runtime authority", "[quest.party-state.lifecycle][generation-fence][fault]")
+{
+    PartyQuestRuntimeGenerationFence fence;
+    const uint64_t generation = fence.GetGeneration();
+    REQUIRE(generation != 0);
+
+    auto execution = fence.TryAcquire(generation);
+    REQUIRE(execution.has_value());
+    REQUIRE(execution->IsValid());
+    execution.reset();
+
+    PartyQuestRuntimeGenerationFenceTestAccess::Poison(fence);
+
+    CHECK(fence.IsPoisoned());
+    CHECK(fence.GetGeneration() == 0);
+    CHECK(fence.Invalidate() == 0);
+    CHECK_FALSE(fence.TryBeginInvalidation().has_value());
+    CHECK_FALSE(fence.TryAcquire(generation).has_value());
+    CHECK_FALSE(fence.BeginLifecycleTransition().IsValid());
+    CHECK(fence.IsLifecycleTransitionPending());
+}
+
+TEST_CASE("Poisoning a pending lifecycle transition never reopens dispatch", "[quest.party-state.lifecycle][generation-fence][fault]")
+{
+    PartyQuestRuntimeGenerationFence fence;
+    const auto transition = fence.BeginLifecycleTransition();
+    REQUIRE(transition.IsValid());
+
+    PartyQuestRuntimeGenerationFenceTestAccess::Poison(fence);
+
+    CHECK_FALSE(fence.CompleteLifecycleTransition(transition));
+    CHECK(fence.IsLifecycleTransitionPending());
+    CHECK_FALSE(fence.TryAcquire(transition.Generation).has_value());
 }
 
 TEST_CASE("Party quest runtime owner lifecycle invalidates process dispatch generation")
