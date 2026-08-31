@@ -171,21 +171,35 @@ void TransportService::OnConnected()
 
 void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
-    // Disconnect invalidates every compatibility/load-order witness before the
-    // event fanout. Hold the exclusive generation barrier just long enough to
-    // publish the disconnected transport state, then release it before asking
-    // the runtime session owner for the durable lifecycle disposition. The owner
-    // takes its own full lifecycle lease, avoiding a nested exclusive-acquisition
-    // deadlock while still running before any DisconnectedEvent consumer.
+    // A real network disconnect cannot be rolled back. Publish the disconnected
+    // transport bit even if the generation lock layer has failed, but never
+    // pretend runtime ownership became safe: a failed invalidation poisons the
+    // fence and PrepareAndRelease below must retain the owner fail-closed.
     auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
     const uint64_t generationBefore = generationFence.GetGeneration();
-    uint64_t generationAfter = generationBefore;
+    uint64_t generationAfter = 0;
     {
-        auto generationInvalidation = generationFence.BeginInvalidation();
-        generationAfter = generationInvalidation.GetGeneration();
+        auto generationInvalidation = generationFence.TryBeginInvalidation();
         m_connected = false;
-        PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
-            "transport-disconnect", "disconnected-state-published", generationBefore, generationAfter);
+        if (generationInvalidation && generationInvalidation->IsValid())
+        {
+            generationAfter = generationInvalidation->GetGeneration();
+            PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                "transport-disconnect",
+                "disconnected-state-published",
+                generationBefore,
+                generationAfter);
+        }
+        else
+        {
+            PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                "transport-disconnect",
+                "generation-barrier-unavailable-fail-closed",
+                generationBefore,
+                0);
+            spdlog::error(
+                "PartyQuest could not acquire disconnect generation barrier; runtime generation domain is fail-closed");
+        }
     }
 
     auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
