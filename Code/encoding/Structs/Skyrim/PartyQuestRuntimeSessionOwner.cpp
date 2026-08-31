@@ -31,10 +31,12 @@ PartyQuestRuntimeSessionOwner::GetProcessOwner() noexcept
 
 PartyQuestRuntimeSessionOwner::~PartyQuestRuntimeSessionOwner() noexcept
 {
-    // Teardown is itself a runtime-context transition. Hold the exclusive
-    // generation barrier until all guarded/session/workspace authority is gone.
+    // Process teardown cannot recover from a synchronization-layer failure. Try
+    // to hold the same exclusive barrier used by live lifecycle transitions; on
+    // failure the fence is poisoned first, which at least prevents any new
+    // execution lease from being admitted while process resources are released.
     auto generationInvalidation =
-        PartyQuestRuntimeGenerationFence::GetProcessFence().BeginInvalidation();
+        PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
     Clear();
 }
 
@@ -278,10 +280,19 @@ PartyQuestRuntimeSessionOwner::PrepareAndRelease(
     PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 {
     // Advance and pin the process generation before touching the guarded runtime
-    // owner. An in-flight executor lease drains first; no new dispatch can begin
-    // until the lifecycle decision and any allowed teardown are complete.
+    // owner. If the synchronization layer cannot provide the exclusive lease,
+    // retain every owner/recovery resource and report InvalidState. The poisoned
+    // generation fence prevents any new runtime dispatch from entering.
     auto generationInvalidation =
-        PartyQuestRuntimeGenerationFence::GetProcessFence().BeginInvalidation();
+        PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
+    if (!generationInvalidation || !generationInvalidation->IsValid())
+    {
+        PartyQuestRuntimeLifecycleFenceResult result;
+        result.Event = aEvent;
+        result.Status = PartyQuestRuntimeLifecycleFenceStatus::InvalidState;
+        result.GuardHeld = PartyQuestSaveGuard::GetProcessGuard().IsActive();
+        return result;
+    }
 
     if (!IsBound())
     {
