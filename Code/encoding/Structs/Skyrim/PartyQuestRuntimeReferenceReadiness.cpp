@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeReferenceReadiness.h>
+#include <Structs/Skyrim/PartyQuestExceptionBoundary.h>
 
 PartyQuestRuntimeReferenceReadiness::PartyQuestRuntimeReferenceReadiness() noexcept
     : PartyQuestRuntimeReferenceReadiness(
@@ -38,31 +39,36 @@ bool PartyQuestRuntimeReferenceReadiness::Observe(
     if (!lease || !lease->IsValid())
         return false;
 
-    std::lock_guard lock(m_mutex);
-    if (m_observationGeneration != generation)
-        ResetLocked(generation);
+    return PartyQuestExceptionBoundary::InvokeOr<bool>(
+        false,
+        [&]()
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_observationGeneration != generation)
+                ResetLocked(generation);
 
-    if (m_overflowed)
-        return false;
+            if (m_overflowed)
+                return false;
 
-    if (!aLoaded)
-    {
-        m_loadedReferences.erase(aFormId);
-        return true;
-    }
+            if (!aLoaded)
+            {
+                m_loadedReferences.erase(aFormId);
+                return true;
+            }
 
-    if (m_loadedReferences.contains(aFormId))
-        return true;
+            if (m_loadedReferences.contains(aFormId))
+                return true;
 
-    if (m_loadedReferences.size() >= MaxTrackedReferences)
-    {
-        m_loadedReferences.clear();
-        m_overflowed = true;
-        return false;
-    }
+            if (m_loadedReferences.size() >= MaxTrackedReferences)
+            {
+                m_loadedReferences.clear();
+                m_overflowed = true;
+                return false;
+            }
 
-    m_loadedReferences.emplace(aFormId);
-    return true;
+            m_loadedReferences.emplace(aFormId);
+            return true;
+        });
 }
 
 bool PartyQuestRuntimeReferenceReadiness::IsLoaded(
@@ -76,10 +82,15 @@ bool PartyQuestRuntimeReferenceReadiness::IsLoaded(
     if (!lease || !lease->IsValid())
         return false;
 
-    std::lock_guard lock(m_mutex);
-    return !m_overflowed &&
-        m_observationGeneration == aExpectedGeneration &&
-        m_loadedReferences.contains(aFormId);
+    return PartyQuestExceptionBoundary::InvokeOr<bool>(
+        false,
+        [&]()
+        {
+            std::lock_guard lock(m_mutex);
+            return !m_overflowed &&
+                m_observationGeneration == aExpectedGeneration &&
+                m_loadedReferences.contains(aFormId);
+        });
 }
 
 bool PartyQuestRuntimeReferenceReadiness::AreLoaded(
@@ -93,27 +104,42 @@ bool PartyQuestRuntimeReferenceReadiness::AreLoaded(
     if (!lease || !lease->IsValid())
         return false;
 
-    std::lock_guard lock(m_mutex);
-    if (m_overflowed || m_observationGeneration != aExpectedGeneration)
-        return false;
+    return PartyQuestExceptionBoundary::InvokeOr<bool>(
+        false,
+        [&]()
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_overflowed || m_observationGeneration != aExpectedGeneration)
+                return false;
 
-    for (const uint32_t formId : acFormIds)
-    {
-        if (formId == 0 || !m_loadedReferences.contains(formId))
-            return false;
-    }
+            for (const uint32_t formId : acFormIds)
+            {
+                if (formId == 0 || !m_loadedReferences.contains(formId))
+                    return false;
+            }
 
-    return true;
+            return true;
+        });
 }
 
 uint64_t PartyQuestRuntimeReferenceReadiness::GetObservationGeneration() const noexcept
 {
-    std::lock_guard lock(m_mutex);
-    return m_observationGeneration;
+    return PartyQuestExceptionBoundary::InvokeOr<uint64_t>(
+        0,
+        [&]()
+        {
+            std::lock_guard lock(m_mutex);
+            return m_observationGeneration;
+        });
 }
 
 bool PartyQuestRuntimeReferenceReadiness::IsOverflowed() const noexcept
 {
-    std::lock_guard lock(m_mutex);
-    return m_overflowed;
+    return PartyQuestExceptionBoundary::InvokeOr<bool>(
+        true,
+        [&]()
+        {
+            std::lock_guard lock(m_mutex);
+            return m_overflowed;
+        });
 }
