@@ -64,6 +64,33 @@ TEST_CASE("Party quest invalidation lease prevents dispatch into a half-publishe
     CHECK(acquireFuture.get());
 }
 
+TEST_CASE("Party quest execution lease prevents invalidation while runtime state is read")
+{
+    PartyQuestRuntimeGenerationFence fence;
+    const uint64_t generation = fence.GetGeneration();
+    auto execution = fence.TryAcquire(generation);
+    REQUIRE(execution.has_value());
+    REQUIRE(execution->IsValid());
+
+    std::promise<void> attempted;
+    auto attemptedFuture = attempted.get_future();
+    auto invalidationFuture = std::async(
+        std::launch::async,
+        [&]()
+        {
+            attempted.set_value();
+            auto invalidation = fence.BeginInvalidation();
+            return invalidation.IsValid();
+        });
+
+    attemptedFuture.wait();
+    CHECK(invalidationFuture.wait_for(20ms) == std::future_status::timeout);
+
+    execution.reset();
+    REQUIRE(invalidationFuture.wait_for(2s) == std::future_status::ready);
+    CHECK(invalidationFuture.get());
+}
+
 TEST_CASE("Async lifecycle transition advances generation and blocks dispatch until exact completion", "[quest.party-state.lifecycle][generation-fence]")
 {
     PartyQuestRuntimeGenerationFence fence;

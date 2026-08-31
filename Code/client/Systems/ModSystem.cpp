@@ -24,6 +24,12 @@ ModSystem::ModSystem(entt::dispatcher& aDispatcher) noexcept
 
 bool ModSystem::GetServerModId(const uint32_t aGameId, uint32_t& aModId, uint32_t& aBaseId) const noexcept
 {
+    auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t generation = generationFence.GetGeneration();
+    auto generationExecution = generationFence.TryAcquire(generation);
+    if (!generationExecution || !generationExecution->IsValid())
+        return false;
+
     if (!m_mappingPublication.IsReady())
         return false;
 
@@ -59,6 +65,12 @@ bool ModSystem::GetServerModId(uint32_t aGameId, GameId& aServerId) const noexce
 
 uint32_t ModSystem::GetGameId(uint32_t aServerId, uint32_t aFormId) const noexcept
 {
+    auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t generation = generationFence.GetGeneration();
+    auto generationExecution = generationFence.TryAcquire(generation);
+    if (!generationExecution || !generationExecution->IsValid())
+        return 0;
+
     if (!m_mappingPublication.IsReady())
         return 0;
 
