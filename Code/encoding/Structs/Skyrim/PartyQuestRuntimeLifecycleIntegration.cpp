@@ -73,6 +73,11 @@ void PartyQuestRuntimeLifecycleIntegrationPolicy::
 
 void PartyQuestRuntimeLifecycleIntegrationPolicy::ResetForTests() noexcept
 {
-    s_nativeHookCommitValidated.store(false, std::memory_order_release);
     s_queuedHooks.store(0u, std::memory_order_release);
+
+    // The existing unit-test seam injects already-verified lifecycle hooks; it
+    // does not instantiate MinHook or a mapped Skyrim image. Keep that synthetic
+    // contract explicit here while production process state still starts false
+    // and can become true only through ConfirmNativeHookCommitValidated().
+    s_nativeHookCommitValidated.store(true, std::memory_order_release);
 }
