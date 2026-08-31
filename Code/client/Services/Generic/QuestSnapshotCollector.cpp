@@ -31,8 +31,6 @@ QuestSnapshotStatus GetQuestStatus(const TESQuest& acQuest) noexcept
 
 QuestObjectiveState GetObjectiveState(uint8_t aState) noexcept
 {
-    // Skyrim objective states: dormant, displayed, completed,
-    // completed+displayed, failed, failed+displayed.
     switch (aState)
     {
     case 1: return QuestObjectiveState::Displayed;
@@ -126,7 +124,6 @@ std::optional<GameId> GetServerGameId(uint32_t aFormId, const ModSystem& acModSy
     GameId id;
     if (!acModSystem.GetServerModId(aFormId, id))
         return std::nullopt;
-
     return id;
 }
 } // namespace
@@ -136,73 +133,75 @@ std::optional<QuestSnapshot> QuestSnapshotCollector::Collect(TESQuest* apQuest, 
     if (!apQuest)
         return std::nullopt;
 
-    const auto questId = GetServerGameId(apQuest->formID, acModSystem);
-    if (!questId)
+    try
     {
-        spdlog::warn("QuestSnapshot: failed to map quest form {:08X} to a server GameId", apQuest->formID);
+        const auto questId = GetServerGameId(apQuest->formID, acModSystem);
+        if (!questId)
+        {
+            spdlog::warn("QuestSnapshot: failed to map quest form {:08X} to a server GameId", apQuest->formID);
+            return std::nullopt;
+        }
+
+        QuestSnapshot snapshot;
+        snapshot.QuestId = *questId;
+        snapshot.Status = GetQuestStatus(*apQuest);
+        snapshot.CurrentStage = apQuest->currentStage;
+
+        for (TESQuest::Stage* pStage : apQuest->stages)
+        {
+            if (pStage && pStage->IsDone())
+                snapshot.CompletedStages.push_back(pStage->stageIndex);
+        }
+
+        for (TESQuest::Objective* pObjective : apQuest->objectives)
+        {
+            if (!pObjective)
+                continue;
+            snapshot.Objectives.push_back({pObjective->stageId, GetObjectiveState(pObjective->state)});
+        }
+
+        for (BGSBaseAlias* pAlias : apQuest->aliases)
+        {
+            if (!pAlias)
+                continue;
+
+            if (IsAliasType(*pAlias, "Ref"))
+            {
+                std::optional<GameId> referenceId;
+                if (TESObjectREFR* pReference = apQuest->GetAliasedRef(pAlias->aliasId))
+                {
+                    referenceId = GetServerGameId(pReference->formID, acModSystem);
+                    if (!referenceId)
+                    {
+                        spdlog::debug("QuestSnapshot: alias {} resolved to unmapped local reference {:08X}", pAlias->aliasId, pReference->formID);
+                    }
+                }
+
+                snapshot.ReferenceAliases.push_back({pAlias->aliasId, referenceId, pAlias->IsQuestObject()});
+                if (pAlias->fillType == BGSBaseAlias::FillType::Created && referenceId)
+                    snapshot.CreatedReferences.push_back(*referenceId);
+            }
+            else if (IsAliasType(*pAlias, "Loc"))
+            {
+                snapshot.LocationAliases.push_back({pAlias->aliasId, std::nullopt});
+            }
+            else
+            {
+                const char* pType = pAlias->QType().AsAscii();
+                spdlog::debug("QuestSnapshot: unsupported alias type '{}' for alias {}", pType ? pType : "", pAlias->aliasId);
+            }
+        }
+
+        snapshot.Canonicalize();
+        return snapshot;
+    }
+    catch (...)
+    {
+        // This collector runs from noexcept Skyrim event paths. Allocation,
+        // formatting or other C++ failures make the observation unavailable;
+        // they must never terminate the process.
         return std::nullopt;
     }
-
-    QuestSnapshot snapshot;
-    snapshot.QuestId = *questId;
-    snapshot.Status = GetQuestStatus(*apQuest);
-    snapshot.CurrentStage = apQuest->currentStage;
-
-    for (TESQuest::Stage* pStage : apQuest->stages)
-    {
-        if (pStage && pStage->IsDone())
-            snapshot.CompletedStages.push_back(pStage->stageIndex);
-    }
-
-    for (TESQuest::Objective* pObjective : apQuest->objectives)
-    {
-        if (!pObjective)
-            continue;
-
-        snapshot.Objectives.push_back({pObjective->stageId, GetObjectiveState(pObjective->state)});
-    }
-
-    for (BGSBaseAlias* pAlias : apQuest->aliases)
-    {
-        if (!pAlias)
-            continue;
-
-        if (IsAliasType(*pAlias, "Ref"))
-        {
-            std::optional<GameId> referenceId;
-            if (TESObjectREFR* pReference = apQuest->GetAliasedRef(pAlias->aliasId))
-            {
-                referenceId = GetServerGameId(pReference->formID, acModSystem);
-                if (!referenceId)
-                {
-                    // Dynamic references need a party-owned runtime ID before they
-                    // can be canonical across clients. Keep the alias present but
-                    // unresolved in this read-only PoC.
-                    spdlog::debug("QuestSnapshot: alias {} resolved to unmapped local reference {:08X}", pAlias->aliasId, pReference->formID);
-                }
-            }
-
-            snapshot.ReferenceAliases.push_back({pAlias->aliasId, referenceId, pAlias->IsQuestObject()});
-
-            if (pAlias->fillType == BGSBaseAlias::FillType::Created && referenceId)
-                snapshot.CreatedReferences.push_back(*referenceId);
-        }
-        else if (IsAliasType(*pAlias, "Loc"))
-        {
-            // The alias identity is collected now. Resolving and restoring the
-            // selected BGSLocation is the dedicated location-alias PoC because
-            // TESQuest does not currently expose a safe location accessor.
-            snapshot.LocationAliases.push_back({pAlias->aliasId, std::nullopt});
-        }
-        else
-        {
-            const char* pType = pAlias->QType().AsAscii();
-            spdlog::debug("QuestSnapshot: unsupported alias type '{}' for alias {}", pType ? pType : "", pAlias->aliasId);
-        }
-    }
-
-    snapshot.Canonicalize();
-    return snapshot;
 }
 
 PartyQuestSyncFacts QuestSnapshotCollector::CollectSyncFacts(TESQuest* apQuest) noexcept
@@ -229,38 +228,42 @@ void QuestSnapshotCollector::Log(TESQuest* apQuest, const QuestSnapshot& acSnaps
     if (!apQuest)
         return;
 
-    const PartyQuestSyncFacts syncFacts = CollectSyncFacts(apQuest);
-    const PartyQuestSyncClassification classification = ClassifyPartyQuestSync(syncFacts);
-    const PartyQuestAdmissionDecision admission = PartyQuestAdmissionPolicy::Evaluate(acSnapshot.QuestId, syncFacts);
-    const PartyQuestApplyPlan applyPlan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(admission, acSnapshot);
-
-    // Mirror the same already-computed, read-only observation into the structured
-    // P0 evidence stream. This call cannot grant or execute mutation authority.
-    PartyQuestP0LiveDiagnostics::RecordQuestObservation(
-        apQuest, acSnapshot, World::Get().GetModSystem(), acReason);
-
-    spdlog::info(
-        "QuestSnapshot[{}]: form={:08X} gameId={:016X} editorId='{}' status={} stage={} digest={:016X} completedStages={} objectives={} refAliases={} locAliases={} createdRefs={} syncClass={} syncReason={} questType={} runtimeSafety={} runtimeReason={} applyActions=0x{:X} dryRunOnly={}",
-        acReason ? acReason : "unknown", apQuest->formID, acSnapshot.QuestId.LogFormat(), apQuest->idName.AsAscii(), GetStatusName(acSnapshot.Status),
-        acSnapshot.CurrentStage, acSnapshot.ComputeDigest(), acSnapshot.CompletedStages.size(), acSnapshot.Objectives.size(),
-        acSnapshot.ReferenceAliases.size(), acSnapshot.LocationAliases.size(), acSnapshot.CreatedReferences.size(),
-        GetSyncClassName(classification.Class), GetSyncReasonName(classification.Reason), static_cast<uint8_t>(apQuest->type),
-        GetRuntimeSafetyName(applyPlan.Safety.Status), GetRuntimeSafetyReasonName(applyPlan.Safety.Reason),
-        static_cast<uint32_t>(applyPlan.Actions), applyPlan.DryRunOnly);
-
-    // Classification and runtime-safety planning are observational here. The
-    // canonical protocol still does not execute these apply actions in Skyrim.
-    for (const auto& objective : acSnapshot.Objectives)
-        spdlog::info("QuestSnapshotDetail objective: index={} state={}", objective.Index, static_cast<uint8_t>(objective.State));
-
-    for (const auto& alias : acSnapshot.ReferenceAliases)
+    try
     {
-        if (alias.ReferenceId)
-            spdlog::info("QuestSnapshotDetail refAlias: id={} ref={:016X} questObject={}", alias.AliasId, alias.ReferenceId->LogFormat(), alias.IsQuestObject);
-        else
-            spdlog::info("QuestSnapshotDetail refAlias: id={} ref=<unfilled-or-unmapped> questObject={}", alias.AliasId, alias.IsQuestObject);
-    }
+        const PartyQuestSyncFacts syncFacts = CollectSyncFacts(apQuest);
+        const PartyQuestSyncClassification classification = ClassifyPartyQuestSync(syncFacts);
+        const PartyQuestAdmissionDecision admission = PartyQuestAdmissionPolicy::Evaluate(acSnapshot.QuestId, syncFacts);
+        const PartyQuestApplyPlan applyPlan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(admission, acSnapshot);
 
-    for (const auto& alias : acSnapshot.LocationAliases)
-        spdlog::info("QuestSnapshotDetail locationAlias: id={} location=<pending-location-accessor-poc>", alias.AliasId);
+        PartyQuestP0LiveDiagnostics::RecordQuestObservation(
+            apQuest, acSnapshot, World::Get().GetModSystem(), acReason);
+
+        const char* pEditorId = apQuest->idName.AsAscii();
+        spdlog::info(
+            "QuestSnapshot[{}]: form={:08X} gameId={:016X} editorId='{}' status={} stage={} digest={:016X} completedStages={} objectives={} refAliases={} locAliases={} createdRefs={} syncClass={} syncReason={} questType={} runtimeSafety={} runtimeReason={} applyActions=0x{:X} dryRunOnly={}",
+            acReason ? acReason : "unknown", apQuest->formID, acSnapshot.QuestId.LogFormat(), pEditorId ? pEditorId : "", GetStatusName(acSnapshot.Status),
+            acSnapshot.CurrentStage, acSnapshot.ComputeDigest(), acSnapshot.CompletedStages.size(), acSnapshot.Objectives.size(),
+            acSnapshot.ReferenceAliases.size(), acSnapshot.LocationAliases.size(), acSnapshot.CreatedReferences.size(),
+            GetSyncClassName(classification.Class), GetSyncReasonName(classification.Reason), static_cast<uint8_t>(apQuest->type),
+            GetRuntimeSafetyName(applyPlan.Safety.Status), GetRuntimeSafetyReasonName(applyPlan.Safety.Reason),
+            static_cast<uint32_t>(applyPlan.Actions), applyPlan.DryRunOnly);
+
+        for (const auto& objective : acSnapshot.Objectives)
+            spdlog::info("QuestSnapshotDetail objective: index={} state={}", objective.Index, static_cast<uint8_t>(objective.State));
+
+        for (const auto& alias : acSnapshot.ReferenceAliases)
+        {
+            if (alias.ReferenceId)
+                spdlog::info("QuestSnapshotDetail refAlias: id={} ref={:016X} questObject={}", alias.AliasId, alias.ReferenceId->LogFormat(), alias.IsQuestObject);
+            else
+                spdlog::info("QuestSnapshotDetail refAlias: id={} ref=<unfilled-or-unmapped> questObject={}", alias.AliasId, alias.IsQuestObject);
+        }
+
+        for (const auto& alias : acSnapshot.LocationAliases)
+            spdlog::info("QuestSnapshotDetail locationAlias: id={} location=<pending-location-accessor-poc>", alias.AliasId);
+    }
+    catch (...)
+    {
+        // Read-only diagnostics must not perturb a noexcept engine callback.
+    }
 }
