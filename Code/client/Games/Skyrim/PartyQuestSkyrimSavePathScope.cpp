@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 
 #include <PartyQuestSkyrimSavePathScope.h>
+#include <Structs/Skyrim/PartyQuestSkyrimEngineSaveIsolationPolicy.h>
 
 #include <cstddef>
 #include <cstring>
@@ -89,6 +90,14 @@ PartyQuestSkyrimSavePathScope::PartyQuestSkyrimSavePathScope(
 {
     try
     {
+        // sLocalSavePath is process-global while Skyrim's save pipeline owns an
+        // asynchronous request queue. Until the exact runtime proves when both
+        // the .ess and SKSE co-save paths are captured/completed, even a scoped
+        // pointer replacement could escape its intended co-op replica. Refuse
+        // before acquiring the setting pointer or mutating process state.
+        if (!PartyQuestSkyrimEngineSaveIsolationPolicy::AllowsProductionCapture())
+            return;
+
         m_relativePath = PartyQuestSkyrimSavePathPolicy::BuildRelativeSavePath(
             acCampaignId,
             acPlayerProfileId);
