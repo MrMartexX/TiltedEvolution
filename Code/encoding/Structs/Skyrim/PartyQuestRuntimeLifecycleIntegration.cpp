@@ -10,7 +10,12 @@ constexpr uint8_t kMainMenu = 1u << 2u;
 constexpr uint8_t kCompleteCharacterIdentityCoverage =
     kLoadGame | kNewGame | kMainMenu;
 
-std::atomic<uint8_t> s_verifiedHooks{};
+// Installer callbacks record which exact lifecycle targets resolved and were
+// queued for the shared delayed MinHook commit. This is deliberately not yet
+// production-visible coverage: the shared hook manager can fail to create or
+// enable a delayed hook without surfacing that failure.
+std::atomic<uint8_t> s_queuedHooks{};
+std::atomic_bool s_nativeHookCommitValidated{false};
 
 uint8_t ToMask(PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 {
@@ -27,16 +32,20 @@ uint8_t ToMask(PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 bool PartyQuestRuntimeLifecycleIntegrationPolicy::HasVerifiedPreTransitionHook(
     PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 {
+    if (!s_nativeHookCommitValidated.load(std::memory_order_acquire))
+        return false;
+
     const uint8_t mask = ToMask(aEvent);
     return mask != 0u &&
-        (s_verifiedHooks.load(std::memory_order_acquire) & mask) == mask;
+        (s_queuedHooks.load(std::memory_order_acquire) & mask) == mask;
 }
 
 bool PartyQuestRuntimeLifecycleIntegrationPolicy::
     HasCompleteCharacterIdentityCoverage() noexcept
 {
-    return (s_verifiedHooks.load(std::memory_order_acquire) &
-               kCompleteCharacterIdentityCoverage) ==
+    return s_nativeHookCommitValidated.load(std::memory_order_acquire) &&
+        (s_queuedHooks.load(std::memory_order_acquire) &
+             kCompleteCharacterIdentityCoverage) ==
         kCompleteCharacterIdentityCoverage;
 }
 
@@ -46,10 +55,24 @@ void PartyQuestRuntimeLifecycleIntegrationPolicy::
 {
     const uint8_t mask = ToMask(aEvent);
     if (mask != 0u)
-        s_verifiedHooks.fetch_or(mask, std::memory_order_release);
+        s_queuedHooks.fetch_or(mask, std::memory_order_release);
+}
+
+void PartyQuestRuntimeLifecycleIntegrationPolicy::
+    ConfirmNativeHookCommitValidated() noexcept
+{
+    if ((s_queuedHooks.load(std::memory_order_acquire) &
+            kCompleteCharacterIdentityCoverage) !=
+        kCompleteCharacterIdentityCoverage)
+    {
+        return;
+    }
+
+    s_nativeHookCommitValidated.store(true, std::memory_order_release);
 }
 
 void PartyQuestRuntimeLifecycleIntegrationPolicy::ResetForTests() noexcept
 {
-    s_verifiedHooks.store(0u, std::memory_order_release);
+    s_nativeHookCommitValidated.store(false, std::memory_order_release);
+    s_queuedHooks.store(0u, std::memory_order_release);
 }
