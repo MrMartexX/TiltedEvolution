@@ -48,6 +48,129 @@ const std::uint8_t* GetGameEntryBytes(const LaunchContext& aContext)
     return reinterpret_cast<const std::uint8_t*>(reinterpret_cast<std::uintptr_t>(aContext.gameMain));
 }
 
+bool IsExecutableMemoryProbe(const void* apAddress, std::size_t aSize)
+{
+    if (!apAddress || aSize == 0)
+        return false;
+
+    MEMORY_BASIC_INFORMATION memory{};
+    if (VirtualQuery(apAddress, &memory, sizeof(memory)) == 0 ||
+        memory.State != MEM_COMMIT ||
+        (memory.Protect & PAGE_GUARD) != 0)
+    {
+        return false;
+    }
+
+    switch (memory.Protect & 0xFFu)
+    {
+    case PAGE_EXECUTE:
+    case PAGE_EXECUTE_READ:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        break;
+    default:
+        return false;
+    }
+
+    const auto start = reinterpret_cast<std::uintptr_t>(apAddress);
+    const auto regionStart = reinterpret_cast<std::uintptr_t>(memory.BaseAddress);
+    const auto regionEnd = regionStart + memory.RegionSize;
+    return start >= regionStart && start <= regionEnd &&
+        aSize <= regionEnd - start;
+}
+
+bool IsMappedGameEntryIdenticalToSource(
+    const std::uint8_t* apSourceImage,
+    std::size_t aSourceSize,
+    ExeLoader::TEntryPoint aMappedEntry)
+{
+    if (!apSourceImage ||
+        aSourceSize < sizeof(IMAGE_DOS_HEADER) ||
+        !aMappedEntry)
+    {
+        return false;
+    }
+
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(apSourceImage);
+    if (dos->e_magic != IMAGE_DOS_SIGNATURE || dos->e_lfanew < 0)
+        return false;
+
+    const std::size_t ntOffset = static_cast<std::size_t>(dos->e_lfanew);
+    if (ntOffset > aSourceSize ||
+        sizeof(IMAGE_NT_HEADERS) > aSourceSize - ntOffset)
+    {
+        return false;
+    }
+
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+        apSourceImage + ntOffset);
+    if (nt->Signature != IMAGE_NT_SIGNATURE)
+        return false;
+
+    const std::size_t sectionTableOffset =
+        ntOffset + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER) +
+        nt->FileHeader.SizeOfOptionalHeader;
+    const std::size_t sectionTableSize =
+        static_cast<std::size_t>(nt->FileHeader.NumberOfSections) *
+        sizeof(IMAGE_SECTION_HEADER);
+    if (sectionTableOffset > aSourceSize ||
+        sectionTableSize > aSourceSize - sectionTableOffset)
+    {
+        return false;
+    }
+
+    const std::uint32_t entryRva = nt->OptionalHeader.AddressOfEntryPoint;
+    const auto* sections = reinterpret_cast<const IMAGE_SECTION_HEADER*>(
+        apSourceImage + sectionTableOffset);
+    for (std::uint16_t i = 0; i < nt->FileHeader.NumberOfSections; ++i)
+    {
+        const auto& section = sections[i];
+        const std::uint64_t sectionStart = section.VirtualAddress;
+        const std::uint64_t copiedSize =
+            section.SizeOfRawData < section.Misc.VirtualSize
+                ? section.SizeOfRawData
+                : section.Misc.VirtualSize;
+        const std::uint64_t sectionEnd = sectionStart + copiedSize;
+        const std::uint64_t probeEnd =
+            static_cast<std::uint64_t>(entryRva) +
+            kGameEntryIntegrityProbeSize;
+
+        if (entryRva < sectionStart || probeEnd > sectionEnd)
+            continue;
+
+        if ((section.Characteristics & IMAGE_SCN_MEM_EXECUTE) == 0)
+            return false;
+
+        const std::uint64_t delta = entryRva - sectionStart;
+        const std::uint64_t sourceOffset =
+            static_cast<std::uint64_t>(section.PointerToRawData) + delta;
+        if (sourceOffset > aSourceSize ||
+            kGameEntryIntegrityProbeSize > aSourceSize - sourceOffset)
+        {
+            return false;
+        }
+
+        const auto moduleBase = reinterpret_cast<std::uintptr_t>(
+            GetModuleHandleW(nullptr));
+        const auto mappedAddress = reinterpret_cast<std::uintptr_t>(
+            aMappedEntry);
+        if (!moduleBase || mappedAddress != moduleBase + entryRva ||
+            !IsExecutableMemoryProbe(
+                reinterpret_cast<const void*>(mappedAddress),
+                kGameEntryIntegrityProbeSize))
+        {
+            return false;
+        }
+
+        return std::memcmp(
+                   apSourceImage + sourceOffset,
+                   reinterpret_cast<const void*>(mappedAddress),
+                   kGameEntryIntegrityProbeSize) == 0;
+    }
+
+    return false;
+}
+
 bool CaptureGameEntrySnapshot(const LaunchContext& aContext)
 {
     const auto* pEntry = GetGameEntryBytes(aContext);
@@ -178,7 +301,16 @@ bool LoadProgram(LaunchContext& LC)
     if (!loader.Load(reinterpret_cast<uint8_t*>(content.data())))
         DIE_NOW(L"Fatal error while mapping executable");
 
-    LC.gameMain = loader.GetEntryPoint();
+    const auto gameMain = loader.GetEntryPoint();
+    if (!IsMappedGameEntryIdenticalToSource(
+            reinterpret_cast<const std::uint8_t*>(content.data()),
+            content.size(),
+            gameMain))
+    {
+        DIE_NOW(L"Skyrim executable entry point does not match the post-decryption source image after mapping. Startup aborted before any STR/SKSE hooks execute.");
+    }
+
+    LC.gameMain = gameMain;
     if (!CaptureGameEntrySnapshot(LC))
         DIE_NOW(L"Failed to capture Skyrim executable entry point integrity snapshot");
 
