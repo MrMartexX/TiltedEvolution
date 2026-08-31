@@ -2,6 +2,7 @@
 
 #include <PartyQuestSkyrimNativeHookValidation.h>
 #include <SaveLoad.h>
+#include <Structs/Skyrim/PartyQuestExceptionBoundary.h>
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
 #include <VersionDb.h>
 
@@ -196,7 +197,7 @@ const void* ResolveMinHookDetour(const void* apTarget) noexcept
 #endif
 }
 
-bool ValidateEnabledHook(const RequiredHook& acHook) noexcept
+void* ResolveAndValidateTarget(const RequiredHook& acHook)
 {
     void* const target = VersionDb::Get().FindAddressById(acHook.AddressLibraryId);
     if (!target)
@@ -205,7 +206,7 @@ bool ValidateEnabledHook(const RequiredHook& acHook) noexcept
             "PartyQuest required native hook target did not resolve: name={} addressLibraryId={}",
             acHook.Name,
             acHook.AddressLibraryId);
-        return false;
+        return nullptr;
     }
 
     if (!IsExecutableMainModuleAddress(target))
@@ -215,8 +216,17 @@ bool ValidateEnabledHook(const RequiredHook& acHook) noexcept
             acHook.Name,
             acHook.AddressLibraryId,
             target);
-        return false;
+        return nullptr;
     }
+
+    return target;
+}
+
+bool ValidateEnabledHook(const RequiredHook& acHook)
+{
+    void* const target = ResolveAndValidateTarget(acHook);
+    if (!target)
+        return false;
 
     // TiltedReverse's delayed hook manager currently discards the return values
     // from MH_CreateHook and MH_EnableHook. Re-enable the target first so a hook
@@ -254,42 +264,68 @@ bool ValidateEnabledHook(const RequiredHook& acHook) noexcept
 }
 } // namespace
 
+bool PartyQuestSkyrimNativeHookValidator::ValidateTargetsBeforeCommit() noexcept
+{
+    return PartyQuestExceptionBoundary::InvokeOr<bool>(
+        false,
+        []()
+        {
+            if (!VersionDb::Get().IsLoaded())
+            {
+                spdlog::critical(
+                    "PartyQuest cannot validate native hook targets because Address Library is not loaded");
+                return false;
+            }
+
+            for (const auto& hook : kRequiredHooks)
+            {
+                if (!ResolveAndValidateTarget(hook))
+                    return false;
+            }
+
+            spdlog::info(
+                "PartyQuest validated all required native hook targets before MinHook commit");
+            return true;
+        });
+}
+
 bool PartyQuestSkyrimNativeHookValidator::ValidateAndPublish() noexcept
 {
-    if (!VersionDb::Get().IsLoaded())
-    {
-        spdlog::critical(
-            "PartyQuest cannot validate native hooks because Address Library is not loaded");
-        return false;
-    }
+    return PartyQuestExceptionBoundary::InvokeOr<bool>(
+        false,
+        []()
+        {
+            if (!VersionDb::Get().IsLoaded())
+            {
+                spdlog::critical(
+                    "PartyQuest cannot validate native hooks because Address Library is not loaded");
+                return false;
+            }
 
-    for (const auto& hook : kRequiredHooks)
-    {
-        if (!ValidateEnabledHook(hook))
-            return false;
-    }
+            for (const auto& hook : kRequiredHooks)
+            {
+                if (!ValidateEnabledHook(hook))
+                    return false;
+            }
 
-    // Save-hook installation evidence is intentionally two-phase. Resolving and
-    // queueing TP_HOOK is not proof that MinHook committed the expected detour;
-    // publish it only after every required live target above has been verified.
-    ConfirmPartyQuestSaveHookInstalled();
+            // Save-hook installation evidence is intentionally two-phase.
+            // Resolving and queueing TP_HOOK is not proof that MinHook committed
+            // the expected detour; publish only after all required hooks pass.
+            ConfirmPartyQuestSaveHookInstalled();
 
-    // Installer callbacks have already recorded the exact required lifecycle
-    // targets that resolved and were queued. Only now, after proving the live
-    // MinHook patches route to our exact detours, may that evidence become
-    // production-visible lifecycle coverage.
-    PartyQuestRuntimeLifecycleIntegrationPolicy::
-        ConfirmNativeHookCommitValidated();
+            PartyQuestRuntimeLifecycleIntegrationPolicy::
+                ConfirmNativeHookCommitValidated();
 
-    if (!PartyQuestRuntimeLifecycleIntegrationPolicy::
-            HasCompleteCharacterIdentityCoverage())
-    {
-        spdlog::critical(
-            "PartyQuest native hooks validated but lifecycle coverage ledger is incomplete; refusing startup");
-        return false;
-    }
+            if (!PartyQuestRuntimeLifecycleIntegrationPolicy::
+                    HasCompleteCharacterIdentityCoverage())
+            {
+                spdlog::critical(
+                    "PartyQuest native hooks validated but lifecycle coverage ledger is incomplete; refusing startup");
+                return false;
+            }
 
-    spdlog::info(
-        "PartyQuest validated all required pre-entry native hooks after MinHook commit");
-    return true;
+            spdlog::info(
+                "PartyQuest validated all required pre-entry native hooks after MinHook commit");
+            return true;
+        });
 }
