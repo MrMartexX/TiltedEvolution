@@ -1,5 +1,4 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
-#include <Structs/Skyrim/PartyQuestExceptionBoundary.h>
 
 PartyQuestRuntimeGenerationFence&
 PartyQuestRuntimeGenerationFence::GetProcessFence() noexcept
@@ -10,13 +9,21 @@ PartyQuestRuntimeGenerationFence::GetProcessFence() noexcept
 
 uint64_t PartyQuestRuntimeGenerationFence::GetGeneration() const noexcept
 {
-    return PartyQuestExceptionBoundary::InvokeOr<uint64_t>(
-        0,
-        [this]() -> uint64_t
-        {
-            const std::shared_lock lock(m_mutex);
-            return m_generation;
-        });
+    if (IsPoisoned())
+        return 0;
+
+    try
+    {
+        const std::shared_lock lock(m_mutex);
+        if (IsPoisoned())
+            return 0;
+        return m_generation;
+    }
+    catch (...)
+    {
+        Poison();
+        return 0;
+    }
 }
 
 uint64_t PartyQuestRuntimeGenerationFence::AdvanceGenerationLocked() noexcept
@@ -39,25 +46,49 @@ uint64_t PartyQuestRuntimeGenerationFence::AllocateLifecycleTicketLocked() noexc
 
 uint64_t PartyQuestRuntimeGenerationFence::Invalidate() noexcept
 {
-    auto lease = BeginInvalidation();
-    return lease.GetGeneration();
+    auto lease = TryBeginInvalidation();
+    return lease ? lease->GetGeneration() : 0;
+}
+
+std::optional<PartyQuestRuntimeGenerationFence::InvalidationLease>
+PartyQuestRuntimeGenerationFence::TryBeginInvalidation() noexcept
+{
+    if (IsPoisoned())
+        return std::nullopt;
+
+    try
+    {
+        std::unique_lock lock(m_mutex);
+        if (IsPoisoned())
+            return std::nullopt;
+
+        const uint64_t generation = AdvanceGenerationLocked();
+        return InvalidationLease(std::move(lock), generation);
+    }
+    catch (...)
+    {
+        Poison();
+        return std::nullopt;
+    }
 }
 
 PartyQuestRuntimeGenerationFence::InvalidationLease
 PartyQuestRuntimeGenerationFence::BeginInvalidation() noexcept
 {
-    std::unique_lock lock(m_mutex);
-    const uint64_t generation = AdvanceGenerationLocked();
-    return InvalidationLease(std::move(lock), generation);
+    auto lease = TryBeginInvalidation();
+    return lease ? std::move(*lease) : InvalidationLease{};
 }
 
 PartyQuestRuntimeGenerationFence::LifecycleTransitionTicket
 PartyQuestRuntimeGenerationFence::BeginLifecycleTransition() noexcept
 {
+    if (IsPoisoned())
+        return {};
+
     try
     {
         std::unique_lock lock(m_mutex);
-        if (m_lifecycleTicket != 0)
+        if (IsPoisoned() || m_lifecycleTicket != 0)
             return {};
 
         const uint64_t generation = AdvanceGenerationLocked();
@@ -66,6 +97,7 @@ PartyQuestRuntimeGenerationFence::BeginLifecycleTransition() noexcept
     }
     catch (...)
     {
+        Poison();
         return {};
     }
 }
@@ -73,13 +105,13 @@ PartyQuestRuntimeGenerationFence::BeginLifecycleTransition() noexcept
 bool PartyQuestRuntimeGenerationFence::CompleteLifecycleTransition(
     LifecycleTransitionTicket aTicket) noexcept
 {
-    if (!aTicket.IsValid())
+    if (!aTicket.IsValid() || IsPoisoned())
         return false;
 
     try
     {
         std::unique_lock lock(m_mutex);
-        if (m_lifecycleTicket != aTicket.Ticket)
+        if (IsPoisoned() || m_lifecycleTicket != aTicket.Ticket)
             return false;
 
         m_lifecycleTicket = 0;
@@ -87,19 +119,24 @@ bool PartyQuestRuntimeGenerationFence::CompleteLifecycleTransition(
     }
     catch (...)
     {
+        Poison();
         return false;
     }
 }
 
 bool PartyQuestRuntimeGenerationFence::IsLifecycleTransitionPending() const noexcept
 {
+    if (IsPoisoned())
+        return true;
+
     try
     {
         const std::shared_lock lock(m_mutex);
-        return m_lifecycleTicket != 0;
+        return IsPoisoned() || m_lifecycleTicket != 0;
     }
     catch (...)
     {
+        Poison();
         return true;
     }
 }
@@ -108,18 +145,23 @@ std::optional<PartyQuestRuntimeGenerationFence::ExecutionLease>
 PartyQuestRuntimeGenerationFence::TryAcquire(
     uint64_t aExpectedGeneration) const noexcept
 {
-    if (aExpectedGeneration == 0)
+    if (aExpectedGeneration == 0 || IsPoisoned())
         return std::nullopt;
 
-    return PartyQuestExceptionBoundary::InvokeOr<
-        std::optional<ExecutionLease>>(
-        std::nullopt,
-        [this, aExpectedGeneration]() -> std::optional<ExecutionLease>
+    try
+    {
+        std::shared_lock lock(m_mutex);
+        if (IsPoisoned() || m_lifecycleTicket != 0 ||
+            m_generation != aExpectedGeneration)
         {
-            std::shared_lock lock(m_mutex);
-            if (m_lifecycleTicket != 0 || m_generation != aExpectedGeneration)
-                return std::nullopt;
+            return std::nullopt;
+        }
 
-            return ExecutionLease(std::move(lock), aExpectedGeneration);
-        });
+        return ExecutionLease(std::move(lock), aExpectedGeneration);
+    }
+    catch (...)
+    {
+        Poison();
+        return std::nullopt;
+    }
 }
