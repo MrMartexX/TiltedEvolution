@@ -12,6 +12,7 @@
 #include <Forms/TESQuest.h>
 
 #include <Structs/Skyrim/PartyQuestAdmission.h>
+#include <Structs/Skyrim/PartyQuestExceptionBoundary.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSafety.h>
@@ -37,6 +38,13 @@ std::ofstream s_stream;
 std::atomic<uint64_t> s_sequence{0};
 std::atomic_bool s_initialized{false};
 std::atomic_bool s_enabled{false};
+
+template <class TCallable>
+void RunDiagnostic(TCallable&& aCallable) noexcept
+{
+    (void)PartyQuestExceptionBoundary::Invoke(
+        std::forward<TCallable>(aCallable));
+}
 
 std::string EscapeJson(const char* apText)
 {
@@ -73,15 +81,24 @@ std::string EscapeJson(const char* apText)
 
 bool ParseBool(const std::string& acValue) noexcept
 {
-    std::string value;
-    value.reserve(acValue.size());
-    for (const char ch : acValue)
-    {
-        if (!std::isspace(static_cast<unsigned char>(ch)))
-            value.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(ch))));
-    }
+    return PartyQuestExceptionBoundary::InvokeOr<bool>(
+        false,
+        [&]()
+        {
+            std::string value;
+            value.reserve(acValue.size());
+            for (const char ch : acValue)
+            {
+                if (!std::isspace(static_cast<unsigned char>(ch)))
+                {
+                    value.push_back(static_cast<char>(
+                        std::tolower(static_cast<unsigned char>(ch))));
+                }
+            }
 
-    return value == "1" || value == "true" || value == "yes" || value == "on";
+            return value == "1" || value == "true" || value == "yes" ||
+                value == "on";
+        });
 }
 
 bool ReadEnabledSetting() noexcept
@@ -169,33 +186,43 @@ void WriteEvent(const char* acEvent, const std::string& acFields = {}) noexcept
 
 std::optional<std::array<uint32_t, 4>> GetExecutableVersion() noexcept
 {
-    wchar_t path[MAX_PATH]{};
-    const DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
-    if (length == 0 || length >= MAX_PATH)
-        return std::nullopt;
+    return PartyQuestExceptionBoundary::InvokeOr<
+        std::optional<std::array<uint32_t, 4>>>(
+        std::nullopt,
+        []() -> std::optional<std::array<uint32_t, 4>>
+        {
+            wchar_t path[MAX_PATH]{};
+            const DWORD length = GetModuleFileNameW(nullptr, path, MAX_PATH);
+            if (length == 0 || length >= MAX_PATH)
+                return std::nullopt;
 
-    DWORD ignored = 0;
-    const DWORD size = GetFileVersionInfoSizeW(path, &ignored);
-    if (size == 0)
-        return std::nullopt;
+            DWORD ignored = 0;
+            const DWORD size = GetFileVersionInfoSizeW(path, &ignored);
+            if (size == 0)
+                return std::nullopt;
 
-    std::vector<std::byte> data(size);
-    if (!GetFileVersionInfoW(path, 0, size, data.data()))
-        return std::nullopt;
+            std::vector<std::byte> data(size);
+            if (!GetFileVersionInfoW(path, 0, size, data.data()))
+                return std::nullopt;
 
-    VS_FIXEDFILEINFO* pInfo = nullptr;
-    UINT infoSize = 0;
-    if (!VerQueryValueW(data.data(), L"\\", reinterpret_cast<void**>(&pInfo), &infoSize) ||
-        !pInfo || infoSize < sizeof(VS_FIXEDFILEINFO))
-    {
-        return std::nullopt;
-    }
+            VS_FIXEDFILEINFO* pInfo = nullptr;
+            UINT infoSize = 0;
+            if (!VerQueryValueW(
+                    data.data(),
+                    L"\\",
+                    reinterpret_cast<void**>(&pInfo),
+                    &infoSize) ||
+                !pInfo || infoSize < sizeof(VS_FIXEDFILEINFO))
+            {
+                return std::nullopt;
+            }
 
-    return std::array<uint32_t, 4>{
-        HIWORD(pInfo->dwFileVersionMS),
-        LOWORD(pInfo->dwFileVersionMS),
-        HIWORD(pInfo->dwFileVersionLS),
-        LOWORD(pInfo->dwFileVersionLS)};
+            return std::array<uint32_t, 4>{
+                HIWORD(pInfo->dwFileVersionMS),
+                LOWORD(pInfo->dwFileVersionMS),
+                HIWORD(pInfo->dwFileVersionLS),
+                LOWORD(pInfo->dwFileVersionLS)};
+        });
 }
 
 std::string VersionJson(const std::array<uint32_t, 4>& acVersion)
@@ -399,11 +426,18 @@ void PartyQuestP0LiveDiagnostics::RecordRuntimeThreadObservation(
     uint32_t aBoundThreadId,
     uint32_t aCurrentThreadId) noexcept
 {
-    std::ostringstream fields;
-    fields << "\"accepted\":" << (aAccepted ? "true" : "false")
-           << ",\"bound_thread_id\":" << aBoundThreadId
-           << ",\"current_thread_id\":" << aCurrentThreadId;
-    WriteEvent(aAccepted ? "runtime_thread_observed" : "runtime_thread_migration_rejected", fields.str());
+    RunDiagnostic(
+        [&]()
+        {
+            std::ostringstream fields;
+            fields << "\"accepted\":" << (aAccepted ? "true" : "false")
+                   << ",\"bound_thread_id\":" << aBoundThreadId
+                   << ",\"current_thread_id\":" << aCurrentThreadId;
+            WriteEvent(
+                aAccepted ? "runtime_thread_observed"
+                          : "runtime_thread_migration_rejected",
+                fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
@@ -412,29 +446,43 @@ void PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
     uint64_t aGenerationBefore,
     uint64_t aGenerationAfter) noexcept
 {
-    std::ostringstream fields;
-    fields << "\"reason\":\"" << EscapeJson(acReason) << "\""
-           << ",\"phase\":\"" << EscapeJson(acPhase) << "\""
-           << ",\"generation_before\":" << aGenerationBefore
-           << ",\"generation_after\":" << aGenerationAfter;
-    WriteEvent("generation_transition", fields.str());
+    RunDiagnostic(
+        [&]()
+        {
+            std::ostringstream fields;
+            fields << "\"reason\":\"" << EscapeJson(acReason) << "\""
+                   << ",\"phase\":\"" << EscapeJson(acPhase) << "\""
+                   << ",\"generation_before\":" << aGenerationBefore
+                   << ",\"generation_after\":" << aGenerationAfter;
+            WriteEvent("generation_transition", fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordTransportState(const char* acState) noexcept
 {
-    std::ostringstream fields;
-    fields << "\"state\":\"" << EscapeJson(acState) << "\""
-           << ",\"generation\":" << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
-    WriteEvent("transport_state", fields.str());
+    RunDiagnostic(
+        [&]()
+        {
+            std::ostringstream fields;
+            fields << "\"state\":\"" << EscapeJson(acState) << "\""
+                   << ",\"generation\":"
+                   << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
+            WriteEvent("transport_state", fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordGamePresence(bool aInGame) noexcept
 {
-    std::ostringstream fields;
-    fields << "\"in_game\":" << (aInGame ? "true" : "false")
-           << ",\"semantic\":\"overlay-player-presence-only-not-engine-lifecycle-authority\""
-           << ",\"generation\":" << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
-    WriteEvent("game_presence", fields.str());
+    RunDiagnostic(
+        [&]()
+        {
+            std::ostringstream fields;
+            fields << "\"in_game\":" << (aInGame ? "true" : "false")
+                   << ",\"semantic\":\"overlay-player-presence-only-not-engine-lifecycle-authority\""
+                   << ",\"generation\":"
+                   << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
+            WriteEvent("game_presence", fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordEngineSave(
@@ -447,19 +495,25 @@ void PartyQuestP0LiveDiagnostics::RecordEngineSave(
     bool aResultKnown,
     bool aResult) noexcept
 {
-    std::ostringstream fields;
-    fields << "\"phase\":\"" << EscapeJson(acPhase) << "\""
-           << ",\"save_name\":\"" << EscapeJson(acFileName ? acFileName : "") << "\""
-           << ",\"transaction_id\":" << aTransactionId
-           << ",\"device_id\":" << aDeviceId
-           << ",\"output_stats\":" << aOutputStats
-           << ",\"permitted\":" << (aPermitted ? "true" : "false")
-           << ",\"generation\":" << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
-    if (aResultKnown)
-        fields << ",\"result\":" << (aResult ? "true" : "false");
-    else
-        fields << ",\"result\":{\"available\":false,\"reason\":\"original-engine-call-not-returned-yet\"}";
-    WriteEvent("skyrim_save_pipeline", fields.str());
+    RunDiagnostic(
+        [&]()
+        {
+            std::ostringstream fields;
+            fields << "\"phase\":\"" << EscapeJson(acPhase) << "\""
+                   << ",\"save_name\":\""
+                   << EscapeJson(acFileName ? acFileName : "") << "\""
+                   << ",\"transaction_id\":" << aTransactionId
+                   << ",\"device_id\":" << aDeviceId
+                   << ",\"output_stats\":" << aOutputStats
+                   << ",\"permitted\":" << (aPermitted ? "true" : "false")
+                   << ",\"generation\":"
+                   << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
+            if (aResultKnown)
+                fields << ",\"result\":" << (aResult ? "true" : "false");
+            else
+                fields << ",\"result\":{\"available\":false,\"reason\":\"original-engine-call-not-returned-yet\"}";
+            WriteEvent("skyrim_save_pipeline", fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordModMappingBegin(
@@ -467,11 +521,15 @@ void PartyQuestP0LiveDiagnostics::RecordModMappingBegin(
     uint64_t aGenerationBefore,
     uint64_t aGenerationAfter) noexcept
 {
-    std::ostringstream fields;
-    fields << "\"server_mod_count\":" << aServerModCount
-           << ",\"generation_before\":" << aGenerationBefore
-           << ",\"generation_after\":" << aGenerationAfter;
-    WriteEvent("mod_mapping_rebuild_begin", fields.str());
+    RunDiagnostic(
+        [&]()
+        {
+            std::ostringstream fields;
+            fields << "\"server_mod_count\":" << aServerModCount
+                   << ",\"generation_before\":" << aGenerationBefore
+                   << ",\"generation_after\":" << aGenerationAfter;
+            WriteEvent("mod_mapping_rebuild_begin", fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordModMappingEntry(
@@ -482,17 +540,22 @@ void PartyQuestP0LiveDiagnostics::RecordModMappingEntry(
     uint32_t aLocalModId,
     bool aLocalLite) noexcept
 {
-    std::ostringstream fields;
-    fields << "\"server_mod_id\":" << aServerModId
-           << ",\"filename\":\"" << EscapeJson(acFilename) << "\""
-           << ",\"server_lite\":" << (aServerLite ? "true" : "false")
-           << ",\"resolved_locally\":" << (aResolvedLocally ? "true" : "false");
-    if (aResolvedLocally)
-    {
-        fields << ",\"local_mod_id\":" << aLocalModId
-               << ",\"local_lite\":" << (aLocalLite ? "true" : "false");
-    }
-    WriteEvent("mod_mapping_entry", fields.str());
+    RunDiagnostic(
+        [&]()
+        {
+            std::ostringstream fields;
+            fields << "\"server_mod_id\":" << aServerModId
+                   << ",\"filename\":\"" << EscapeJson(acFilename) << "\""
+                   << ",\"server_lite\":" << (aServerLite ? "true" : "false")
+                   << ",\"resolved_locally\":"
+                   << (aResolvedLocally ? "true" : "false");
+            if (aResolvedLocally)
+            {
+                fields << ",\"local_mod_id\":" << aLocalModId
+                       << ",\"local_lite\":" << (aLocalLite ? "true" : "false");
+            }
+            WriteEvent("mod_mapping_entry", fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordModMappingEnd(
@@ -501,49 +564,59 @@ void PartyQuestP0LiveDiagnostics::RecordModMappingEnd(
     size_t aMissingCount,
     uint64_t aGeneration) noexcept
 {
-    std::ostringstream fields;
-    fields << "\"server_mod_count\":" << aServerModCount
-           << ",\"resolved_count\":" << aResolvedCount
-           << ",\"missing_count\":" << aMissingCount
-           << ",\"generation\":" << aGeneration;
-    WriteEvent("mod_mapping_rebuild_end", fields.str());
+    RunDiagnostic(
+        [&]()
+        {
+            std::ostringstream fields;
+            fields << "\"server_mod_count\":" << aServerModCount
+                   << ",\"resolved_count\":" << aResolvedCount
+                   << ",\"missing_count\":" << aMissingCount
+                   << ",\"generation\":" << aGeneration;
+            WriteEvent("mod_mapping_rebuild_end", fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordLifecycleCapabilities(
     const char* acPhase) noexcept
 {
-    const bool loadGame =
-        PartyQuestRuntimeLifecycleIntegrationPolicy::HasVerifiedPreTransitionHook(
-            PartyQuestRuntimeLifecycleEvent::LoadGame);
-    const bool newGame =
-        PartyQuestRuntimeLifecycleIntegrationPolicy::HasVerifiedPreTransitionHook(
-            PartyQuestRuntimeLifecycleEvent::NewGame);
-    const bool mainMenu =
-        PartyQuestRuntimeLifecycleIntegrationPolicy::HasVerifiedPreTransitionHook(
-            PartyQuestRuntimeLifecycleEvent::MainMenu);
-    const bool complete =
-        PartyQuestRuntimeLifecycleIntegrationPolicy::
-            HasCompleteCharacterIdentityCoverage();
+    RunDiagnostic(
+        [&]()
+        {
+            const bool loadGame =
+                PartyQuestRuntimeLifecycleIntegrationPolicy::HasVerifiedPreTransitionHook(
+                    PartyQuestRuntimeLifecycleEvent::LoadGame);
+            const bool newGame =
+                PartyQuestRuntimeLifecycleIntegrationPolicy::HasVerifiedPreTransitionHook(
+                    PartyQuestRuntimeLifecycleEvent::NewGame);
+            const bool mainMenu =
+                PartyQuestRuntimeLifecycleIntegrationPolicy::HasVerifiedPreTransitionHook(
+                    PartyQuestRuntimeLifecycleEvent::MainMenu);
+            const bool complete =
+                PartyQuestRuntimeLifecycleIntegrationPolicy::
+                    HasCompleteCharacterIdentityCoverage();
 
-    std::ostringstream fields;
-    fields << "\"phase\":\"" << EscapeJson(acPhase ? acPhase : "unknown") << "\""
-           << ",\"load_game_engine_hook\":{\"installed\":"
-           << (loadGame ? "true" : "false") << '}'
-           << ",\"load_game_completion_sink\":{\"installed\":"
-           << (IsPartyQuestLoadCompletionSinkInstalled() ? "true" : "false") << '}'
-           << ",\"new_game_engine_hook\":{\"installed\":"
-           << (newGame ? "true" : "false") << '}'
-           << ",\"main_menu_engine_hook\":{\"installed\":"
-           << (mainMenu ? "true" : "false") << '}'
-           << ",\"complete_character_identity_coverage\":"
-           << (complete ? "true" : "false")
-           << ",\"save_engine_hook\":{\"installed\":"
-           << (IsPartyQuestSaveHookInstalled() ? "true" : "false")
-           << ",\"requires_observed_event_for_live_proof\":true}"
-           << ",\"profile_switch_engine_hook\":{\"installed\":false,"
-              "\"reason\":\"no-separate-profile-switch-boundary-approved\"}"
-           << ",\"grants_mutation_authority\":false";
-    WriteEvent("lifecycle_capabilities", fields.str());
+            std::ostringstream fields;
+            fields << "\"phase\":\""
+                   << EscapeJson(acPhase ? acPhase : "unknown") << "\""
+                   << ",\"load_game_engine_hook\":{\"installed\":"
+                   << (loadGame ? "true" : "false") << '}'
+                   << ",\"load_game_completion_sink\":{\"installed\":"
+                   << (IsPartyQuestLoadCompletionSinkInstalled() ? "true" : "false")
+                   << '}'
+                   << ",\"new_game_engine_hook\":{\"installed\":"
+                   << (newGame ? "true" : "false") << '}'
+                   << ",\"main_menu_engine_hook\":{\"installed\":"
+                   << (mainMenu ? "true" : "false") << '}'
+                   << ",\"complete_character_identity_coverage\":"
+                   << (complete ? "true" : "false")
+                   << ",\"save_engine_hook\":{\"installed\":"
+                   << (IsPartyQuestSaveHookInstalled() ? "true" : "false")
+                   << ",\"requires_observed_event_for_live_proof\":true}"
+                   << ",\"profile_switch_engine_hook\":{\"installed\":false,"
+                      "\"reason\":\"no-separate-profile-switch-boundary-approved\"}"
+                   << ",\"grants_mutation_authority\":false";
+            WriteEvent("lifecycle_capabilities", fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
@@ -551,58 +624,62 @@ void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
     if (!IsEnabled())
         return;
 
-    // Capture a short startup sequence to prove repeated observations, then a
-    // sparse heartbeat so a longer live run can show real ingress transitions
-    // without generating an unbounded per-frame log.
-    static uint64_t s_callCount = 0;
-    static PartyQuestSkyrimPapyrusDiagnosticStatus s_lastStatus =
-        PartyQuestSkyrimPapyrusDiagnosticStatus::VirtualMachineUnavailable;
-    ++s_callCount;
-    const bool startupWindow = s_callCount <= 24;
-    const bool heartbeat = (s_callCount % 300) == 0;
+    RunDiagnostic(
+        [&]()
+        {
+            // Capture a short startup sequence to prove repeated observations,
+            // then a sparse heartbeat so a longer live run can show real ingress
+            // transitions without generating an unbounded per-frame log.
+            static uint64_t s_callCount = 0;
+            static PartyQuestSkyrimPapyrusDiagnosticStatus s_lastStatus =
+                PartyQuestSkyrimPapyrusDiagnosticStatus::VirtualMachineUnavailable;
+            ++s_callCount;
+            const bool startupWindow = s_callCount <= 24;
+            const bool heartbeat = (s_callCount % 300) == 0;
 
-    auto& observer =
-        PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver();
-    const auto sample = observer.SampleDiagnostics();
-    const bool statusChanged = sample.DiagnosticStatus != s_lastStatus;
-    s_lastStatus = sample.DiagnosticStatus;
-    if (!startupWindow && !heartbeat && !statusChanged)
-        return;
+            auto& observer =
+                PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver();
+            const auto sample = observer.SampleDiagnostics();
+            const bool statusChanged = sample.DiagnosticStatus != s_lastStatus;
+            s_lastStatus = sample.DiagnosticStatus;
+            if (!startupWindow && !heartbeat && !statusChanged)
+                return;
 
-    const auto& observation = sample.Observation;
-    const auto& counts = sample.Counts;
-    std::ostringstream fields;
-    fields << "\"sample_index\":" << s_callCount
-           << ",\"diagnostic_status\":\""
-           << PartyQuestSkyrimPapyrusRuntimeObserver::DiagnosticStatusName(
-                  sample.DiagnosticStatus)
-           << "\""
-           << ",\"observation_status\":\""
-           << PapyrusObservationStatusName(observation.Status) << "\""
-           << ",\"pending_work_count\":" << observation.PendingWorkCount
-           << ",\"papyrus_generation\":"
-           << observation.QuestEventGeneration
-           << ",\"observed_work_domains\":"
-           << observation.ObservedWorkDomains
-           << ",\"domain_counts\":{"
-              "\"function_messages\":"
-           << counts.FunctionMessageQueues
-           << ",\"vm_tasks\":" << counts.VmTaskQueue
-           << ",\"ui_waiting\":" << counts.UiWaitingQueue
-           << ",\"suspend_resume\":" << counts.SuspendResumeQueues
-           << ",\"running_stacks\":" << counts.RunningStacks
-           << ",\"latent_returns\":" << counts.LatentReturnQueue << '}'
-           << ",\"ingress_hook_invocations\":"
-           << sample.IngressHookInvocationCount
-           << ",\"exact_runtime_identity\":"
-           << (sample.ExactRuntimeIdentity ? "true" : "false")
-           << ",\"ingress_hooks_registered\":"
-           << (sample.IngressHooksRegistered ? "true" : "false")
-           << ",\"virtual_table_matched\":"
-           << (sample.VirtualTableMatched ? "true" : "false")
-           << ",\"authoritative\":false"
-           << ",\"grants_mutation_authority\":false";
-    WriteEvent("papyrus_runtime_observation", fields.str());
+            const auto& observation = sample.Observation;
+            const auto& counts = sample.Counts;
+            std::ostringstream fields;
+            fields << "\"sample_index\":" << s_callCount
+                   << ",\"diagnostic_status\":\""
+                   << PartyQuestSkyrimPapyrusRuntimeObserver::DiagnosticStatusName(
+                          sample.DiagnosticStatus)
+                   << "\""
+                   << ",\"observation_status\":\""
+                   << PapyrusObservationStatusName(observation.Status) << "\""
+                   << ",\"pending_work_count\":" << observation.PendingWorkCount
+                   << ",\"papyrus_generation\":"
+                   << observation.QuestEventGeneration
+                   << ",\"observed_work_domains\":"
+                   << observation.ObservedWorkDomains
+                   << ",\"domain_counts\":{"
+                      "\"function_messages\":"
+                   << counts.FunctionMessageQueues
+                   << ",\"vm_tasks\":" << counts.VmTaskQueue
+                   << ",\"ui_waiting\":" << counts.UiWaitingQueue
+                   << ",\"suspend_resume\":" << counts.SuspendResumeQueues
+                   << ",\"running_stacks\":" << counts.RunningStacks
+                   << ",\"latent_returns\":" << counts.LatentReturnQueue << '}'
+                   << ",\"ingress_hook_invocations\":"
+                   << sample.IngressHookInvocationCount
+                   << ",\"exact_runtime_identity\":"
+                   << (sample.ExactRuntimeIdentity ? "true" : "false")
+                   << ",\"ingress_hooks_registered\":"
+                   << (sample.IngressHooksRegistered ? "true" : "false")
+                   << ",\"virtual_table_matched\":"
+                   << (sample.VirtualTableMatched ? "true" : "false")
+                   << ",\"authoritative\":false"
+                   << ",\"grants_mutation_authority\":false";
+            WriteEvent("papyrus_runtime_observation", fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(
@@ -613,44 +690,51 @@ void PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(
     if (!apQuest || !acExpectedQuestId || !IsEnabled())
         return;
 
-    const auto compatibility =
-        PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
-            apQuest,
-            acModSystem,
-            acExpectedQuestId);
+    RunDiagnostic(
+        [&]()
+        {
+            const auto compatibility =
+                PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
+                    apQuest,
+                    acModSystem,
+                    acExpectedQuestId);
 
-    std::ostringstream fields;
-    fields << "\"generation\":"
-           << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration()
-           << ",\"quest_id\":" << GameIdJson(acExpectedQuestId);
+            std::ostringstream fields;
+            fields << "\"generation\":"
+                   << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration()
+                   << ",\"quest_id\":" << GameIdJson(acExpectedQuestId);
 
-    if (compatibility)
-    {
-        fields << ",\"available\":true"
-               << ",\"profile_version\":" << compatibility->ProfileVersion
-               << ",\"resolved_record_fingerprint\":"
-               << compatibility->ResolvedRecordFingerprint
-               << ",\"winning_override_fingerprint\":"
-               << compatibility->WinningOverrideFingerprint
-               << ",\"script_fingerprint\":"
-               << compatibility->ScriptFingerprint
-               << ",\"native_adapter_fingerprint\":"
-               << compatibility->NativeAdapterFingerprint
-               << ",\"adapter_mutation_components\":"
-               << static_cast<uint32_t>(compatibility->AdapterMutationComponents)
-               << ",\"reviewed_profile\":"
-               << (PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(
-                       acExpectedQuestId) ? "true" : "false");
-    }
-    else
-    {
-        fields << ",\"available\":false"
-               << ",\"reason\":\"live-observation-failed-closed\"";
-    }
+            if (compatibility)
+            {
+                fields << ",\"available\":true"
+                       << ",\"profile_version\":" << compatibility->ProfileVersion
+                       << ",\"resolved_record_fingerprint\":"
+                       << compatibility->ResolvedRecordFingerprint
+                       << ",\"winning_override_fingerprint\":"
+                       << compatibility->WinningOverrideFingerprint
+                       << ",\"script_fingerprint\":"
+                       << compatibility->ScriptFingerprint
+                       << ",\"native_adapter_fingerprint\":"
+                       << compatibility->NativeAdapterFingerprint
+                       << ",\"adapter_mutation_components\":"
+                       << static_cast<uint32_t>(
+                              compatibility->AdapterMutationComponents)
+                       << ",\"reviewed_profile\":"
+                       << (PartyQuestSkyrimRuntimeCompatibilityEvidence::
+                                   HasReviewedProfile(acExpectedQuestId)
+                               ? "true"
+                               : "false");
+            }
+            else
+            {
+                fields << ",\"available\":false"
+                       << ",\"reason\":\"live-observation-failed-closed\"";
+            }
 
-    fields << ",\"grants_planning_authority\":false"
-           << ",\"grants_mutation_authority\":false";
-    WriteEvent("runtime_compatibility_observed", fields.str());
+            fields << ",\"grants_planning_authority\":false"
+                   << ",\"grants_mutation_authority\":false";
+            WriteEvent("runtime_compatibility_observed", fields.str());
+        });
 }
 
 void PartyQuestP0LiveDiagnostics::RecordQuestObservation(
@@ -662,60 +746,88 @@ void PartyQuestP0LiveDiagnostics::RecordQuestObservation(
     if (!apQuest || !IsEnabled())
         return;
 
-    const PartyQuestSyncFacts facts = QuestSnapshotCollector::CollectSyncFacts(apQuest);
-    const PartyQuestSyncClassification classification = ClassifyPartyQuestSync(facts);
-    const PartyQuestAdmissionDecision admission = PartyQuestAdmissionPolicy::Evaluate(acSnapshot.QuestId, facts);
-    const PartyQuestApplyPlan applyPlan = PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(admission, acSnapshot);
+    RunDiagnostic(
+        [&]()
+        {
+            const PartyQuestSyncFacts facts =
+                QuestSnapshotCollector::CollectSyncFacts(apQuest);
+            const PartyQuestSyncClassification classification =
+                ClassifyPartyQuestSync(facts);
+            const PartyQuestAdmissionDecision admission =
+                PartyQuestAdmissionPolicy::Evaluate(acSnapshot.QuestId, facts);
+            const PartyQuestApplyPlan applyPlan =
+                PartyQuestRuntimeSafetyPolicy::BuildApplyPlan(admission, acSnapshot);
 
-    const uint32_t localFormId = acModSystem.GetGameId(acSnapshot.QuestId);
-    GameId roundTrip{};
-    const bool roundTripMapped = localFormId != 0 && acModSystem.GetServerModId(localFormId, roundTrip);
-    const bool roundTripMatches = roundTripMapped && roundTrip == acSnapshot.QuestId;
-    std::ostringstream stages;
-    stages << '[';
-    bool firstStage = true;
-    for (TESQuest::Stage* pStage : apQuest->stages)
-    {
-        if (!pStage)
-            continue;
-        if (!firstStage)
-            stages << ',';
-        firstStage = false;
-        stages << pStage->stageIndex;
-    }
-    stages << ']';
+            const uint32_t localFormId = acModSystem.GetGameId(acSnapshot.QuestId);
+            GameId roundTrip{};
+            const bool roundTripMapped =
+                localFormId != 0 &&
+                acModSystem.GetServerModId(localFormId, roundTrip);
+            const bool roundTripMatches =
+                roundTripMapped && roundTrip == acSnapshot.QuestId;
+            std::ostringstream stages;
+            stages << '[';
+            bool firstStage = true;
+            for (TESQuest::Stage* pStage : apQuest->stages)
+            {
+                if (!pStage)
+                    continue;
+                if (!firstStage)
+                    stages << ',';
+                firstStage = false;
+                stages << pStage->stageIndex;
+            }
+            stages << ']';
 
-    std::ostringstream fields;
-    fields << "\"reason\":\"" << EscapeJson(acReason) << "\""
-           << ",\"generation\":" << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration()
-           << ",\"quest_id\":" << GameIdJson(acSnapshot.QuestId)
-           << ",\"observed_local_form_id\":" << apQuest->formID
-           << ",\"mapped_local_form_id\":" << localFormId
-           << ",\"round_trip_mapped\":" << (roundTripMapped ? "true" : "false")
-           << ",\"round_trip_matches\":" << (roundTripMatches ? "true" : "false")
-           << ",\"editor_id\":\"" << EscapeJson(apQuest->idName.AsAscii()) << "\""
-           << ",\"status\":\"" << StatusName(acSnapshot.Status) << "\""
-           << ",\"current_stage\":" << acSnapshot.CurrentStage
-           << ",\"defined_stages\":" << stages.str()
-           << ",\"snapshot_digest\":" << acSnapshot.ComputeDigest()
-           << ",\"completed_stage_count\":" << acSnapshot.CompletedStages.size()
-           << ",\"objective_count\":" << acSnapshot.Objectives.size()
-           << ",\"reference_alias_count\":" << acSnapshot.ReferenceAliases.size()
-           << ",\"location_alias_count\":" << acSnapshot.LocationAliases.size()
-           << ",\"created_reference_count\":" << acSnapshot.CreatedReferences.size()
-           << ",\"scene_participant_present\":" << (acSnapshot.SceneParticipantPlayerId ? "true" : "false")
-           << ",\"quest_type\":" << static_cast<uint32_t>(facts.QuestType)
-           << ",\"has_stages\":" << (facts.HasStages ? "true" : "false")
-           << ",\"displayed_in_hud\":" << (facts.IsDisplayedInHud ? "true" : "false")
-           << ",\"has_display_name\":" << (facts.HasDisplayName ? "true" : "false")
-           << ",\"sync_class\":\"" << SyncClassName(classification.Class) << "\""
-           << ",\"admission\":\"" << AdmissionName(admission.Status) << "\""
-           << ",\"runtime_safety\":\"" << SafetyName(applyPlan.Safety.Status) << "\""
-           << ",\"runtime_safety_reason\":\"" << SafetyReasonName(applyPlan.Safety.Reason) << "\""
-           << ",\"apply_actions\":" << static_cast<uint32_t>(applyPlan.Actions)
-           << ",\"dry_run_only\":" << (applyPlan.DryRunOnly ? "true" : "false")
-           << ",\"compatibility_facts\":{\"available\":false,\"reason\":\"recorded-only-at-canonical-planning-boundary\"}"
-           << ",\"canonical_mutation_attempted\":false";
+            std::ostringstream fields;
+            fields << "\"reason\":\"" << EscapeJson(acReason) << "\""
+                   << ",\"generation\":"
+                   << PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration()
+                   << ",\"quest_id\":" << GameIdJson(acSnapshot.QuestId)
+                   << ",\"observed_local_form_id\":" << apQuest->formID
+                   << ",\"mapped_local_form_id\":" << localFormId
+                   << ",\"round_trip_mapped\":"
+                   << (roundTripMapped ? "true" : "false")
+                   << ",\"round_trip_matches\":"
+                   << (roundTripMatches ? "true" : "false")
+                   << ",\"editor_id\":\""
+                   << EscapeJson(apQuest->idName.AsAscii()) << "\""
+                   << ",\"status\":\"" << StatusName(acSnapshot.Status) << "\""
+                   << ",\"current_stage\":" << acSnapshot.CurrentStage
+                   << ",\"defined_stages\":" << stages.str()
+                   << ",\"snapshot_digest\":" << acSnapshot.ComputeDigest()
+                   << ",\"completed_stage_count\":"
+                   << acSnapshot.CompletedStages.size()
+                   << ",\"objective_count\":" << acSnapshot.Objectives.size()
+                   << ",\"reference_alias_count\":"
+                   << acSnapshot.ReferenceAliases.size()
+                   << ",\"location_alias_count\":"
+                   << acSnapshot.LocationAliases.size()
+                   << ",\"created_reference_count\":"
+                   << acSnapshot.CreatedReferences.size()
+                   << ",\"scene_participant_present\":"
+                   << (acSnapshot.SceneParticipantPlayerId ? "true" : "false")
+                   << ",\"quest_type\":" << static_cast<uint32_t>(facts.QuestType)
+                   << ",\"has_stages\":" << (facts.HasStages ? "true" : "false")
+                   << ",\"displayed_in_hud\":"
+                   << (facts.IsDisplayedInHud ? "true" : "false")
+                   << ",\"has_display_name\":"
+                   << (facts.HasDisplayName ? "true" : "false")
+                   << ",\"sync_class\":\""
+                   << SyncClassName(classification.Class) << "\""
+                   << ",\"admission\":\"" << AdmissionName(admission.Status)
+                   << "\""
+                   << ",\"runtime_safety\":\""
+                   << SafetyName(applyPlan.Safety.Status) << "\""
+                   << ",\"runtime_safety_reason\":\""
+                   << SafetyReasonName(applyPlan.Safety.Reason) << "\""
+                   << ",\"apply_actions\":"
+                   << static_cast<uint32_t>(applyPlan.Actions)
+                   << ",\"dry_run_only\":"
+                   << (applyPlan.DryRunOnly ? "true" : "false")
+                   << ",\"compatibility_facts\":{\"available\":false,\"reason\":\"recorded-only-at-canonical-planning-boundary\"}"
+                   << ",\"canonical_mutation_attempted\":false";
 
-    WriteEvent("quest_observed", fields.str());
+            WriteEvent("quest_observed", fields.str());
+        });
 }
