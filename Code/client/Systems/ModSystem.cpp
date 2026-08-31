@@ -83,12 +83,24 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
     auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
     const uint64_t generationBefore = generationFence.GetGeneration();
 
-    // The server<->local FormID map is part of runtime mutation identity. Advance
-    // the process generation and keep the exclusive invalidation lease for the
-    // complete rebuild so no canonical dispatch can observe a half-published
-    // load-order mapping.
-    auto generationInvalidation = generationFence.BeginInvalidation();
-    const uint64_t generationAfter = generationInvalidation.GetGeneration();
+    // The server<->local FormID map is part of runtime mutation identity. Never
+    // rebuild it unless the exact exclusive generation barrier is actually held.
+    // A synchronization failure poisons the fence and therefore blocks all later
+    // runtime execution instead of allowing a half-published mapping.
+    auto generationInvalidation = generationFence.TryBeginInvalidation();
+    if (!generationInvalidation || !generationInvalidation->IsValid())
+    {
+        PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+            "mod-mapping-rebuild",
+            "exclusive-lease-unavailable-fail-closed",
+            generationBefore,
+            0);
+        spdlog::error(
+            "PartyQuest rejected mod mapping rebuild because the runtime generation barrier is unavailable");
+        return;
+    }
+
+    const uint64_t generationAfter = generationInvalidation->GetGeneration();
 
     PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
         "mod-mapping-rebuild", "exclusive-lease-acquired", generationBefore, generationAfter);
