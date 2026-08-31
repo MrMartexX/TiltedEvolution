@@ -14,6 +14,12 @@ void InstallPartyQuestLoadGameLifecycleFence() noexcept;
 [[nodiscard]] bool IsPartyQuestSaveHookInstalled() noexcept;
 [[nodiscard]] bool IsPartyQuestLoadCompletionSinkInstalled() noexcept;
 
+/**
+ * Publish save-hook installation evidence after the post-commit native hook
+ * validator has proven the actual MinHook target enabled.
+ */
+void ConfirmPartyQuestSaveHookInstalled() noexcept;
+
 struct PartyQuestEngineIdentityTransition
 {
     PartyQuestRuntimeLifecycleEvent Event{
