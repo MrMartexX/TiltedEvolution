@@ -9,6 +9,23 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
+
+struct Main;
+
+bool __fastcall PartyQuest_BGSSaveLoadManager_SaveImpl(
+    BGSSaveLoadManager*,
+    int32_t,
+    uint32_t,
+    const char*);
+bool __fastcall PartyQuest_BGSSaveLoadManager_LoadImpl(
+    BGSSaveLoadManager*,
+    const char*,
+    int32_t,
+    uint32_t,
+    bool);
+void PartyQuest_StartNewGame_Hook();
+short __fastcall HookMainLoop(Main*);
 
 namespace
 {
@@ -16,14 +33,50 @@ struct RequiredHook final
 {
     uint32_t AddressLibraryId;
     const char* Name;
+    const void* Detour;
 };
 
-constexpr std::array<RequiredHook, 4> kRequiredHooks{{
-    {35727u, "BGSSaveLoadManager::Save_Impl"},
-    {35728u, "BGSSaveLoadManager::Load_Impl"},
-    {52118u, "StartNewGame"},
-    {36564u, "MainLoop"},
+const std::array<RequiredHook, 4> kRequiredHooks{{
+    {35727u, "BGSSaveLoadManager::Save_Impl", reinterpret_cast<const void*>(&PartyQuest_BGSSaveLoadManager_SaveImpl)},
+    {35728u, "BGSSaveLoadManager::Load_Impl", reinterpret_cast<const void*>(&PartyQuest_BGSSaveLoadManager_LoadImpl)},
+    {52118u, "StartNewGame", reinterpret_cast<const void*>(&PartyQuest_StartNewGame_Hook)},
+    {36564u, "MainLoop", reinterpret_cast<const void*>(&HookMainLoop)},
 }};
+
+bool IsCommittedReadableAddress(const void* apAddress, size_t aSize) noexcept
+{
+    if (!apAddress || aSize == 0u)
+        return false;
+
+    MEMORY_BASIC_INFORMATION memory{};
+    if (::VirtualQuery(apAddress, &memory, sizeof(memory)) == 0 ||
+        memory.State != MEM_COMMIT ||
+        (memory.Protect & PAGE_GUARD) != 0 ||
+        (memory.Protect & PAGE_NOACCESS) != 0)
+    {
+        return false;
+    }
+
+    const auto address = reinterpret_cast<uintptr_t>(apAddress);
+    const auto regionBase = reinterpret_cast<uintptr_t>(memory.BaseAddress);
+    const auto regionEnd = regionBase + memory.RegionSize;
+    return address >= regionBase &&
+        aSize <= regionEnd - address;
+}
+
+bool IsExecutableProtection(DWORD aProtection) noexcept
+{
+    switch (aProtection & 0xFFu)
+    {
+    case PAGE_EXECUTE:
+    case PAGE_EXECUTE_READ:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        return true;
+    default:
+        return false;
+    }
+}
 
 bool IsExecutableMainModuleAddress(const void* apAddress) noexcept
 {
@@ -72,24 +125,75 @@ bool IsExecutableMainModuleAddress(const void* apAddress) noexcept
         return false;
 
     MEMORY_BASIC_INFORMATION memory{};
-    if (::VirtualQuery(apAddress, &memory, sizeof(memory)) == 0 ||
-        memory.State != MEM_COMMIT ||
-        (memory.Protect & PAGE_GUARD) != 0 ||
-        (memory.Protect & PAGE_NOACCESS) != 0)
+    return ::VirtualQuery(apAddress, &memory, sizeof(memory)) != 0 &&
+        memory.State == MEM_COMMIT &&
+        (memory.Protect & PAGE_GUARD) == 0 &&
+        (memory.Protect & PAGE_NOACCESS) == 0 &&
+        IsExecutableProtection(memory.Protect);
+}
+
+const uint8_t* FollowRelativeJump(const uint8_t* apPatch) noexcept
+{
+    if (!IsCommittedReadableAddress(apPatch, 5u) || apPatch[0] != 0xE9u)
+        return nullptr;
+
+    int32_t displacement{};
+    std::memcpy(&displacement, apPatch + 1u, sizeof(displacement));
+    return apPatch + 5u + displacement;
+}
+
+const void* ResolveMinHookDetour(const void* apTarget) noexcept
+{
+#if !defined(_M_AMD64)
+    (void)apTarget;
+    return nullptr;
+#else
+    auto* target = reinterpret_cast<const uint8_t*>(apTarget);
+    if (!IsCommittedReadableAddress(target, 5u))
+        return nullptr;
+
+    // MinHook normally writes E9 rel32 at the function entry. For very short
+    // prologues it uses the documented hot-patch form: E9 at target-5 followed
+    // by EB F9 at target. Accept only those two MinHook-owned layouts.
+    const uint8_t* relay = nullptr;
+    if (target[0] == 0xE9u)
     {
-        return false;
+        relay = FollowRelativeJump(target);
+    }
+    else if (target[0] == 0xEBu &&
+             IsCommittedReadableAddress(target, 2u) &&
+             static_cast<int8_t>(target[1]) == -7)
+    {
+        relay = FollowRelativeJump(target - 5u);
     }
 
-    switch (memory.Protect & 0xFFu)
+    if (!relay || !IsCommittedReadableAddress(relay, 14u))
+        return nullptr;
+
+    MEMORY_BASIC_INFORMATION relayMemory{};
+    if (::VirtualQuery(relay, &relayMemory, sizeof(relayMemory)) == 0 ||
+        relayMemory.State != MEM_COMMIT ||
+        !IsExecutableProtection(relayMemory.Protect))
     {
-    case PAGE_EXECUTE:
-    case PAGE_EXECUTE_READ:
-    case PAGE_EXECUTE_READWRITE:
-    case PAGE_EXECUTE_WRITECOPY:
-        return true;
-    default:
-        return false;
+        return nullptr;
     }
+
+    // MinHook x64 relay is FF 25 00000000 followed by the absolute detour
+    // address. This is MinHook's own trampoline contract, not a Skyrim prologue
+    // signature, so it remains stable across supported Skyrim binaries.
+    if (relay[0] != 0xFFu || relay[1] != 0x25u)
+        return nullptr;
+
+    int32_t slotDisplacement{};
+    std::memcpy(&slotDisplacement, relay + 2u, sizeof(slotDisplacement));
+    const auto* slot = relay + 6u + slotDisplacement;
+    if (!IsCommittedReadableAddress(slot, sizeof(uintptr_t)))
+        return nullptr;
+
+    uintptr_t detour{};
+    std::memcpy(&detour, slot, sizeof(detour));
+    return reinterpret_cast<const void*>(detour);
+#endif
 }
 
 bool ValidateEnabledHook(const RequiredHook& acHook) noexcept
@@ -114,13 +218,12 @@ bool ValidateEnabledHook(const RequiredHook& acHook) noexcept
         return false;
     }
 
-    // TiltedReverse's delayed hook manager currently does not surface
-    // MH_CreateHook/MH_EnableHook failures. Re-issuing MH_EnableHook is a safe
-    // post-commit proof: an already-enabled hook returns MH_ERROR_ENABLED, a
-    // created-but-not-enabled hook can be enabled here with MH_OK, and a target
-    // that was never created remains a hard failure (for example
-    // MH_ERROR_NOT_CREATED). This turns the P0-required subset fail-closed
-    // without guessing function prologues or weakening the shared hook layer.
+    // TiltedReverse's delayed hook manager currently discards the return values
+    // from MH_CreateHook and MH_EnableHook. Re-enable the target first so a hook
+    // that was successfully created but transiently failed to enable gets one
+    // deterministic recovery attempt. A hook created by somebody else is not
+    // accepted merely because this call reports it enabled: the relay is then
+    // decoded below and must point to our exact detour.
     const MH_STATUS status = ::MH_EnableHook(target);
     if (status != MH_OK && status != MH_ERROR_ENABLED)
     {
@@ -131,6 +234,19 @@ bool ValidateEnabledHook(const RequiredHook& acHook) noexcept
             target,
             static_cast<int>(status),
             ::MH_StatusToString(status));
+        return false;
+    }
+
+    const void* const installedDetour = ResolveMinHookDetour(target);
+    if (installedDetour != acHook.Detour)
+    {
+        spdlog::critical(
+            "PartyQuest required native hook target is not routed to the expected detour: name={} addressLibraryId={} target={} expectedDetour={} installedDetour={}",
+            acHook.Name,
+            acHook.AddressLibraryId,
+            target,
+            acHook.Detour,
+            installedDetour);
         return false;
     }
 
@@ -153,16 +269,20 @@ bool PartyQuestSkyrimNativeHookValidator::ValidateAndPublish() noexcept
             return false;
     }
 
-    // Publish installation evidence only after the complete required set has
-    // actually survived MinHook creation/enabling. Merely resolving an Address
-    // Library entry or queueing TP_HOOK is not installation evidence.
-    ConfirmPartyQuestSaveHookInstalled();
-    PartyQuestRuntimeLifecycleIntegrationPolicy::MarkVerifiedPreTransitionHook(
-        PartyQuestRuntimeLifecycleEvent::LoadGame);
-    PartyQuestRuntimeLifecycleIntegrationPolicy::MarkVerifiedPreTransitionHook(
-        PartyQuestRuntimeLifecycleEvent::NewGame);
-    PartyQuestRuntimeLifecycleIntegrationPolicy::MarkVerifiedPreTransitionHook(
-        PartyQuestRuntimeLifecycleEvent::MainMenu);
+    // Installer callbacks have already recorded the exact required lifecycle
+    // targets that resolved and were queued. Only now, after proving the live
+    // MinHook patches route to our exact detours, may that evidence become
+    // production-visible lifecycle coverage.
+    PartyQuestRuntimeLifecycleIntegrationPolicy::
+        ConfirmNativeHookCommitValidated();
+
+    if (!PartyQuestRuntimeLifecycleIntegrationPolicy::
+            HasCompleteCharacterIdentityCoverage())
+    {
+        spdlog::critical(
+            "PartyQuest native hooks validated but lifecycle coverage ledger is incomplete; refusing startup");
+        return false;
+    }
 
     spdlog::info(
         "PartyQuest validated all required pre-entry native hooks after MinHook commit");
