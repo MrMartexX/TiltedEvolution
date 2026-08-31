@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestExceptionBoundary.h>
 
 PartyQuestRuntimeGenerationFence&
 PartyQuestRuntimeGenerationFence::GetProcessFence() noexcept
@@ -9,8 +10,13 @@ PartyQuestRuntimeGenerationFence::GetProcessFence() noexcept
 
 uint64_t PartyQuestRuntimeGenerationFence::GetGeneration() const noexcept
 {
-    const std::shared_lock lock(m_mutex);
-    return m_generation;
+    return PartyQuestExceptionBoundary::InvokeOr<uint64_t>(
+        0,
+        [this]() -> uint64_t
+        {
+            const std::shared_lock lock(m_mutex);
+            return m_generation;
+        });
 }
 
 uint64_t PartyQuestRuntimeGenerationFence::AdvanceGenerationLocked() noexcept
@@ -105,9 +111,15 @@ PartyQuestRuntimeGenerationFence::TryAcquire(
     if (aExpectedGeneration == 0)
         return std::nullopt;
 
-    std::shared_lock lock(m_mutex);
-    if (m_lifecycleTicket != 0 || m_generation != aExpectedGeneration)
-        return std::nullopt;
+    return PartyQuestExceptionBoundary::InvokeOr<
+        std::optional<ExecutionLease>>(
+        std::nullopt,
+        [this, aExpectedGeneration]() -> std::optional<ExecutionLease>
+        {
+            std::shared_lock lock(m_mutex);
+            if (m_lifecycleTicket != 0 || m_generation != aExpectedGeneration)
+                return std::nullopt;
 
-    return ExecutionLease(std::move(lock), aExpectedGeneration);
+            return ExecutionLease(std::move(lock), aExpectedGeneration);
+        });
 }
