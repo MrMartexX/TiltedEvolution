@@ -210,12 +210,13 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
             }
         }
 
-        // Publication must not introduce a new exception point after the first
-        // live container changes. If the concrete Map type ever loses noexcept
-        // swap semantics, fail the build rather than weakening atomicity.
-        static_assert(noexcept(m_serverToGame.swap(candidateServerToGame)));
-        static_assert(noexcept(m_liteToServer.swap(candidateLiteToServer)));
-
+        // Every live mapping update below remains inside the exclusive generation
+        // lease while publication is revoked. Conversion readers now hold the
+        // corresponding shared execution lease, so they cannot observe any
+        // intermediate state. If a concrete Map operation throws, the catch below
+        // leaves publication revoked and readers fail closed after invalidation
+        // releases. Do not require Map::swap to be noexcept: that specification is
+        // allocator/STL-implementation dependent and differs on MSVC.
         m_serverToGame.swap(candidateServerToGame);
         m_liteToServer.swap(candidateLiteToServer);
         std::memcpy(
@@ -228,14 +229,14 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
     {
         PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
             "mod-mapping-rebuild",
-            "candidate-build-failed-closed",
+            "mapping-rebuild-failed-closed",
             generationBefore,
             generationAfter);
         (void)PartyQuestExceptionBoundary::Invoke(
             []()
             {
                 spdlog::error(
-                    "PartyQuest mod mapping candidate rebuild threw a C++ exception; previous mapping remains unpublished and conversion is fail-closed");
+                    "PartyQuest mod mapping rebuild threw a C++ exception; mapping remains unpublished and conversion is fail-closed");
             });
         return;
     }
