@@ -4,6 +4,8 @@
 
 #include <cstdint>
 
+class PartyQuestSkyrimSaveLoadLifecycleHookInstaller;
+class PartyQuestSkyrimMainLoopLifecycleHookInstaller;
 class PartyQuestSkyrimNativeHookValidator;
 class PartyQuestRuntimeLifecycleIntegrationTestAccess;
 
@@ -16,10 +18,12 @@ class PartyQuestRuntimeLifecycleIntegrationTestAccess;
  * post-transition notification or from the existence of a lifecycle enum.
  *
  * Character/save lineage authority may be published only when Load Game, New
- * Game and return-to-Main-Menu all have verified pre-transition coverage. A
- * hook is recorded only after its exact Address Library entry resolved and the
- * detour was proven enabled in this process. Merely compiling or queueing a
- * hook cannot make bootstrap authority available on an unsupported runtime.
+ * Game and return-to-Main-Menu all have verified pre-transition coverage.
+ * Installer callbacks may record which exact Address Library entries were
+ * resolved and queued, but that evidence remains invisible to production until
+ * the post-commit validator proves every required native target actually
+ * enabled. Merely compiling, resolving or queueing a hook cannot make bootstrap
+ * authority available on an unsupported runtime.
  */
 struct PartyQuestRuntimeLifecycleIntegrationPolicy final
 {
@@ -31,8 +35,11 @@ struct PartyQuestRuntimeLifecycleIntegrationPolicy final
 private:
     static void MarkVerifiedPreTransitionHook(
         PartyQuestRuntimeLifecycleEvent aEvent) noexcept;
+    static void ConfirmNativeHookCommitValidated() noexcept;
     static void ResetForTests() noexcept;
 
+    friend class PartyQuestSkyrimSaveLoadLifecycleHookInstaller;
+    friend class PartyQuestSkyrimMainLoopLifecycleHookInstaller;
     friend class PartyQuestSkyrimNativeHookValidator;
     friend class PartyQuestRuntimeLifecycleIntegrationTestAccess;
 };
