@@ -3,6 +3,7 @@
 #include <Events/EventDispatcher.h>
 #include <PartyQuestP0LiveDiagnostics.h>
 #include <SaveLoad.h>
+#include <Structs/Skyrim/PartyQuestExceptionBoundary.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
@@ -62,62 +63,67 @@ std::atomic_bool s_partyQuestLoadCompletionSinkInstalled{false};
 
 bool CompletePendingPartyQuestLoad(const char* acReason) noexcept
 {
-    std::optional<PartyQuestPendingLoadTransition> pending;
-    {
-        std::lock_guard lock(s_partyQuestPendingLoadMutex);
-        if (!s_partyQuestPendingLoad)
-            return false;
+    return PartyQuestExceptionBoundary::InvokeOr<bool>(
+        false,
+        [&]()
+        {
+            std::optional<PartyQuestPendingLoadTransition> pending;
+            {
+                std::lock_guard lock(s_partyQuestPendingLoadMutex);
+                if (!s_partyQuestPendingLoad)
+                    return false;
 
-        pending = *s_partyQuestPendingLoad;
-        s_partyQuestPendingLoad.reset();
-    }
+                pending = *s_partyQuestPendingLoad;
+                s_partyQuestPendingLoad.reset();
+            }
 
-    auto& guard = PartyQuestSaveGuard::GetProcessGuard();
-    auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+            auto& guard = PartyQuestSaveGuard::GetProcessGuard();
+            auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
 
-    // Clear the SaveGuard admission ticket first. Dispatch is still blocked by
-    // the generation lifecycle ticket until the second exact completion below.
-    // If either exact ticket fails, the surviving process-local barrier remains
-    // fail-closed rather than being reconstructed from guessed state.
-    const bool guardCompleted =
-        guard.CompleteEngineLoad(pending->SaveGuardTicket);
-    if (!guardCompleted)
-    {
-        spdlog::error(
-            "PartyQuest LoadGame lifecycle completion failed SaveGuard ticket validation: reason={} ticket={}",
-            acReason ? acReason : "<unknown>",
-            pending->SaveGuardTicket.Value);
-        return false;
-    }
+            // Clear the SaveGuard admission ticket first. Dispatch is still
+            // blocked by the generation lifecycle ticket until the second exact
+            // completion below. Any later failure therefore remains fail-closed.
+            const bool guardCompleted =
+                guard.CompleteEngineLoad(pending->SaveGuardTicket);
+            if (!guardCompleted)
+            {
+                spdlog::error(
+                    "PartyQuest LoadGame lifecycle completion failed SaveGuard ticket validation: reason={} ticket={}",
+                    acReason ? acReason : "<unknown>",
+                    pending->SaveGuardTicket.Value);
+                return false;
+            }
 
-    const uint64_t before = generationFence.GetGeneration();
-    const bool generationCompleted =
-        generationFence.CompleteLifecycleTransition(pending->GenerationTicket);
-    const uint64_t after = generationFence.GetGeneration();
-    PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
-        "load-game",
-        acReason ? acReason : "completion",
-        before,
-        after);
+            const uint64_t before = generationFence.GetGeneration();
+            const bool generationCompleted =
+                generationFence.CompleteLifecycleTransition(
+                    pending->GenerationTicket);
+            const uint64_t after = generationFence.GetGeneration();
+            PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                "load-game",
+                acReason ? acReason : "completion",
+                before,
+                after);
 
-    if (!generationCompleted)
-    {
-        spdlog::error(
-            "PartyQuest LoadGame lifecycle completion failed generation ticket validation: reason={} ticket={} admittedGeneration={} currentGeneration={}",
-            acReason ? acReason : "<unknown>",
-            pending->GenerationTicket.Ticket,
-            pending->GenerationTicket.Generation,
-            after);
-        return false;
-    }
+            if (!generationCompleted)
+            {
+                spdlog::error(
+                    "PartyQuest LoadGame lifecycle completion failed generation ticket validation: reason={} ticket={} admittedGeneration={} currentGeneration={}",
+                    acReason ? acReason : "<unknown>",
+                    pending->GenerationTicket.Ticket,
+                    pending->GenerationTicket.Generation,
+                    after);
+                return false;
+            }
 
-    spdlog::info(
-        "PartyQuest LoadGame lifecycle transition completed: reason={} loadTicket={} generationTicket={} generation={}",
-        acReason ? acReason : "<unknown>",
-        pending->SaveGuardTicket.Value,
-        pending->GenerationTicket.Ticket,
-        after);
-    return true;
+            spdlog::info(
+                "PartyQuest LoadGame lifecycle transition completed: reason={} loadTicket={} generationTicket={} generation={}",
+                acReason ? acReason : "<unknown>",
+                pending->SaveGuardTicket.Value,
+                pending->GenerationTicket.Ticket,
+                after);
+            return true;
+        });
 }
 
 class PartyQuestLoadGameEventSink final : public BSTEventSink<TESLoadGameEvent>
@@ -127,25 +133,29 @@ public:
         const TESLoadGameEvent*,
         const EventDispatcher<TESLoadGameEvent>*) override
     {
-        if (!CompletePendingPartyQuestLoad("tes-load-game-event"))
-        {
-            // An unpaired load-complete event still invalidates all previously
-            // observed runtime evidence. It cannot establish the missing
-            // pre-load barrier, so diagnostics remain explicit and production
-            // mutation stays fail-closed elsewhere.
-            auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-            const uint64_t before = fence.GetGeneration();
-            const uint64_t after = fence.Invalidate();
-            PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
-                "load-game",
-                "unpaired-load-event",
-                before,
-                after);
-            spdlog::warn(
-                "PartyQuest observed TESLoadGameEvent without a matching admitted Load_Impl request; generation invalidated {} -> {}",
-                before,
-                after);
-        }
+        (void)PartyQuestExceptionBoundary::Invoke(
+            []()
+            {
+                if (!CompletePendingPartyQuestLoad("tes-load-game-event"))
+                {
+                    // An unpaired load-complete event still invalidates all
+                    // observed runtime evidence. It cannot establish the missing
+                    // pre-load barrier and therefore grants no authority.
+                    auto& fence =
+                        PartyQuestRuntimeGenerationFence::GetProcessFence();
+                    const uint64_t before = fence.GetGeneration();
+                    const uint64_t after = fence.Invalidate();
+                    PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                        "load-game",
+                        "unpaired-load-event",
+                        before,
+                        after);
+                    spdlog::warn(
+                        "PartyQuest observed TESLoadGameEvent without a matching admitted Load_Impl request; generation invalidated {} -> {}",
+                        before,
+                        after);
+                }
+            });
 
         return BSTEventResult::kOk;
     }
@@ -158,43 +168,52 @@ PartyQuestEngineIdentityTransition BeginPartyQuestEngineIdentityTransition(
     PartyQuestRuntimeLifecycleEvent aEvent,
     const char* acReason) noexcept
 {
-    PartyQuestEngineIdentityTransition result;
-    result.Event = aEvent;
+    PartyQuestEngineIdentityTransition fallback;
+    fallback.Event = aEvent;
 
-    auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
-    const auto lifecycle = runtimeOwner.PrepareAndRelease(aEvent);
-    if (!lifecycle.CanProceed())
-    {
-        spdlog::warn(
-            "PartyQuest blocked Skyrim identity transition: reason={} event={} status={} transaction={} guardHeld={}",
-            acReason ? acReason : "<unknown>",
-            static_cast<uint32_t>(aEvent),
-            static_cast<uint32_t>(lifecycle.Status),
-            lifecycle.TransactionId,
-            lifecycle.GuardHeld);
-        return result;
-    }
+    return PartyQuestExceptionBoundary::InvokeOr<
+        PartyQuestEngineIdentityTransition>(
+        fallback,
+        [&]()
+        {
+            PartyQuestEngineIdentityTransition result;
+            result.Event = aEvent;
 
-    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-    const uint64_t before = fence.GetGeneration();
-    const auto ticket = fence.BeginLifecycleTransition();
-    if (!ticket.IsValid())
-    {
-        spdlog::error(
-            "PartyQuest blocked Skyrim identity transition because generation admission failed: reason={} event={}",
-            acReason ? acReason : "<unknown>",
-            static_cast<uint32_t>(aEvent));
-        return result;
-    }
+            auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+            const auto lifecycle = runtimeOwner.PrepareAndRelease(aEvent);
+            if (!lifecycle.CanProceed())
+            {
+                spdlog::warn(
+                    "PartyQuest blocked Skyrim identity transition: reason={} event={} status={} transaction={} guardHeld={}",
+                    acReason ? acReason : "<unknown>",
+                    static_cast<uint32_t>(aEvent),
+                    static_cast<uint32_t>(lifecycle.Status),
+                    lifecycle.TransactionId,
+                    lifecycle.GuardHeld);
+                return result;
+            }
 
-    result.Ticket = ticket.Ticket;
-    result.Generation = ticket.Generation;
-    PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
-        acReason ? acReason : "identity-transition",
-        "request-admitted",
-        before,
-        ticket.Generation);
-    return result;
+            auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+            const uint64_t before = fence.GetGeneration();
+            const auto ticket = fence.BeginLifecycleTransition();
+            if (!ticket.IsValid())
+            {
+                spdlog::error(
+                    "PartyQuest blocked Skyrim identity transition because generation admission failed: reason={} event={}",
+                    acReason ? acReason : "<unknown>",
+                    static_cast<uint32_t>(aEvent));
+                return result;
+            }
+
+            result.Ticket = ticket.Ticket;
+            result.Generation = ticket.Generation;
+            PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                acReason ? acReason : "identity-transition",
+                "request-admitted",
+                before,
+                ticket.Generation);
+            return result;
+        });
 }
 
 void CompletePartyQuestEngineIdentityTransition(
@@ -204,39 +223,53 @@ void CompletePartyQuestEngineIdentityTransition(
     if (!aTransition.CanProceed())
         return;
 
-    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-    const uint64_t before = fence.GetGeneration();
-    const bool completed = fence.CompleteLifecycleTransition(
-        {aTransition.Ticket, aTransition.Generation});
-    const uint64_t after = fence.GetGeneration();
-    PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
-        acReason ? acReason : "identity-transition",
-        completed ? "original-returned" : "completion-ticket-mismatch",
-        before,
-        after);
-    if (!completed)
-    {
-        spdlog::error(
-            "PartyQuest identity transition completion failed closed: reason={} event={} ticket={} generation={}",
-            acReason ? acReason : "<unknown>",
-            static_cast<uint32_t>(aTransition.Event),
-            aTransition.Ticket,
-            aTransition.Generation);
-    }
+    (void)PartyQuestExceptionBoundary::Invoke(
+        [&]()
+        {
+            auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+            const uint64_t before = fence.GetGeneration();
+            const bool completed = fence.CompleteLifecycleTransition(
+                {aTransition.Ticket, aTransition.Generation});
+            const uint64_t after = fence.GetGeneration();
+            PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                acReason ? acReason : "identity-transition",
+                completed ? "original-returned" : "completion-ticket-mismatch",
+                before,
+                after);
+            if (!completed)
+            {
+                spdlog::error(
+                    "PartyQuest identity transition completion failed closed: reason={} event={} ticket={} generation={}",
+                    acReason ? acReason : "<unknown>",
+                    static_cast<uint32_t>(aTransition.Event),
+                    aTransition.Ticket,
+                    aTransition.Generation);
+            }
+        });
 }
 
 void PartyQuest_StartNewGame_Hook()
 {
-    const auto transition = BeginPartyQuestEngineIdentityTransition(
-        PartyQuestRuntimeLifecycleEvent::NewGame,
-        "new-game");
-    if (!transition.CanProceed())
-        return;
+    (void)PartyQuestExceptionBoundary::Invoke(
+        []()
+        {
+            const auto transition = BeginPartyQuestEngineIdentityTransition(
+                PartyQuestRuntimeLifecycleEvent::NewGame,
+                "new-game");
+            if (!transition.CanProceed())
+                return;
 
-    if (RealPartyQuestStartNewGame)
-        RealPartyQuestStartNewGame();
+            // If the original ever propagates a C++ exception, the boundary
+            // catches it and intentionally leaves this exact lifecycle ticket
+            // pending. Reopening dispatch after a partial NewGame is less safe
+            // than requiring process restart/recovery.
+            if (RealPartyQuestStartNewGame)
+                RealPartyQuestStartNewGame();
 
-    CompletePartyQuestEngineIdentityTransition(transition, "new-game");
+            CompletePartyQuestEngineIdentityTransition(
+                transition,
+                "new-game");
+        });
 }
 
 void InstallPartyQuestLoadGameLifecycleFence() noexcept
@@ -266,8 +299,12 @@ void InstallPartyQuestLoadGameLifecycleFence() noexcept
     }
     catch (...)
     {
-        spdlog::error(
-            "PartyQuest failed to register TESLoadGameEvent lifecycle sink");
+        (void)PartyQuestExceptionBoundary::Invoke(
+            []()
+            {
+                spdlog::error(
+                    "PartyQuest failed to register TESLoadGameEvent lifecycle sink");
+            });
     }
 }
 
@@ -342,71 +379,76 @@ bool TP_MAKE_THISCALL(
     uint32_t aOutputStats,
     const char* acFileName)
 {
-    auto& guard = PartyQuestSaveGuard::GetProcessGuard();
-    auto permit = guard.TryEnterEngineSave();
-    if (!permit.IsAllowed())
-    {
-        PartyQuestP0LiveDiagnostics::RecordEngineSave(
-            "blocked-by-save-guard",
-            acFileName,
-            guard.GetTransactionId(),
-            aDeviceId,
-            aOutputStats,
-            false,
-            true,
-            false);
-        spdlog::warn(
-            "PartyQuest runtime blocked Skyrim save during critical repair: transaction={} device={} outputStats={} save={}",
-            guard.GetTransactionId(),
-            aDeviceId,
-            aOutputStats,
-            acFileName ? acFileName : "<null>");
-        return false;
-    }
-
-    if (!RealBGSSaveLoadManager_SaveImpl)
-    {
-        PartyQuestP0LiveDiagnostics::RecordEngineSave(
-            "original-unavailable",
-            acFileName,
-            guard.GetTransactionId(),
-            aDeviceId,
-            aOutputStats,
-            true,
-            true,
-            false);
-        spdlog::error(
-            "PartyQuest runtime cannot enter Skyrim save pipeline: original BGSSaveLoadManager::Save_Impl is null");
-        return false;
-    }
-
-    PartyQuestP0LiveDiagnostics::RecordEngineSave(
-        "enter-original",
-        acFileName,
-        guard.GetTransactionId(),
-        aDeviceId,
-        aOutputStats,
-        true,
+    return PartyQuestExceptionBoundary::InvokeOr<bool>(
         false,
-        false);
+        [&]()
+        {
+            auto& guard = PartyQuestSaveGuard::GetProcessGuard();
+            auto permit = guard.TryEnterEngineSave();
+            if (!permit.IsAllowed())
+            {
+                PartyQuestP0LiveDiagnostics::RecordEngineSave(
+                    "blocked-by-save-guard",
+                    acFileName,
+                    guard.GetTransactionId(),
+                    aDeviceId,
+                    aOutputStats,
+                    false,
+                    true,
+                    false);
+                spdlog::warn(
+                    "PartyQuest runtime blocked Skyrim save during critical repair: transaction={} device={} outputStats={} save={}",
+                    guard.GetTransactionId(),
+                    aDeviceId,
+                    aOutputStats,
+                    acFileName ? acFileName : "<null>");
+                return false;
+            }
 
-    const bool result = TiltedPhoques::ThisCall(
-        RealBGSSaveLoadManager_SaveImpl,
-        apThis,
-        aDeviceId,
-        aOutputStats,
-        acFileName);
+            if (!RealBGSSaveLoadManager_SaveImpl)
+            {
+                PartyQuestP0LiveDiagnostics::RecordEngineSave(
+                    "original-unavailable",
+                    acFileName,
+                    guard.GetTransactionId(),
+                    aDeviceId,
+                    aOutputStats,
+                    true,
+                    true,
+                    false);
+                spdlog::error(
+                    "PartyQuest runtime cannot enter Skyrim save pipeline: original BGSSaveLoadManager::Save_Impl is null");
+                return false;
+            }
 
-    PartyQuestP0LiveDiagnostics::RecordEngineSave(
-        "return-original",
-        acFileName,
-        guard.GetTransactionId(),
-        aDeviceId,
-        aOutputStats,
-        true,
-        true,
-        result);
-    return result;
+            PartyQuestP0LiveDiagnostics::RecordEngineSave(
+                "enter-original",
+                acFileName,
+                guard.GetTransactionId(),
+                aDeviceId,
+                aOutputStats,
+                true,
+                false,
+                false);
+
+            const bool result = TiltedPhoques::ThisCall(
+                RealBGSSaveLoadManager_SaveImpl,
+                apThis,
+                aDeviceId,
+                aOutputStats,
+                acFileName);
+
+            PartyQuestP0LiveDiagnostics::RecordEngineSave(
+                "return-original",
+                acFileName,
+                guard.GetTransactionId(),
+                aDeviceId,
+                aOutputStats,
+                true,
+                true,
+                result);
+            return result;
+        });
 }
 
 bool TP_MAKE_THISCALL(
@@ -417,107 +459,127 @@ bool TP_MAKE_THISCALL(
     uint32_t aOutputStats,
     bool aCheckForMods)
 {
-    // The process runtime owner owns persisted repair disposition. Fence it
-    // before the engine load admission so deferred work (which intentionally
-    // holds no physical SaveGuard yet) cannot survive across Load Game.
-    auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
-    const auto lifecycle = runtimeOwner.PrepareAndRelease(
-        PartyQuestRuntimeLifecycleEvent::LoadGame);
-    if (!lifecycle.CanProceed())
-    {
-        spdlog::warn(
-            "PartyQuest runtime blocked Skyrim LoadGame because durable lifecycle disposition is unresolved: status={} transaction={} guardHeld={} save={}",
-            static_cast<uint32_t>(lifecycle.Status),
-            lifecycle.TransactionId,
-            lifecycle.GuardHeld,
-            acFileName ? acFileName : "<null>");
-        return false;
-    }
-
-    auto& guard = PartyQuestSaveGuard::GetProcessGuard();
-    auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-
-    const auto loadTicket = guard.BeginEngineLoad();
-    if (!loadTicket.IsValid())
-    {
-        spdlog::warn(
-            "PartyQuest runtime blocked Skyrim LoadGame during critical/pending lifecycle state: transaction={} loadPending={} save={}",
-            guard.GetTransactionId(),
-            guard.IsEngineLoadPending(),
-            acFileName ? acFileName : "<null>");
-        return false;
-    }
-
-    const uint64_t generationBefore = generationFence.GetGeneration();
-    const auto generationTicket = generationFence.BeginLifecycleTransition();
-    if (!generationTicket.IsValid())
-    {
-        const bool released = guard.CompleteEngineLoad(loadTicket);
-        spdlog::error(
-            "PartyQuest runtime blocked Skyrim LoadGame because generation lifecycle admission failed: loadTicket={} saveGuardReleased={} save={}",
-            loadTicket.Value,
-            released,
-            acFileName ? acFileName : "<null>");
-        return false;
-    }
-
-    {
-        std::lock_guard lock(s_partyQuestPendingLoadMutex);
-        if (s_partyQuestPendingLoad)
+    return PartyQuestExceptionBoundary::InvokeOr<bool>(
+        false,
+        [&]()
         {
-            const bool generationReleased =
-                generationFence.CompleteLifecycleTransition(generationTicket);
-            const bool guardReleased = guard.CompleteEngineLoad(loadTicket);
-            spdlog::error(
-                "PartyQuest runtime detected duplicate local LoadGame lifecycle state: loadTicket={} generationTicket={} generationReleased={} saveGuardReleased={}",
-                loadTicket.Value,
-                generationTicket.Ticket,
-                generationReleased,
-                guardReleased);
-            return false;
-        }
+            // Fence durable runtime ownership before admitting the engine load.
+            auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+            const auto lifecycle = runtimeOwner.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::LoadGame);
+            if (!lifecycle.CanProceed())
+            {
+                spdlog::warn(
+                    "PartyQuest runtime blocked Skyrim LoadGame because durable lifecycle disposition is unresolved: status={} transaction={} guardHeld={} save={}",
+                    static_cast<uint32_t>(lifecycle.Status),
+                    lifecycle.TransactionId,
+                    lifecycle.GuardHeld,
+                    acFileName ? acFileName : "<null>");
+                return false;
+            }
 
-        s_partyQuestPendingLoad = PartyQuestPendingLoadTransition{
-            loadTicket,
-            generationTicket};
-    }
+            auto& guard = PartyQuestSaveGuard::GetProcessGuard();
+            auto& generationFence =
+                PartyQuestRuntimeGenerationFence::GetProcessFence();
 
-    PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
-        "load-game",
-        "request-admitted",
-        generationBefore,
-        generationTicket.Generation);
+            const auto loadTicket = guard.BeginEngineLoad();
+            if (!loadTicket.IsValid())
+            {
+                spdlog::warn(
+                    "PartyQuest runtime blocked Skyrim LoadGame during critical/pending lifecycle state: transaction={} loadPending={} save={}",
+                    guard.GetTransactionId(),
+                    guard.IsEngineLoadPending(),
+                    acFileName ? acFileName : "<null>");
+                return false;
+            }
 
-    if (!RealBGSSaveLoadManager_LoadImpl)
-    {
-        CompletePendingPartyQuestLoad("original-unavailable");
-        spdlog::error(
-            "PartyQuest runtime cannot enter Skyrim load pipeline: original BGSSaveLoadManager::Load_Impl is null");
-        return false;
-    }
+            const uint64_t generationBefore = generationFence.GetGeneration();
+            const auto generationTicket =
+                generationFence.BeginLifecycleTransition();
+            if (!generationTicket.IsValid())
+            {
+                const bool released = guard.CompleteEngineLoad(loadTicket);
+                spdlog::error(
+                    "PartyQuest runtime blocked Skyrim LoadGame because generation lifecycle admission failed: loadTicket={} saveGuardReleased={} save={}",
+                    loadTicket.Value,
+                    released,
+                    acFileName ? acFileName : "<null>");
+                return false;
+            }
 
-    const bool result = TiltedPhoques::ThisCall(
-        RealBGSSaveLoadManager_LoadImpl,
-        apThis,
-        acFileName,
-        aDeviceId,
-        aOutputStats,
-        aCheckForMods);
+            // Before the pending transition is published, the engine has not
+            // been called. Therefore a local synchronization exception can
+            // safely roll back both exact tickets. After publication, any later
+            // exception retains them fail-closed because engine side effects may
+            // already have started.
+            try
+            {
+                std::lock_guard lock(s_partyQuestPendingLoadMutex);
+                if (s_partyQuestPendingLoad)
+                {
+                    const bool generationReleased =
+                        generationFence.CompleteLifecycleTransition(
+                            generationTicket);
+                    const bool guardReleased =
+                        guard.CompleteEngineLoad(loadTicket);
+                    spdlog::error(
+                        "PartyQuest runtime detected duplicate local LoadGame lifecycle state: loadTicket={} generationTicket={} generationReleased={} saveGuardReleased={}",
+                        loadTicket.Value,
+                        generationTicket.Ticket,
+                        generationReleased,
+                        guardReleased);
+                    return false;
+                }
 
-    if (!result)
-    {
-        // The exact asynchronous failure/cancellation contract is not yet
-        // proven. Do not infer that the engine transition is over merely from
-        // this return value; retain both tickets until TESLoadGameEvent or
-        // process restart rather than opening a mutation race.
-        spdlog::warn(
-            "PartyQuest BGSSaveLoadManager::Load_Impl returned false; retaining fail-closed lifecycle tickets until an authoritative completion event: loadTicket={} generationTicket={} save={}",
-            loadTicket.Value,
-            generationTicket.Ticket,
-            acFileName ? acFileName : "<null>");
-    }
+                s_partyQuestPendingLoad = PartyQuestPendingLoadTransition{
+                    loadTicket,
+                    generationTicket};
+            }
+            catch (...)
+            {
+                (void)generationFence.CompleteLifecycleTransition(
+                    generationTicket);
+                (void)guard.CompleteEngineLoad(loadTicket);
+                return false;
+            }
 
-    return result;
+            PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                "load-game",
+                "request-admitted",
+                generationBefore,
+                generationTicket.Generation);
+
+            if (!RealBGSSaveLoadManager_LoadImpl)
+            {
+                CompletePendingPartyQuestLoad("original-unavailable");
+                spdlog::error(
+                    "PartyQuest runtime cannot enter Skyrim load pipeline: original BGSSaveLoadManager::Load_Impl is null");
+                return false;
+            }
+
+            const bool result = TiltedPhoques::ThisCall(
+                RealBGSSaveLoadManager_LoadImpl,
+                apThis,
+                acFileName,
+                aDeviceId,
+                aOutputStats,
+                aCheckForMods);
+
+            if (!result)
+            {
+                // The exact asynchronous failure/cancellation contract is not
+                // yet proven. Do not infer that the engine transition is over
+                // merely from this return value; retain both tickets until
+                // TESLoadGameEvent or process restart.
+                spdlog::warn(
+                    "PartyQuest BGSSaveLoadManager::Load_Impl returned false; retaining fail-closed lifecycle tickets until an authoritative completion event: loadTicket={} generationTicket={} save={}",
+                    loadTicket.Value,
+                    generationTicket.Ticket,
+                    acFileName ? acFileName : "<null>");
+            }
+
+            return result;
+        });
 }
 
 static TiltedPhoques::Initializer s_partyQuestSaveLoadGuardHook(
