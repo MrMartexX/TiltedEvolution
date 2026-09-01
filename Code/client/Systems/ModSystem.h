@@ -11,7 +11,7 @@ struct GameId;
 struct ModSystem
 {
     ModSystem(entt::dispatcher& aDispatcher) noexcept;
-    ~ModSystem() = default;
+    ~ModSystem() noexcept;
 
     TP_NOCOPYMOVE(ModSystem);
 

@@ -22,6 +22,14 @@ ModSystem::ModSystem(entt::dispatcher& aDispatcher) noexcept
     m_modsConnection = aDispatcher.sink<Mods>().connect<&ModSystem::HandleMods>(this);
 }
 
+ModSystem::~ModSystem() noexcept
+{
+    // Disconnect while every callback dependency is still alive. Member
+    // destruction runs after this body and would otherwise destroy the mapping
+    // state before m_modsConnection because the connection is declared first.
+    m_modsConnection.release();
+}
+
 bool ModSystem::GetServerModId(const uint32_t aGameId, uint32_t& aModId, uint32_t& aBaseId) const noexcept
 {
     auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();

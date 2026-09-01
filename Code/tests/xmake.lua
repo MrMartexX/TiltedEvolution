@@ -15,4 +15,5 @@ target("TPTests")
         "hopscotch-map",
         "catch2",
         "mimalloc",
-        "glm")
+        "glm",
+        "entt")
