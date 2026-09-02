@@ -9,6 +9,7 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestDeferredWorld.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeReferenceReadiness.h>
 
 #include <party_quest_runtime_safety_test_access.h>
@@ -17,6 +18,20 @@
 
 namespace
 {
+const PartyQuestCampaignId kDeferredCampaign{0xD001, 0xD002};
+const PartyQuestPlayerProfileId kDeferredPlayer{0xD003, 0xD004};
+
+struct RuntimeDeferredOwner
+{
+    PartyQuestRuntimeApplySession Session{
+        kDeferredCampaign,
+        kDeferredPlayer,
+        [](const PartyQuestRuntimeRecoveryState&) { return true; },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient};
+    PartyQuestSaveGuard Guard;
+    PartyQuestRuntimeGuardedSession Guarded{Session, Guard};
+};
+
 PartyQuestRuntimeApplyRequest BuildRuntimeDeferredRequest(
     uint64_t aTransactionId,
     uint64_t aQuestRevision,
@@ -71,9 +86,11 @@ TEST_CASE("Runtime deferred readiness separates references from unsupported loca
     PartyQuestRuntimeGenerationFence fence;
     PartyQuestRuntimeReferenceReadiness readiness(fence);
     PartyQuestDeferredWorldQueue queue;
+    RuntimeDeferredOwner owner;
     const auto request = BuildRuntimeDeferredRequest(31001, 4, 0x5100, true, false);
 
-    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(queue.EnqueueRuntime(request, owner.Guarded, fence) ==
+        PartyQuestDeferredWorldEnqueueStatus::Queued);
     const auto* entry = queue.FindByTransaction(request.TransactionId);
     REQUIRE(entry != nullptr);
     REQUIRE(entry->ReferenceTargets == std::vector<GameId>{GameId(0, 0x5100)});
@@ -88,6 +105,7 @@ TEST_CASE("Runtime deferred readiness separates references from unsupported loca
     auto result = queue.TryMarkRuntimeReady(
         request,
         request.CanonicalSnapshot.Revision,
+        owner.Guarded,
         fence,
         readiness,
         sources);
@@ -102,6 +120,7 @@ TEST_CASE("Runtime deferred readiness separates references from unsupported loca
     result = queue.TryMarkRuntimeReady(
         request,
         request.CanonicalSnapshot.Revision,
+        owner.Guarded,
         fence,
         readiness,
         sources);
@@ -109,6 +128,7 @@ TEST_CASE("Runtime deferred readiness separates references from unsupported loca
         PartyQuestDeferredWorldRuntimeReadinessStatus::LocationReadinessUnavailable);
     REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
     REQUIRE(queue.TakeRuntimeReady(
+                owner.Guarded,
                 fence,
                 readiness,
                 sources,
@@ -123,27 +143,32 @@ TEST_CASE("Runtime deferred reference readiness requires exact mapping and loade
     PartyQuestRuntimeGenerationFence fence;
     PartyQuestRuntimeReferenceReadiness readiness(fence);
     PartyQuestDeferredWorldQueue queue;
+    RuntimeDeferredOwner owner;
     const auto request = BuildRuntimeDeferredRequest(31002, 5, 0x5200);
-    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(queue.EnqueueRuntime(request, owner.Guarded, fence) ==
+        PartyQuestDeferredWorldEnqueueStatus::Queued);
 
     PartyQuestDeferredWorldRuntimeReadinessSources sources;
     auto result = queue.TryMarkRuntimeReady(
-        request, 5, fence, readiness, sources);
+        request, 5, owner.Guarded, fence, readiness, sources);
     REQUIRE(result.Status ==
         PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceMappingUnavailable);
 
     sources.ResolveReferenceFormId = [](const GameId&) { return 0u; };
-    result = queue.TryMarkRuntimeReady(request, 5, fence, readiness, sources);
+    result = queue.TryMarkRuntimeReady(
+        request, 5, owner.Guarded, fence, readiness, sources);
     REQUIRE(result.Status ==
         PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceMappingUnavailable);
 
     sources = BuildReferenceSources();
-    result = queue.TryMarkRuntimeReady(request, 5, fence, readiness, sources);
+    result = queue.TryMarkRuntimeReady(
+        request, 5, owner.Guarded, fence, readiness, sources);
     REQUIRE(result.Status ==
         PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceNotReady);
 
     REQUIRE(readiness.Observe(0x5200, true));
-    result = queue.TryMarkRuntimeReady(request, 5, fence, readiness, sources);
+    result = queue.TryMarkRuntimeReady(
+        request, 5, owner.Guarded, fence, readiness, sources);
     REQUIRE(result.IsReady());
 }
 
@@ -152,17 +177,21 @@ TEST_CASE("Runtime deferred scene dependency cannot be authorized by a callback 
     PartyQuestRuntimeGenerationFence fence;
     PartyQuestRuntimeReferenceReadiness readiness(fence);
     PartyQuestDeferredWorldQueue queue;
+    RuntimeDeferredOwner owner;
     const auto request = BuildRuntimeDeferredRequest(31003, 6, 0x5300, false, true);
-    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(queue.EnqueueRuntime(request, owner.Guarded, fence) ==
+        PartyQuestDeferredWorldEnqueueStatus::Queued);
     REQUIRE(readiness.Observe(0x5300, true));
 
     auto sources = BuildReferenceSources();
-    auto result = queue.TryMarkRuntimeReady(request, 6, fence, readiness, sources);
+    auto result = queue.TryMarkRuntimeReady(
+        request, 6, owner.Guarded, fence, readiness, sources);
     REQUIRE(result.Status ==
         PartyQuestDeferredWorldRuntimeReadinessStatus::SceneReadinessUnavailable);
 
     sources.IsSceneReady = [](uint32_t) { return true; };
-    result = queue.TryMarkRuntimeReady(request, 6, fence, readiness, sources);
+    result = queue.TryMarkRuntimeReady(
+        request, 6, owner.Guarded, fence, readiness, sources);
     REQUIRE(result.Status ==
         PartyQuestDeferredWorldRuntimeReadinessStatus::SceneReadinessUnavailable);
     REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
@@ -174,13 +203,16 @@ TEST_CASE("Runtime deferred readiness cannot mix generation domains", "[quest.pa
     PartyQuestRuntimeGenerationFence otherFence;
     PartyQuestRuntimeReferenceReadiness readiness(otherFence);
     PartyQuestDeferredWorldQueue queue;
+    RuntimeDeferredOwner owner;
     const auto request = BuildRuntimeDeferredRequest(31004, 7, 0x5400);
-    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(queue.EnqueueRuntime(request, owner.Guarded, queueFence) ==
+        PartyQuestDeferredWorldEnqueueStatus::Queued);
     REQUIRE(readiness.Observe(0x5400, true));
 
     const auto result = queue.TryMarkRuntimeReady(
         request,
         7,
+        owner.Guarded,
         queueFence,
         readiness,
         BuildReferenceSources());
@@ -194,13 +226,15 @@ TEST_CASE("Lifecycle generation change clears runtime ready state until fresh ev
     PartyQuestRuntimeGenerationFence fence;
     PartyQuestRuntimeReferenceReadiness readiness(fence);
     PartyQuestDeferredWorldQueue queue;
+    RuntimeDeferredOwner owner;
     const auto request = BuildRuntimeDeferredRequest(31005, 8, 0x5500);
     const auto sources = BuildReferenceSources();
-    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(queue.EnqueueRuntime(request, owner.Guarded, fence) ==
+        PartyQuestDeferredWorldEnqueueStatus::Queued);
     REQUIRE(readiness.Observe(0x5500, true));
 
     const auto marked = queue.TryMarkRuntimeReady(
-        request, 8, fence, readiness, sources);
+        request, 8, owner.Guarded, fence, readiness, sources);
     REQUIRE(marked.IsReady());
     const uint64_t firstGeneration = marked.RuntimeGeneration;
 
@@ -208,24 +242,16 @@ TEST_CASE("Lifecycle generation change clears runtime ready state until fresh ev
     REQUIRE(nextGeneration != firstGeneration);
 
     REQUIRE(queue.TakeRuntimeReady(
+                owner.Guarded,
                 fence,
                 readiness,
                 sources,
                 [](const GameId&) { return 8ull; }).empty());
-    REQUIRE(queue.FindByTransaction(request.TransactionId) != nullptr);
-    REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
-
+    REQUIRE(queue.FindByTransaction(request.TransactionId) == nullptr);
     REQUIRE(readiness.Observe(0x5500, true));
-    const auto remarked = queue.TryMarkRuntimeReady(
-        request, 8, fence, readiness, sources);
-    REQUIRE(remarked.IsReady());
-    REQUIRE(remarked.RuntimeGeneration == nextGeneration);
-
-    REQUIRE(queue.TakeRuntimeReady(
-                fence,
-                readiness,
-                sources,
-                [](const GameId&) { return 8ull; }).size() == 1);
+    REQUIRE(queue.TryMarkRuntimeReady(
+                request, 8, owner.Guarded, fence, readiness, sources).Status ==
+        PartyQuestDeferredWorldRuntimeReadinessStatus::InvalidRequest);
 }
 
 TEST_CASE("New canonical revision after runtime readiness supersedes before extraction", "[quest.party-state.deferred-world][runtime-readiness][revision]")
@@ -233,13 +259,17 @@ TEST_CASE("New canonical revision after runtime readiness supersedes before extr
     PartyQuestRuntimeGenerationFence fence;
     PartyQuestRuntimeReferenceReadiness readiness(fence);
     PartyQuestDeferredWorldQueue queue;
+    RuntimeDeferredOwner owner;
     const auto request = BuildRuntimeDeferredRequest(31006, 9, 0x5600);
     const auto sources = BuildReferenceSources();
-    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(queue.EnqueueRuntime(request, owner.Guarded, fence) ==
+        PartyQuestDeferredWorldEnqueueStatus::Queued);
     REQUIRE(readiness.Observe(0x5600, true));
-    REQUIRE(queue.TryMarkRuntimeReady(request, 9, fence, readiness, sources).IsReady());
+    REQUIRE(queue.TryMarkRuntimeReady(
+                request, 9, owner.Guarded, fence, readiness, sources).IsReady());
 
     REQUIRE(queue.TakeRuntimeReady(
+                owner.Guarded,
                 fence,
                 readiness,
                 sources,

@@ -178,12 +178,14 @@ TEST_CASE(
     };
 
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Deferred);
-    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(queue.EnqueueRuntime(request, guarded, processFence) ==
+        PartyQuestDeferredWorldEnqueueStatus::Queued);
     REQUIRE(readiness.Observe(0x6100, true));
 
     const auto marked = queue.TryMarkRuntimeReady(
         request,
         request.CanonicalSnapshot.Revision,
+        guarded,
         processFence,
         readiness,
         sources);
@@ -193,6 +195,7 @@ TEST_CASE(
     // The extraction and direct process-guard transition surfaces are both
     // fail-closed. Production must consume through the exact bound process owner.
     REQUIRE(queue.TakeRuntimeReady(
+                guarded,
                 processFence,
                 readiness,
                 sources,
@@ -212,32 +215,23 @@ TEST_CASE(
                 readiness,
                 sources,
                 revisionObserver) == 0);
-    REQUIRE(queue.FindByTransaction(request.TransactionId) != nullptr);
-    REQUIRE_FALSE(queue.FindByTransaction(request.TransactionId)->Ready);
+    REQUIRE(queue.FindByTransaction(request.TransactionId) == nullptr);
+    REQUIRE(queue.GetPendingCount() == 0);
     REQUIRE(guarded.GetRuntimeSession().GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::DeferredWorld);
     REQUIRE_FALSE(processGuard.IsActive());
 
+    // New readiness in the replacement generation cannot resurrect work that
+    // was authorized by the old generation, even when all FormIDs match.
     REQUIRE(readiness.Observe(0x6100, true));
-    const auto remarked = queue.TryMarkRuntimeReady(
-        request,
-        request.CanonicalSnapshot.Revision,
-        processFence,
-        readiness,
-        sources);
-    REQUIRE(remarked.IsReady());
-    REQUIRE(remarked.RuntimeGeneration == nextGeneration);
-
-    REQUIRE(queue.ConsumeRuntimeReady(
+    REQUIRE(queue.TryMarkRuntimeReady(
+                request,
+                request.CanonicalSnapshot.Revision,
                 guarded,
+                processFence,
                 readiness,
-                sources,
-                revisionObserver) == 1);
-    REQUIRE(queue.GetPendingCount() == 0);
-    REQUIRE(guarded.GetRuntimeSession().GetCoordinator().GetActive() != nullptr);
-    REQUIRE(guarded.GetRuntimeSession().GetCoordinator().GetActive()->State ==
-        PartyQuestRuntimeApplyState::AwaitingCheckpoint);
-    REQUIRE(processGuard.GetTransactionId() == request.TransactionId);
+                sources).Status ==
+        PartyQuestDeferredWorldRuntimeReadinessStatus::InvalidRequest);
 
     const auto aborted = guarded.AbortBeforeMutation(request.TransactionId);
     REQUIRE(aborted.Status == PartyQuestRuntimeGuardStatus::Ready);
@@ -269,11 +263,13 @@ TEST_CASE(
     };
 
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Deferred);
-    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(queue.EnqueueRuntime(request, guarded, processFence) ==
+        PartyQuestDeferredWorldEnqueueStatus::Queued);
     REQUIRE(readiness.Observe(0x6200, true));
     REQUIRE(queue.TryMarkRuntimeReady(
                 request,
                 request.CanonicalSnapshot.Revision,
+                guarded,
                 processFence,
                 readiness,
                 sources).IsReady());
@@ -313,6 +309,7 @@ TEST_CASE(
     REQUIRE(queue.TryMarkRuntimeReady(
                 request,
                 request.CanonicalSnapshot.Revision,
+                guarded,
                 processFence,
                 readiness,
                 sources).IsReady());
@@ -363,11 +360,13 @@ TEST_CASE(
     };
 
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Deferred);
-    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(queue.EnqueueRuntime(request, guarded, processFence) ==
+        PartyQuestDeferredWorldEnqueueStatus::Queued);
     REQUIRE(readiness.Observe(0x6300, true));
     REQUIRE(queue.TryMarkRuntimeReady(
                 request,
                 request.CanonicalSnapshot.Revision,
+                guarded,
                 processFence,
                 readiness,
                 sources).IsReady());
@@ -428,11 +427,13 @@ TEST_CASE(
 
     REQUIRE(privateGuarded.Begin(request).Status ==
         PartyQuestRuntimeGuardStatus::Deferred);
-    REQUIRE(queue.Enqueue(request) == PartyQuestDeferredWorldEnqueueStatus::Queued);
+    REQUIRE(queue.EnqueueRuntime(request, privateGuarded, processFence) ==
+        PartyQuestDeferredWorldEnqueueStatus::Queued);
     REQUIRE(readiness.Observe(0x6400, true));
     REQUIRE(queue.TryMarkRuntimeReady(
                 request,
                 request.CanonicalSnapshot.Revision,
+                privateGuarded,
                 processFence,
                 readiness,
                 sources).IsReady());

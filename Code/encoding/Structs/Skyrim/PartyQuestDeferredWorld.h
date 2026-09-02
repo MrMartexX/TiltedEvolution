@@ -23,7 +23,10 @@ enum class PartyQuestDeferredWorldEnqueueStatus : uint8_t
     ResourceLimitExceeded,
     InvalidRequest,
     UnsafePlan,
-    NotDeferred
+    NotDeferred,
+    RuntimeOwnerRequired,
+    RuntimeOwnerMismatch,
+    RuntimeGenerationChanged
 };
 
 enum class PartyQuestDeferredWorldRuntimeReadinessStatus : uint8_t
@@ -89,6 +92,14 @@ struct PartyQuestDeferredWorldEntry
     bool Ready{};
     uint64_t ReadyGeneration{};
 
+    /**
+     * Immutable local authority captured while the runtime generation is
+     * pinned. Dry-run diagnostic entries intentionally leave this empty.
+     */
+    std::optional<PartyQuestCampaignId> CampaignId;
+    std::optional<PartyQuestPlayerProfileId> PlayerProfileId;
+    uint64_t EnqueueGeneration{};
+
     bool operator==(const PartyQuestDeferredWorldEntry&) const = default;
 };
 
@@ -123,6 +134,16 @@ public:
     [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus Enqueue(
         PartyQuestRuntimeApplyRequest aRequest);
 
+    /**
+     * Runtime-only enqueue. The exact guarded session identity and generation
+     * are captured atomically under a generation lease. A runtime request sent
+     * through the diagnostic Enqueue overload is rejected fail-closed.
+     */
+    [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus EnqueueRuntime(
+        PartyQuestRuntimeApplyRequest aRequest,
+        const PartyQuestRuntimeGuardedSession& acGuardedSession,
+        PartyQuestRuntimeGenerationFence& aGenerationFence) noexcept;
+
     /** Diagnostic DryRunOnly readiness surface. Never accepts runtime plans. */
     bool MarkReady(
         PartyQuestRuntimeApplyRequest aCurrentRequest,
@@ -136,6 +157,7 @@ public:
     [[nodiscard]] PartyQuestDeferredWorldRuntimeReadinessResult TryMarkRuntimeReady(
         PartyQuestRuntimeApplyRequest aCurrentRequest,
         uint64_t aCurrentCanonicalQuestRevision,
+        const PartyQuestRuntimeGuardedSession& acGuardedSession,
         PartyQuestRuntimeGenerationFence& aGenerationFence,
         const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
         const PartyQuestDeferredWorldRuntimeReadinessSources& acSources) noexcept;
@@ -167,6 +189,7 @@ public:
      * ConsumeRuntimeReady; passing the shared process fence here fails closed.
      */
     [[nodiscard]] std::vector<PartyQuestRuntimeApplyRequest> TakeRuntimeReady(
+        const PartyQuestRuntimeGuardedSession& acGuardedSession,
         PartyQuestRuntimeGenerationFence& aGenerationFence,
         const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
         const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
@@ -185,6 +208,19 @@ public:
     }
 
 private:
+    [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus EnqueueBound(
+        PartyQuestRuntimeApplyRequest aRequest,
+        const PartyQuestCampaignId* apCampaignId,
+        const PartyQuestPlayerProfileId* apPlayerProfileId,
+        uint64_t aEnqueueGeneration);
+
+    [[nodiscard]] static bool MatchesRuntimeOwner(
+        const PartyQuestDeferredWorldEntry& acEntry,
+        const PartyQuestRuntimeGuardedSession& acGuardedSession,
+        uint64_t aGeneration) noexcept;
+
+    void Retire(std::unordered_map<GameId, PartyQuestDeferredWorldEntry>::iterator aIt) noexcept;
+
     [[nodiscard]] static std::vector<GameId> CollectReferenceTargets(
         const QuestSnapshot& acSnapshot);
     [[nodiscard]] static std::vector<GameId> CollectLocationTargets(
