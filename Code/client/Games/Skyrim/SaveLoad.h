@@ -9,6 +9,7 @@
  * PartyQuest LoadGame lifecycle ticket. Safe to call more than once.
  */
 void InstallPartyQuestLoadGameLifecycleFence() noexcept;
+void UninstallPartyQuestLoadGameLifecycleFence() noexcept;
 
 /** Process-local installation evidence used only by read-only P0 diagnostics. */
 [[nodiscard]] bool IsPartyQuestSaveHookInstalled() noexcept;

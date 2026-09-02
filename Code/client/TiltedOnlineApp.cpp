@@ -20,6 +20,8 @@
 
 #include <PartyQuestP0LiveDiagnostics.h>
 #include <PartyQuestSkyrimRuntimeThread.h>
+#include <PartyQuestSkyrimReferenceReadiness.h>
+#include <SaveLoad.h>
 #include <NvidiaUtil.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
@@ -97,6 +99,12 @@ bool TiltedOnlineApp::EndMain()
             "PartyQuest orderly shutdown durably aborted pre-mutation runtime work: transaction={}",
             lifecycle.TransactionId);
     }
+
+    // Process sinks and World services are registered with Skyrim event
+    // dispatchers. Detach them while the engine and our code are still fully
+    // alive, before hook/DLL teardown begins.
+    UninstallPartyQuestSkyrimReferenceReadiness();
+    UninstallPartyQuestLoadGameLifecycleFence();
 
     // World owns services registered with Skyrim event dispatchers. Destroy it
     // while the engine and our code are still fully alive so those external

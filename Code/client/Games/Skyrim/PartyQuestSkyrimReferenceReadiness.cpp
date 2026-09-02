@@ -2,6 +2,7 @@
 
 #include <Events/EventDispatcher.h>
 #include <PartyQuestSkyrimReferenceReadiness.h>
+#include <Structs/Skyrim/PartyQuestExternalSinkLifetime.h>
 #include <Structs/Skyrim/PartyQuestRuntimeReferenceReadiness.h>
 
 #include <cstddef>
@@ -24,7 +25,7 @@ static_assert(offsetof(PartyQuestTESObjectLoadedEventLayout, Loaded) == 0x4);
 
 PartyQuestRuntimeReferenceReadiness s_partyQuestReferenceReadiness;
 std::mutex s_partyQuestReferenceSinkMutex;
-bool s_partyQuestReferenceSinkInstalled = false;
+EventDispatcher<TESObjectLoadedEvent>* s_pPartyQuestReferenceDispatcher = nullptr;
 
 class PartyQuestObjectLoadedEventSink final : public BSTEventSink<TESObjectLoadedEvent>
 {
@@ -58,7 +59,7 @@ void InstallPartyQuestSkyrimReferenceReadiness() noexcept
     try
     {
         std::lock_guard lock(s_partyQuestReferenceSinkMutex);
-        if (s_partyQuestReferenceSinkInstalled)
+        if (s_pPartyQuestReferenceDispatcher)
             return;
 
         auto* pEventList = EventDispatcherManager::Get();
@@ -69,8 +70,9 @@ void InstallPartyQuestSkyrimReferenceReadiness() noexcept
             return;
         }
 
-        pEventList->objectLoadedEvent.RegisterSink(&s_partyQuestObjectLoadedEventSink);
-        s_partyQuestReferenceSinkInstalled = true;
+        auto* pDispatcher = &pEventList->objectLoadedEvent;
+        pDispatcher->RegisterSink(&s_partyQuestObjectLoadedEventSink);
+        s_pPartyQuestReferenceDispatcher = pDispatcher;
         spdlog::info(
             "PartyQuest TESObjectLoadedEvent reference readiness sink installed");
     }
@@ -79,4 +81,12 @@ void InstallPartyQuestSkyrimReferenceReadiness() noexcept
         spdlog::error(
             "PartyQuest failed to register TESObjectLoadedEvent reference readiness sink");
     }
+}
+
+void UninstallPartyQuestSkyrimReferenceReadiness() noexcept
+{
+    std::lock_guard lock(s_partyQuestReferenceSinkMutex);
+    PartyQuestReleaseExternalSink(
+        s_pPartyQuestReferenceDispatcher,
+        &s_partyQuestObjectLoadedEventSink);
 }

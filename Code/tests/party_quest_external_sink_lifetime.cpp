@@ -38,3 +38,12 @@ TEST_CASE("PartyQuest external sink registration is released exactly once")
     PartyQuestReleaseExternalSink(pRegistration, &sink);
     REQUIRE(dispatcher.UnregisterCalls == 1);
 }
+
+TEST_CASE("PartyQuest external sink release is fail closed for absent registration")
+{
+    ExternalSinkProbe sink;
+    ExternalDispatcherProbe* pRegistration = nullptr;
+
+    PartyQuestReleaseExternalSink(pRegistration, &sink);
+    REQUIRE(pRegistration == nullptr);
+}

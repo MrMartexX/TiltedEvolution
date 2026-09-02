@@ -4,6 +4,7 @@ class PartyQuestRuntimeReferenceReadiness;
 
 /** Process-lifetime Skyrim TESObjectLoadedEvent evidence source. */
 void InstallPartyQuestSkyrimReferenceReadiness() noexcept;
+void UninstallPartyQuestSkyrimReferenceReadiness() noexcept;
 
 /**
  * Returns the generation-bound reference readiness tracker fed by the Skyrim

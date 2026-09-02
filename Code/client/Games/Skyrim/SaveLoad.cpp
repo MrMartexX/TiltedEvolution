@@ -4,6 +4,7 @@
 #include <PartyQuestP0LiveDiagnostics.h>
 #include <SaveLoad.h>
 #include <Structs/Skyrim/PartyQuestExceptionBoundary.h>
+#include <Structs/Skyrim/PartyQuestExternalSinkLifetime.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
@@ -57,7 +58,7 @@ struct PartyQuestPendingLoadTransition
 std::mutex s_partyQuestPendingLoadMutex;
 std::optional<PartyQuestPendingLoadTransition> s_partyQuestPendingLoad;
 std::mutex s_partyQuestLoadSinkMutex;
-bool s_partyQuestLoadSinkInstalled = false;
+EventDispatcher<TESLoadGameEvent>* s_pPartyQuestLoadDispatcher = nullptr;
 std::atomic_bool s_partyQuestSaveHookInstalled{false};
 std::atomic_bool s_partyQuestLoadCompletionSinkInstalled{false};
 
@@ -277,7 +278,7 @@ void InstallPartyQuestLoadGameLifecycleFence() noexcept
     try
     {
         std::lock_guard lock(s_partyQuestLoadSinkMutex);
-        if (s_partyQuestLoadSinkInstalled)
+        if (s_pPartyQuestLoadDispatcher)
             return;
 
         auto* pEventList = EventDispatcherManager::Get();
@@ -288,8 +289,9 @@ void InstallPartyQuestLoadGameLifecycleFence() noexcept
             return;
         }
 
-        pEventList->loadGameEvent.RegisterSink(&s_partyQuestLoadGameEventSink);
-        s_partyQuestLoadSinkInstalled = true;
+        auto* pDispatcher = &pEventList->loadGameEvent;
+        pDispatcher->RegisterSink(&s_partyQuestLoadGameEventSink);
+        s_pPartyQuestLoadDispatcher = pDispatcher;
         s_partyQuestLoadCompletionSinkInstalled.store(
             true,
             std::memory_order_release);
@@ -306,6 +308,17 @@ void InstallPartyQuestLoadGameLifecycleFence() noexcept
                     "PartyQuest failed to register TESLoadGameEvent lifecycle sink");
             });
     }
+}
+
+void UninstallPartyQuestLoadGameLifecycleFence() noexcept
+{
+    std::lock_guard lock(s_partyQuestLoadSinkMutex);
+    PartyQuestReleaseExternalSink(
+        s_pPartyQuestLoadDispatcher,
+        &s_partyQuestLoadGameEventSink);
+    s_partyQuestLoadCompletionSinkInstalled.store(
+        false,
+        std::memory_order_release);
 }
 
 bool IsPartyQuestSaveHookInstalled() noexcept
