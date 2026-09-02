@@ -32,7 +32,7 @@ class QuestService final : public BSTEventSink<TESQuestStartStopEvent>, BSTEvent
 {
 public:
     QuestService(World&, entt::dispatcher&);
-    ~QuestService() = default;
+    ~QuestService() noexcept;
 
     static bool IsNonSyncableQuest(TESQuest* apQuest);
     static void DebugDumpQuests();
@@ -61,6 +61,8 @@ private:
     void PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexcept;
 
     World& m_world;
+    EventDispatcher<TESQuestStartStopEvent>* m_pQuestStartStopDispatcher{};
+    EventDispatcher<TESQuestStageEvent>* m_pQuestStageDispatcher{};
 
     uint32_t m_localPlayerId{};
     uint64_t m_connectionGeneration{};

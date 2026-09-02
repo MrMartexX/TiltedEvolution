@@ -23,6 +23,7 @@
 #include <Messages/PartyQuestMessages.h>
 #include <Structs/Skyrim/PartyQuestRuntimeProcessRequestGate.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
+#include <Structs/Skyrim/PartyQuestExternalSinkLifetime.h>
 
 static TESQuest* FindQuestByNameId(const String& name)
 {
@@ -52,13 +53,28 @@ QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
     // TESQuestStageItemDoneEvent gets fired too late, we instead use TESQuestStageEvent, because it responds immediately.
     // TESQuestInitEvent can be instead managed by start stop quest management.
     auto* pEventList = EventDispatcherManager::Get();
-    pEventList->questStartStopEvent.RegisterSink(this);
-    pEventList->questStageEvent.RegisterSink(this);
+    if (pEventList)
+    {
+        m_pQuestStartStopDispatcher = &pEventList->questStartStopEvent;
+        m_pQuestStageDispatcher = &pEventList->questStageEvent;
+        m_pQuestStartStopDispatcher->RegisterSink(this);
+        m_pQuestStageDispatcher->RegisterSink(this);
+    }
 
     spdlog::info(
         "PartyQuestRuntime reviewed compatibility registry loaded: profiles={} nativeAdapter={:016X}",
         m_partyQuestRuntimeCompatibilityManifest.GetRequirementCount(),
         PartyQuestSkyrimRuntimeCompatibilityEvidence::NativeAdapterFingerprint);
+}
+
+QuestService::~QuestService() noexcept
+{
+    PartyQuestReleaseExternalSink(
+        m_pQuestStageDispatcher,
+        static_cast<BSTEventSink<TESQuestStageEvent>*>(this));
+    PartyQuestReleaseExternalSink(
+        m_pQuestStartStopDispatcher,
+        static_cast<BSTEventSink<TESQuestStartStopEvent>*>(this));
 }
 
 void QuestService::OnConnected(const ConnectedEvent& acEvent) noexcept
