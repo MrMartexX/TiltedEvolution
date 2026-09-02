@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestModMappingIdentity.h>
 #include <Structs/Skyrim/PartyQuestModMappingPublication.h>
 
 struct Mods;
@@ -34,5 +35,5 @@ private:
     PartyQuestModMappingPublication m_mappingPublication;
     Map<uint16_t, uint32_t> m_liteToServer;
     Map<uint32_t, GameMod> m_serverToGame;
-    uint32_t m_standardToServer[0x100];
+    PartyQuestStandardModMapping m_standardToServer;
 };

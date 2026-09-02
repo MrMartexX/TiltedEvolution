@@ -10,15 +10,8 @@
 #include <Games/TES.h>
 #include <PartyQuestP0LiveDiagnostics.h>
 
-#include <array>
-#include <utility>
-
 ModSystem::ModSystem(entt::dispatcher& aDispatcher) noexcept
 {
-    std::memset(m_standardToServer, 0, sizeof(m_standardToServer));
-    // Deal with temporary ids
-    m_standardToServer[0xFF] = std::numeric_limits<uint32_t>::max();
-
     m_modsConnection = aDispatcher.sink<Mods>().connect<&ModSystem::HandleMods>(this);
 }
 
@@ -59,10 +52,13 @@ bool ModSystem::GetServerModId(const uint32_t aGameId, uint32_t& aModId, uint32_
         return false;
     }
 
-    // Here we have a standard mod
-    aModId = m_standardToServer[hiByte & 0xFF];
-    aBaseId = aGameId & 0x00FFFFFFu;
+    // Here we have a standard mod. Occupancy is independent from the stored
+    // server ID because zero is a valid server-assigned mod ID.
+    const uint8_t standardId = static_cast<uint8_t>(hiByte & 0xFFu);
+    if (!m_standardToServer.TryLookup(standardId, aModId))
+        return false;
 
+    aBaseId = aGameId & 0x00FFFFFFu;
     return true;
 }
 
@@ -170,36 +166,23 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
     {
         Map<uint32_t, GameMod> candidateServerToGame;
         Map<uint16_t, uint32_t> candidateLiteToServer;
-        std::array<uint32_t, 0x100> candidateStandardToServer{};
-        candidateStandardToServer[0xFF] =
-            std::numeric_limits<uint32_t>::max();
+        PartyQuestStandardModMapping candidateStandardToServer;
+        PartyQuestModMappingIdentityCandidate candidateIdentity;
 
         for (const auto& mod : acMods.ModList)
         {
-            if (Mod* pMod = pModManager->GetByName(mod.Filename.c_str()))
+            Mod* pMod = pModManager->GetByName(mod.Filename.c_str());
+            const bool resolved = pMod != nullptr;
+            uint32_t localModId = 0;
+            bool localIsLite = false;
+
+            if (resolved)
             {
-                const uint32_t localModId = pMod->GetId();
-                const bool localIsLite = pMod->IsLite();
+                localModId = pMod->GetId();
+                localIsLite = pMod->IsLite();
                 PartyQuestP0LiveDiagnostics::RecordModMappingEntry(
                     mod.Id, mod.Filename.c_str(), mod.IsLite, true, localModId, localIsLite);
                 ++resolvedCount;
-
-                if (mod.IsLite)
-                {
-                    candidateServerToGame.emplace(
-                        mod.Id,
-                        GameMod{static_cast<uint16_t>(localModId & 0xFFFu), true});
-                    candidateLiteToServer.emplace(
-                        static_cast<uint16_t>(localModId & 0xFFFu),
-                        mod.Id);
-                }
-                else
-                {
-                    candidateServerToGame.emplace(
-                        mod.Id,
-                        GameMod{static_cast<uint16_t>(localModId & 0xFFu), false});
-                    candidateStandardToServer[localModId & 0xFFu] = mod.Id;
-                }
             }
             else
             {
@@ -216,21 +199,80 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
                             mod.Id);
                     });
             }
+
+            // Validate the complete wire identity even for locally missing mods.
+            // Missing mods remain a supported partial mapping, but malformed or
+            // ambiguous server IDs and resolved local identities are rejected.
+            const auto identityResult = candidateIdentity.Register(
+                mod.Id, mod.IsLite, resolved, localModId, localIsLite);
+            if (identityResult != PartyQuestModMappingIdentityResult::Accepted)
+            {
+                const char* reason =
+                    GetPartyQuestModMappingIdentityDiagnosticReason(identityResult);
+                PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                    "mod-mapping-rebuild", reason, generationBefore, generationAfter);
+                (void)PartyQuestExceptionBoundary::Invoke(
+                    [&]()
+                    {
+                        spdlog::error(
+                            "PartyQuest rejected ambiguous mod mapping entry {} (server id {:X}): {}",
+                            mod.Filename.c_str(),
+                            mod.Id,
+                            reason);
+                    });
+                return;
+            }
+
+            if (!resolved)
+                continue;
+
+            if (mod.IsLite)
+            {
+                const uint16_t localLiteId =
+                    static_cast<uint16_t>(localModId & 0xFFFu);
+                candidateServerToGame.emplace(
+                    mod.Id,
+                    GameMod{localLiteId, true});
+                candidateLiteToServer.emplace(localLiteId, mod.Id);
+            }
+            else
+            {
+                const uint8_t localStandardId =
+                    static_cast<uint8_t>(localModId & 0xFFu);
+                if (!candidateStandardToServer.TryAssign(localStandardId, mod.Id))
+                {
+                    PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                        "mod-mapping-rebuild",
+                        "duplicate-local-standard-slot-fail-closed",
+                        generationBefore,
+                        generationAfter);
+                    (void)PartyQuestExceptionBoundary::Invoke(
+                        [&]()
+                        {
+                            spdlog::error(
+                                "PartyQuest rejected ambiguous standard mod mapping entry {} (local slot {:X}, server id {:X})",
+                                mod.Filename.c_str(),
+                                localStandardId,
+                                mod.Id);
+                        });
+                    return;
+                }
+
+                candidateServerToGame.emplace(
+                    mod.Id,
+                    GameMod{localStandardId, false});
+            }
         }
 
         // Every live mapping update below remains inside the exclusive generation
-        // lease while publication is revoked. Conversion readers now hold the
+        // lease while publication is revoked. Conversion readers hold the
         // corresponding shared execution lease, so they cannot observe any
         // intermediate state. If a concrete Map operation throws, the catch below
         // leaves publication revoked and readers fail closed after invalidation
-        // releases. Do not require Map::swap to be noexcept: that specification is
-        // allocator/STL-implementation dependent and differs on MSVC.
+        // releases. The fixed-size standard mapping copy cannot throw.
         m_serverToGame.swap(candidateServerToGame);
         m_liteToServer.swap(candidateLiteToServer);
-        std::memcpy(
-            m_standardToServer,
-            candidateStandardToServer.data(),
-            sizeof(m_standardToServer));
+        m_standardToServer = candidateStandardToServer;
         m_mappingPublication.Commit();
     }
     catch (...)

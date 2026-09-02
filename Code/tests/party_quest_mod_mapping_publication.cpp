@@ -1,6 +1,7 @@
 #include <catch2/catch.hpp>
 #include <entt/entt.hpp>
 
+#include <Structs/Skyrim/PartyQuestModMappingIdentity.h>
 #include <Structs/Skyrim/PartyQuestModMappingPublication.h>
 
 namespace
@@ -70,6 +71,66 @@ TEST_CASE("PartyQuest mod mapping publication remains fail closed until commit")
     // The next rebuild revokes the previously published mapping immediately.
     publication.BeginRebuild();
     REQUIRE_FALSE(publication.IsReady());
+}
+
+TEST_CASE("PartyQuest mod mapping candidate rejects duplicate server ids even when a mod is missing locally")
+{
+    PartyQuestModMappingIdentityCandidate candidate;
+
+    REQUIRE(
+        candidate.Register(7, false, false, 0, false) ==
+        PartyQuestModMappingIdentityResult::Accepted);
+    REQUIRE(
+        candidate.Register(7, true, false, 0, false) ==
+        PartyQuestModMappingIdentityResult::DuplicateServerId);
+}
+
+TEST_CASE("PartyQuest mod mapping candidate rejects server local kind mismatch")
+{
+    PartyQuestModMappingIdentityCandidate candidate;
+
+    REQUIRE(
+        candidate.Register(1, true, true, 3, false) ==
+        PartyQuestModMappingIdentityResult::KindMismatch);
+}
+
+TEST_CASE("PartyQuest mod mapping candidate rejects duplicate local lite slots")
+{
+    PartyQuestModMappingIdentityCandidate candidate;
+
+    REQUIRE(
+        candidate.Register(1, true, true, 0x123, true) ==
+        PartyQuestModMappingIdentityResult::Accepted);
+    REQUIRE(
+        candidate.Register(2, true, true, 0x123, true) ==
+        PartyQuestModMappingIdentityResult::DuplicateLiteSlot);
+}
+
+TEST_CASE("PartyQuest standard mod mapping separates occupancy from valid server id zero")
+{
+    PartyQuestStandardModMapping mapping;
+    uint32_t serverModId = 0xDEADBEEFu;
+
+    REQUIRE_FALSE(mapping.TryLookup(0x12, serverModId));
+    REQUIRE(serverModId == 0xDEADBEEFu);
+
+    REQUIRE(mapping.TryAssign(0x12, 0));
+    REQUIRE(mapping.TryLookup(0x12, serverModId));
+    REQUIRE(serverModId == 0);
+
+    REQUIRE_FALSE(mapping.TryAssign(0x12, 9));
+    REQUIRE(mapping.TryLookup(0x12, serverModId));
+    REQUIRE(serverModId == 0);
+}
+
+TEST_CASE("PartyQuest standard mod mapping preserves reserved temporary form slot")
+{
+    PartyQuestStandardModMapping mapping;
+    uint32_t serverModId = 0;
+
+    REQUIRE(mapping.TryLookup(0xFF, serverModId));
+    REQUIRE(serverModId == std::numeric_limits<uint32_t>::max());
+    REQUIRE_FALSE(mapping.TryAssign(0xFF, 5));
 }
 
 TEST_CASE("PartyQuest callback subscription is revoked before dependent member teardown")
