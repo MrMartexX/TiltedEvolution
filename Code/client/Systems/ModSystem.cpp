@@ -10,15 +10,10 @@
 #include <Games/TES.h>
 #include <PartyQuestP0LiveDiagnostics.h>
 
-#include <array>
 #include <utility>
 
 ModSystem::ModSystem(entt::dispatcher& aDispatcher) noexcept
 {
-    std::memset(m_standardToServer, 0, sizeof(m_standardToServer));
-    // Deal with temporary ids
-    m_standardToServer[0xFF] = std::numeric_limits<uint32_t>::max();
-
     m_modsConnection = aDispatcher.sink<Mods>().connect<&ModSystem::HandleMods>(this);
 }
 
@@ -60,7 +55,9 @@ bool ModSystem::GetServerModId(const uint32_t aGameId, uint32_t& aModId, uint32_
     }
 
     // Here we have a standard mod
-    aModId = m_standardToServer[hiByte & 0xFF];
+    if (!m_standardToServer.TryGet(static_cast<uint8_t>(hiByte & 0xFFu), aModId))
+        return false;
+
     aBaseId = aGameId & 0x00FFFFFFu;
 
     return true;
@@ -170,39 +167,16 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
     {
         Map<uint32_t, GameMod> candidateServerToGame;
         Map<uint16_t, uint32_t> candidateLiteToServer;
-        std::array<uint32_t, 0x100> candidateStandardToServer{};
-        candidateStandardToServer[0xFF] =
-            std::numeric_limits<uint32_t>::max();
+        PartyQuestModMappingCandidateIdentity candidateIdentity;
 
         for (const auto& mod : acMods.ModList)
         {
-            if (Mod* pMod = pModManager->GetByName(mod.Filename.c_str()))
+            Mod* pMod = pModManager->GetByName(mod.Filename.c_str());
+            if (!pMod)
             {
-                const uint32_t localModId = pMod->GetId();
-                const bool localIsLite = pMod->IsLite();
-                PartyQuestP0LiveDiagnostics::RecordModMappingEntry(
-                    mod.Id, mod.Filename.c_str(), mod.IsLite, true, localModId, localIsLite);
-                ++resolvedCount;
-
-                if (mod.IsLite)
-                {
-                    candidateServerToGame.emplace(
-                        mod.Id,
-                        GameMod{static_cast<uint16_t>(localModId & 0xFFFu), true});
-                    candidateLiteToServer.emplace(
-                        static_cast<uint16_t>(localModId & 0xFFFu),
-                        mod.Id);
-                }
-                else
-                {
-                    candidateServerToGame.emplace(
-                        mod.Id,
-                        GameMod{static_cast<uint16_t>(localModId & 0xFFu), false});
-                    candidateStandardToServer[localModId & 0xFFu] = mod.Id;
-                }
-            }
-            else
-            {
+                const auto missingResult = candidateIdentity.Observe(
+                    mod.Id, mod.IsLite, false);
+                (void)missingResult;
                 PartyQuestP0LiveDiagnostics::RecordModMappingEntry(
                     mod.Id, mod.Filename.c_str(), mod.IsLite, false, 0, false);
                 ++missingCount;
@@ -215,6 +189,54 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
                             mod.IsLite,
                             mod.Id);
                     });
+                continue;
+            }
+
+            const uint16_t localModId = pMod->GetId();
+            const bool localIsLite = pMod->IsLite();
+            PartyQuestP0LiveDiagnostics::RecordModMappingEntry(
+                mod.Id, mod.Filename.c_str(), mod.IsLite, true, localModId, localIsLite);
+            ++resolvedCount;
+
+            const auto identityResult = candidateIdentity.Observe(
+                mod.Id, mod.IsLite, true, localModId, localIsLite);
+            if (identityResult != PartyQuestModMappingIdentityResult::Accepted)
+            {
+                PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                    "mod-mapping-rebuild",
+                    "mapping-identity-conflict-fail-closed",
+                    generationBefore,
+                    generationAfter);
+                (void)PartyQuestExceptionBoundary::Invoke(
+                    [&]()
+                    {
+                        spdlog::error(
+                            "PartyQuest rejected conflicting mod mapping for {}, server id {:X}, local id {:X}, identity result {}",
+                            mod.Filename.c_str(),
+                            mod.Id,
+                            localModId,
+                            static_cast<uint32_t>(identityResult));
+                    });
+                return;
+            }
+
+            if (!candidateServerToGame.emplace(
+                     mod.Id,
+                     GameMod{
+                         static_cast<uint16_t>(localModId & (mod.IsLite ? 0xFFFu : 0xFFu)),
+                         mod.IsLite})
+                     .second)
+            {
+                return;
+            }
+
+            if (mod.IsLite &&
+                !candidateLiteToServer.emplace(
+                     static_cast<uint16_t>(localModId & 0xFFFu),
+                     mod.Id)
+                     .second)
+            {
+                return;
             }
         }
 
@@ -227,10 +249,7 @@ void ModSystem::HandleMods(const Mods& acMods) noexcept
         // allocator/STL-implementation dependent and differs on MSVC.
         m_serverToGame.swap(candidateServerToGame);
         m_liteToServer.swap(candidateLiteToServer);
-        std::memcpy(
-            m_standardToServer,
-            candidateStandardToServer.data(),
-            sizeof(m_standardToServer));
+        m_standardToServer = candidateIdentity.GetStandardMapping();
         m_mappingPublication.Commit();
     }
     catch (...)
