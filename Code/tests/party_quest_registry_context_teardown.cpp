@@ -37,6 +37,21 @@ struct RegistryContextTeardownProbeService
         ++CallbackCount;
     }
 };
+
+struct LocatedServiceProbe
+{
+    explicit LocatedServiceProbe(bool& aDestroyed)
+        : Destroyed(aDestroyed)
+    {
+    }
+
+    ~LocatedServiceProbe()
+    {
+        Destroyed = true;
+    }
+
+    bool& Destroyed;
+};
 }
 
 TEST_CASE("PartyQuest registry context is drained before dispatcher member teardown")
@@ -62,4 +77,18 @@ TEST_CASE("PartyQuest registry context is drained before dispatcher member teard
     // teardown ordering contract is broken.
     dispatcher.trigger<RegistryContextTeardownProbeEvent>();
     REQUIRE(callbackCount == 1);
+}
+
+TEST_CASE("PartyQuest located service is destroyed at the explicit boundary")
+{
+    bool destroyed = false;
+    entt::locator<LocatedServiceProbe>::emplace(destroyed);
+    REQUIRE(entt::locator<LocatedServiceProbe>::has_value());
+
+    PartyQuestDestroyLocatedService<LocatedServiceProbe>();
+    REQUIRE(destroyed);
+    REQUIRE_FALSE(entt::locator<LocatedServiceProbe>::has_value());
+
+    PartyQuestDestroyLocatedService<LocatedServiceProbe>();
+    REQUIRE_FALSE(entt::locator<LocatedServiceProbe>::has_value());
 }

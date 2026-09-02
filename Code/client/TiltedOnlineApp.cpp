@@ -98,6 +98,10 @@ bool TiltedOnlineApp::EndMain()
             lifecycle.TransactionId);
     }
 
+    // World owns services registered with Skyrim event dispatchers. Destroy it
+    // while the engine and our code are still fully alive so those external
+    // sinks are detached before hook/DLL teardown begins.
+    World::Destroy();
     UninstallHooks();
     if (m_pDevice)
         m_pDevice->Release();

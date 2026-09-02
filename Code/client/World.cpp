@@ -140,6 +140,11 @@ void World::Create() noexcept
     }
 }
 
+void World::Destroy() noexcept
+{
+    PartyQuestDestroyLocatedService<World>();
+}
+
 World& World::Get() noexcept
 {
     return entt::locator<World>::value();
