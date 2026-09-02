@@ -30,6 +30,7 @@
 #include <PartyQuestSkyrimReferenceReadiness.h>
 #include <PlayerCharacter.h>
 #include <SaveLoad.h>
+#include <Structs/Skyrim/PartyQuestRegistryContextTeardown.h>
 
 World::World()
     : m_runner(m_dispatcher)
@@ -73,7 +74,14 @@ World::World()
     BehaviorVar::Get()->Init();
 }
 
-World::~World() = default;
+World::~World()
+{
+    // entt::registry is a base class, therefore its context would otherwise be
+    // destroyed only after World members. Context services own dispatcher
+    // subscriptions and references to transport/member services, so tear them
+    // down explicitly while those dependencies are still alive.
+    PartyQuestDestroyRegistryContextBeforeMembers(*this);
+}
 
 void World::Update() noexcept
 {
