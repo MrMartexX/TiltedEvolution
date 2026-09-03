@@ -43,6 +43,17 @@ enum class PartyQuestRuntimeVerificationStatus : uint8_t
     Stable
 };
 
+enum class PartyQuestRuntimeVerificationEvidenceStatus : uint8_t
+{
+    InvalidEvidence,
+    ObserverUnavailable,
+    Stale,
+    Duplicate,
+    VerifiedMismatch,
+    Accepted,
+    VerifiedSuccess
+};
+
 enum class PartyQuestRuntimeRecoveryDisposition : uint8_t
 {
     InvalidState,

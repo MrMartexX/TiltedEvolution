@@ -5,6 +5,7 @@
 #include <cstdint>
 
 class PartyQuestRuntimeGuardedSession;
+class PartyQuestRuntimeVerificationGate;
 
 enum class PartyQuestRuntimeVerificationMonitorStatus : uint8_t
 {
@@ -69,6 +70,7 @@ public:
 
 private:
     friend class PartyQuestRuntimeGuardedSession;
+    friend class PartyQuestRuntimeVerificationGate;
 
     [[nodiscard]] bool Begin(uint64_t aTransactionId, uint64_t aNowMs) noexcept;
     [[nodiscard]] PartyQuestRuntimeVerificationMonitorStatus Poll(
@@ -79,6 +81,9 @@ private:
         uint64_t aNowMs,
         PartyQuestRuntimeVerificationStatus aVerification) noexcept;
     void Cancel(uint64_t aTransactionId) noexcept;
+    [[nodiscard]] uint64_t IssueAttempt() noexcept;
+    [[nodiscard]] PartyQuestRuntimeVerificationEvidenceStatus ConsumeAttempt(
+        uint64_t aAttemptId) noexcept;
 
     [[nodiscard]] PartyQuestRuntimeVerificationMonitorStatus CheckTime(
         uint64_t aNowMs) noexcept;
@@ -89,6 +94,8 @@ private:
     uint64_t m_startedAtMs{};
     uint64_t m_lastNowMs{};
     uint32_t m_divergentSamples{};
+    uint64_t m_nextAttemptId{1};
+    uint64_t m_lastConsumedAttemptId{};
     PartyQuestRuntimeVerificationMonitorStatus m_status{
         PartyQuestRuntimeVerificationMonitorStatus::Inactive};
 };

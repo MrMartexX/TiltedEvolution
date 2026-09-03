@@ -127,11 +127,15 @@ PartyQuestRuntimeGuardedVerificationResult SubmitProcessVerificationSample(
     QuestSnapshot aSnapshot,
     const ProcessCompatibilityFixture& acCompatibility)
 {
+    auto begin = PartyQuestRuntimeVerificationGate::BeginAttempt(
+        aGuarded, aSession, aMonitor, aTransactionId);
+    REQUIRE(begin.Status == PartyQuestRuntimeVerificationEvidenceStatus::Accepted);
+    REQUIRE(begin.Attempt.has_value());
     return PartyQuestRuntimeVerificationGate::Submit(
         aGuarded,
         aSession,
         aMonitor,
-        aTransactionId,
+        std::move(*begin.Attempt),
         aNowMs,
         acCompatibility.Requirement,
         [snapshot = std::move(aSnapshot)](const GameId& acQuestId) mutable

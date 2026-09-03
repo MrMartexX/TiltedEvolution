@@ -192,41 +192,15 @@ TEST_CASE(
 
     size_t snapshotObservations{};
     size_t compatibilityObservations{};
-    const auto snapshotObserver = [
-        &snapshotObservations,
-        snapshot = request.CanonicalSnapshot](const GameId& acQuestId) mutable
-        -> std::optional<QuestSnapshot>
-    {
-        ++snapshotObservations;
-        if (snapshot.QuestId != acQuestId)
-            return std::nullopt;
-        return snapshot;
-    };
-    const auto compatibilityObserver = [
-        &compatibilityObservations,
-        facts = compatibility.Facts](const GameId&)
-        -> std::optional<PartyQuestRuntimeCompatibilityFacts>
-    {
-        ++compatibilityObservations;
-        return facts;
-    };
 
-    const auto mismatchedSession = PartyQuestRuntimeVerificationGate::Submit(
+    const auto mismatchedSession = PartyQuestRuntimeVerificationGate::BeginAttempt(
         guarded,
         unrelatedSession,
         monitor,
-        transactionId,
-        130,
-        compatibility.Requirement,
-        snapshotObserver,
-        compatibilityObserver);
+        transactionId);
     REQUIRE(mismatchedSession.Status ==
-        PartyQuestRuntimeGuardStatus::InvalidState);
-    REQUIRE(mismatchedSession.Verification ==
-        PartyQuestRuntimeVerificationStatus::InvalidState);
-    REQUIRE(mismatchedSession.MonitorStatus ==
-        PartyQuestRuntimeVerificationMonitorStatus::Waiting);
-    REQUIRE(mismatchedSession.GuardHeld);
+        PartyQuestRuntimeVerificationEvidenceStatus::InvalidEvidence);
+    REQUIRE_FALSE(mismatchedSession.Attempt.has_value());
     REQUIRE(snapshotObservations == 0);
     REQUIRE(compatibilityObservations == 0);
     REQUIRE(unrelatedSession.GetCoordinator().GetActive() == nullptr);
@@ -238,22 +212,14 @@ TEST_CASE(
         PartyQuestRuntimeVerificationMonitorStatus::Waiting);
     REQUIRE(processGuard.GetTransactionId() == transactionId);
 
-    const auto mismatchedGuarded = PartyQuestRuntimeVerificationGate::Submit(
+    const auto mismatchedGuarded = PartyQuestRuntimeVerificationGate::BeginAttempt(
         unrelatedGuarded,
         session,
         monitor,
-        transactionId,
-        140,
-        compatibility.Requirement,
-        snapshotObserver,
-        compatibilityObserver);
+        transactionId);
     REQUIRE(mismatchedGuarded.Status ==
-        PartyQuestRuntimeGuardStatus::InvalidState);
-    REQUIRE(mismatchedGuarded.Verification ==
-        PartyQuestRuntimeVerificationStatus::InvalidState);
-    REQUIRE(mismatchedGuarded.MonitorStatus ==
-        PartyQuestRuntimeVerificationMonitorStatus::Waiting);
-    REQUIRE_FALSE(mismatchedGuarded.GuardHeld);
+        PartyQuestRuntimeVerificationEvidenceStatus::InvalidEvidence);
+    REQUIRE_FALSE(mismatchedGuarded.Attempt.has_value());
     REQUIRE(snapshotObservations == 0);
     REQUIRE(compatibilityObservations == 0);
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);

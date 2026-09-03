@@ -54,6 +54,8 @@ struct PartyQuestRuntimeGuardedVerificationResult
         PartyQuestRuntimeVerificationStatus::InvalidState};
     PartyQuestRuntimeVerificationMonitorStatus MonitorStatus{
         PartyQuestRuntimeVerificationMonitorStatus::Inactive};
+    PartyQuestRuntimeVerificationEvidenceStatus EvidenceStatus{
+        PartyQuestRuntimeVerificationEvidenceStatus::InvalidEvidence};
     uint64_t TransactionId{};
     bool GuardHeld{};
     bool PersistenceFailed{};

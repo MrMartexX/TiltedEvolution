@@ -11,8 +11,40 @@ bool PartyQuestRuntimeVerificationMonitor::Begin(
     m_startedAtMs = aNowMs;
     m_lastNowMs = aNowMs;
     m_divergentSamples = 0;
+    m_nextAttemptId = 1;
+    m_lastConsumedAttemptId = 0;
     m_status = PartyQuestRuntimeVerificationMonitorStatus::Waiting;
     return true;
+}
+
+uint64_t PartyQuestRuntimeVerificationMonitor::IssueAttempt() noexcept
+{
+    if (m_status != PartyQuestRuntimeVerificationMonitorStatus::Waiting ||
+        m_nextAttemptId == 0)
+    {
+        return 0;
+    }
+
+    const uint64_t attemptId = m_nextAttemptId++;
+    if (m_nextAttemptId == 0)
+        m_status = PartyQuestRuntimeVerificationMonitorStatus::InvalidVerification;
+    return attemptId;
+}
+
+PartyQuestRuntimeVerificationEvidenceStatus
+PartyQuestRuntimeVerificationMonitor::ConsumeAttempt(uint64_t aAttemptId) noexcept
+{
+    if (aAttemptId == 0)
+        return PartyQuestRuntimeVerificationEvidenceStatus::InvalidEvidence;
+    if (aAttemptId == m_lastConsumedAttemptId)
+        return PartyQuestRuntimeVerificationEvidenceStatus::Duplicate;
+    if (aAttemptId < m_lastConsumedAttemptId)
+        return PartyQuestRuntimeVerificationEvidenceStatus::Stale;
+    if (aAttemptId >= m_nextAttemptId)
+        return PartyQuestRuntimeVerificationEvidenceStatus::InvalidEvidence;
+
+    m_lastConsumedAttemptId = aAttemptId;
+    return PartyQuestRuntimeVerificationEvidenceStatus::Accepted;
 }
 
 PartyQuestRuntimeVerificationMonitorStatus
@@ -114,5 +146,7 @@ void PartyQuestRuntimeVerificationMonitor::Cancel(uint64_t aTransactionId) noexc
     m_startedAtMs = 0;
     m_lastNowMs = 0;
     m_divergentSamples = 0;
+    m_nextAttemptId = 1;
+    m_lastConsumedAttemptId = 0;
     m_status = PartyQuestRuntimeVerificationMonitorStatus::Inactive;
 }

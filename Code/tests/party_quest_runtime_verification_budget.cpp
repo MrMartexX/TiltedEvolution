@@ -155,11 +155,15 @@ PartyQuestRuntimeGuardedVerificationResult SubmitSample(
     QuestSnapshot aSnapshot,
     const VerificationCompatibilityFixture& acCompatibility)
 {
+    auto begin = PartyQuestRuntimeVerificationGate::BeginAttempt(
+        aGuarded, aSession, aMonitor, aTransactionId);
+    REQUIRE(begin.Status == PartyQuestRuntimeVerificationEvidenceStatus::Accepted);
+    REQUIRE(begin.Attempt.has_value());
     return PartyQuestRuntimeVerificationGate::Submit(
         aGuarded,
         aSession,
         aMonitor,
-        aTransactionId,
+        std::move(*begin.Attempt),
         aNowMs,
         acCompatibility.Requirement,
         [snapshot = std::move(aSnapshot)](const GameId& acQuestId) mutable
@@ -175,7 +179,117 @@ PartyQuestRuntimeGuardedVerificationResult SubmitSample(
             return facts;
         });
 }
+
+PartyQuestRuntimeGuardedVerificationResult SubmitAttempt(
+    PartyQuestRuntimeGuardedSession& aGuarded,
+    PartyQuestRuntimeApplySession& aSession,
+    PartyQuestRuntimeVerificationMonitor& aMonitor,
+    PartyQuestRuntimeVerificationAttempt&& aAttempt,
+    uint64_t aNowMs,
+    QuestSnapshot aSnapshot,
+    const VerificationCompatibilityFixture& acCompatibility)
+{
+    return PartyQuestRuntimeVerificationGate::Submit(
+        aGuarded, aSession, aMonitor, std::move(aAttempt), aNowMs,
+        acCompatibility.Requirement,
+        [snapshot = std::move(aSnapshot)](const GameId&) mutable
+            -> std::optional<QuestSnapshot> { return snapshot; },
+        [facts = acCompatibility.Facts](const GameId&)
+            -> std::optional<PartyQuestRuntimeCompatibilityFacts> { return facts; });
+}
 } // namespace
+
+TEST_CASE("Verification evidence attempts are one-shot and cannot manufacture stability", "[quest.party-state.runtime-guard][verification-envelope][correlation]")
+{
+    constexpr uint64_t transactionId = 29901;
+    PartyQuestRuntimeProcessOwnerTestScope owner(kVerificationBudgetCampaign,
+        kVerificationBudgetPlayer, "tp_party_quest_verification_correlation_29901");
+    auto& guarded = owner.GuardedSession();
+    auto& session = owner.RuntimeSession();
+    const auto compatibility = BuildCompatibility(GameId(96, 0x2900));
+    const auto request = BuildVerificationBudgetRequest(
+        transactionId, 0x2900, compatibility);
+    PartyQuestRuntimeVerificationMonitor monitor;
+    AdvanceToBoundedVerification(guarded, session, request, monitor);
+
+    auto begin = PartyQuestRuntimeVerificationGate::BeginAttempt(
+        guarded, session, monitor, transactionId);
+    REQUIRE(begin.Status == PartyQuestRuntimeVerificationEvidenceStatus::Accepted);
+    REQUIRE(begin.Attempt.has_value());
+    auto attempt = std::move(*begin.Attempt);
+    const auto first = SubmitAttempt(guarded, session, monitor, std::move(attempt),
+        130, request.CanonicalSnapshot, compatibility);
+    REQUIRE(first.EvidenceStatus == PartyQuestRuntimeVerificationEvidenceStatus::Accepted);
+    REQUIRE(first.Verification == PartyQuestRuntimeVerificationStatus::NeedsStableSample);
+
+    const auto duplicate = SubmitAttempt(guarded, session, monitor, std::move(attempt),
+        131, request.CanonicalSnapshot, compatibility);
+    REQUIRE(duplicate.EvidenceStatus == PartyQuestRuntimeVerificationEvidenceStatus::Duplicate);
+    REQUIRE(monitor.GetStatus() == PartyQuestRuntimeVerificationMonitorStatus::Waiting);
+    REQUIRE(session.GetCoordinator().GetActive()->StableCanonicalSamples == 1);
+}
+
+TEST_CASE("Out-of-order verification evidence is stale while independent samples reach success", "[quest.party-state.runtime-guard][verification-envelope][correlation]")
+{
+    constexpr uint64_t transactionId = 29902;
+    PartyQuestRuntimeProcessOwnerTestScope owner(kVerificationBudgetCampaign,
+        kVerificationBudgetPlayer, "tp_party_quest_verification_correlation_29902");
+    auto& guarded = owner.GuardedSession();
+    auto& session = owner.RuntimeSession();
+    const auto compatibility = BuildCompatibility(GameId(96, 0x2901));
+    const auto request = BuildVerificationBudgetRequest(
+        transactionId, 0x2901, compatibility);
+    PartyQuestRuntimeVerificationMonitor monitor;
+    AdvanceToBoundedVerification(guarded, session, request, monitor);
+
+    auto earlier = PartyQuestRuntimeVerificationGate::BeginAttempt(
+        guarded, session, monitor, transactionId);
+    auto later = PartyQuestRuntimeVerificationGate::BeginAttempt(
+        guarded, session, monitor, transactionId);
+    REQUIRE(earlier.Attempt.has_value());
+    REQUIRE(later.Attempt.has_value());
+    REQUIRE(SubmitAttempt(guarded, session, monitor, std::move(*later.Attempt),
+                130, request.CanonicalSnapshot, compatibility).EvidenceStatus ==
+        PartyQuestRuntimeVerificationEvidenceStatus::Accepted);
+    REQUIRE(SubmitAttempt(guarded, session, monitor, std::move(*earlier.Attempt),
+                131, request.CanonicalSnapshot, compatibility).EvidenceStatus ==
+        PartyQuestRuntimeVerificationEvidenceStatus::Stale);
+    REQUIRE(SubmitSample(guarded, session, monitor, transactionId, 140,
+                request.CanonicalSnapshot, compatibility).EvidenceStatus ==
+        PartyQuestRuntimeVerificationEvidenceStatus::VerifiedSuccess);
+}
+
+TEST_CASE("Unavailable or partial verification observers remain unknown and leave state unchanged", "[quest.party-state.runtime-guard][verification-envelope][observer]")
+{
+    constexpr uint64_t transactionId = 29903;
+    PartyQuestRuntimeProcessOwnerTestScope owner(kVerificationBudgetCampaign,
+        kVerificationBudgetPlayer, "tp_party_quest_verification_correlation_29903");
+    auto& guarded = owner.GuardedSession();
+    auto& session = owner.RuntimeSession();
+    const auto compatibility = BuildCompatibility(GameId(96, 0x2902));
+    const auto request = BuildVerificationBudgetRequest(
+        transactionId, 0x2902, compatibility);
+    PartyQuestRuntimeVerificationMonitor monitor;
+    AdvanceToBoundedVerification(guarded, session, request, monitor);
+
+    auto begin = PartyQuestRuntimeVerificationGate::BeginAttempt(
+        guarded, session, monitor, transactionId);
+    REQUIRE(begin.Attempt.has_value());
+    const auto unknown = PartyQuestRuntimeVerificationGate::Submit(
+        guarded, session, monitor, std::move(*begin.Attempt), 130,
+        compatibility.Requirement,
+        [snapshot = request.CanonicalSnapshot](const GameId&)
+            -> std::optional<QuestSnapshot> { return snapshot; },
+        {});
+    REQUIRE(unknown.EvidenceStatus ==
+        PartyQuestRuntimeVerificationEvidenceStatus::ObserverUnavailable);
+    REQUIRE(unknown.Verification == PartyQuestRuntimeVerificationStatus::InvalidState);
+    REQUIRE(monitor.GetDivergentSamples() == 0);
+    REQUIRE(monitor.GetStatus() == PartyQuestRuntimeVerificationMonitorStatus::Waiting);
+    REQUIRE(session.GetCoordinator().GetActive()->StableCanonicalSamples == 0);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::Verifying);
+}
 
 TEST_CASE("Repeated verification divergence exhausts the process budget and requires exact recovery", "[quest.party-state.runtime-guard][verification-budget]")
 {

@@ -6,101 +6,147 @@
 
 namespace
 {
-PartyQuestRuntimeGuardedVerificationResult RejectStructuralMismatch(
-    PartyQuestRuntimeGuardedSession& aGuardedSession,
-    PartyQuestRuntimeVerificationMonitor& aMonitor,
-    uint64_t aTransactionId) noexcept
+PartyQuestRuntimeGuardedVerificationResult BuildResult(PartyQuestRuntimeGuardedSession& aGuarded,
+    PartyQuestRuntimeVerificationMonitor& aMonitor, uint64_t aTransactionId,
+    PartyQuestRuntimeVerificationEvidenceStatus aEvidence) noexcept
 {
     PartyQuestRuntimeGuardedVerificationResult result;
     result.TransactionId = aTransactionId;
     result.MonitorStatus = aMonitor.GetStatus();
-
-    const auto& guard = aGuardedSession.GetSaveGuard();
-    result.GuardHeld = aTransactionId != 0 &&
-        guard.IsActive() &&
+    result.EvidenceStatus = aEvidence;
+    const auto& guard = aGuarded.GetSaveGuard();
+    result.GuardHeld = aTransactionId != 0 && guard.IsActive() &&
         guard.GetTransactionId() == aTransactionId;
     return result;
 }
 
-PartyQuestRuntimeGuardedVerificationResult SubmitInvalidVerification(
-    PartyQuestRuntimeGuardedSession& aGuardedSession,
+bool HasProcessOwner(PartyQuestRuntimeGuardedSession& aGuarded,
+    PartyQuestRuntimeApplySession& aSession) noexcept
+{
+    auto& guard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    return owner.IsBound() && owner.GetGuardedSession() == &aGuarded &&
+        owner.GetRuntimeSession() == &aSession &&
+        &aGuarded.GetRuntimeSession() == &aSession &&
+        &aGuarded.GetSaveGuard() == &guard;
+}
+
+PartyQuestRuntimeGuardedVerificationResult SubmitMismatch(
+    PartyQuestRuntimeGuardedSession& aGuarded,
     PartyQuestRuntimeVerificationMonitor& aMonitor,
-    uint64_t aTransactionId,
-    uint64_t aNowMs) noexcept
+    uint64_t aTransactionId, uint64_t aNowMs) noexcept
 {
     QuestSnapshot invalid;
-    return aGuardedSession.SubmitVerificationResnapshot(
-        aMonitor,
-        aTransactionId,
-        aNowMs,
-        std::move(invalid));
+    auto result = aGuarded.SubmitVerificationResnapshot(
+        aMonitor, aTransactionId, aNowMs, std::move(invalid));
+    result.EvidenceStatus = PartyQuestRuntimeVerificationEvidenceStatus::VerifiedMismatch;
+    return result;
 }
 } // namespace
 
+PartyQuestRuntimeVerificationAttemptResult PartyQuestRuntimeVerificationGate::BeginAttempt(
+    PartyQuestRuntimeGuardedSession& aGuarded, PartyQuestRuntimeApplySession& aSession,
+    PartyQuestRuntimeVerificationMonitor& aMonitor, uint64_t aTransactionId) noexcept
+{
+    PartyQuestRuntimeVerificationAttemptResult result;
+    if (!HasProcessOwner(aGuarded, aSession))
+        return result;
+
+    const auto* active = aSession.GetCoordinator().GetActive();
+    auto& guard = PartyQuestSaveGuard::GetProcessGuard();
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t generation = fence.GetGeneration();
+    auto lease = fence.TryAcquire(generation);
+    if (!lease || !lease->IsValid() || !active || aTransactionId == 0 ||
+        active->TransactionId != aTransactionId ||
+        active->State != PartyQuestRuntimeApplyState::Verifying ||
+        !active->SaveGuardActive || !active->CheckpointCreated ||
+        !active->RuntimeMutationMayHaveOccurred || !guard.IsActive() ||
+        guard.GetTransactionId() != aTransactionId ||
+        aMonitor.GetTransactionId() != aTransactionId)
+    {
+        result.Status = PartyQuestRuntimeVerificationEvidenceStatus::Stale;
+        return result;
+    }
+
+    const uint64_t attemptId = aMonitor.IssueAttempt();
+    if (attemptId == 0)
+    {
+        result.Status = aMonitor.GetStatus() == PartyQuestRuntimeVerificationMonitorStatus::Stable
+            ? PartyQuestRuntimeVerificationEvidenceStatus::Duplicate
+            : PartyQuestRuntimeVerificationEvidenceStatus::Stale;
+        return result;
+    }
+
+    PartyQuestRuntimeVerificationAttempt attempt;
+    attempt.m_campaignId = aSession.GetCampaignId();
+    attempt.m_playerProfileId = aSession.GetPlayerProfileId();
+    attempt.m_runtimeGeneration = generation;
+    attempt.m_transactionId = active->TransactionId;
+    attempt.m_targetWorldRevision = active->TargetWorldRevision;
+    attempt.m_questId = active->QuestId;
+    attempt.m_actions = active->Actions;
+    attempt.m_expected = active->ExpectedVerification;
+    attempt.m_attemptId = attemptId;
+    result.Status = PartyQuestRuntimeVerificationEvidenceStatus::Accepted;
+    result.Attempt.emplace(std::move(attempt));
+    return result;
+}
+
 PartyQuestRuntimeGuardedVerificationResult PartyQuestRuntimeVerificationGate::Submit(
-    PartyQuestRuntimeGuardedSession& aGuardedSession,
-    PartyQuestRuntimeApplySession& aSession,
+    PartyQuestRuntimeGuardedSession& aGuarded, PartyQuestRuntimeApplySession& aSession,
     PartyQuestRuntimeVerificationMonitor& aMonitor,
-    uint64_t aTransactionId,
-    uint64_t aNowMs,
+    PartyQuestRuntimeVerificationAttempt&& aAttempt, uint64_t aNowMs,
     const PartyQuestRuntimeCompatibilityRequirement& acRequirement,
     const SnapshotObserver& acSnapshotObserver,
     const CompatibilityObserver& acCompatibilityObserver) noexcept
 {
-    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
-    auto& processOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const uint64_t transactionId = aAttempt.m_transactionId;
+    if (!aAttempt.IsValid())
+        return BuildResult(aGuarded, aMonitor, transactionId,
+            PartyQuestRuntimeVerificationEvidenceStatus::Duplicate);
+    if (!HasProcessOwner(aGuarded, aSession))
+        return BuildResult(aGuarded, aMonitor, transactionId,
+            PartyQuestRuntimeVerificationEvidenceStatus::InvalidEvidence);
 
-    // INV-LIFECYCLE-001 / INV-VERIFY-001: structural wiring must be proven
-    // before any fail-closed verification submission is allowed to mutate
-    // runtime/recovery state. A caller cannot pair the process-owned guarded
-    // wrapper with another durable session, nor can a private guarded wrapper
-    // drive verification for the process-owned durable session.
-    if (!processOwner.IsBound() ||
-        processOwner.GetGuardedSession() != &aGuardedSession ||
-        processOwner.GetRuntimeSession() != &aSession ||
-        &aGuardedSession.GetRuntimeSession() != &aSession ||
-        &aGuardedSession.GetSaveGuard() != &processGuard)
-    {
-        return RejectStructuralMismatch(
-            aGuardedSession,
-            aMonitor,
-            aTransactionId);
-    }
-
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    auto lease = fence.TryAcquire(aAttempt.m_runtimeGeneration);
     const auto* active = aSession.GetCoordinator().GetActive();
-    if (!active ||
-        aTransactionId == 0 ||
-        active->TransactionId != aTransactionId ||
-        active->State != PartyQuestRuntimeApplyState::Verifying ||
-        !active->SaveGuardActive ||
-        !active->CheckpointCreated ||
-        !active->RuntimeMutationMayHaveOccurred ||
-        !processGuard.IsActive() ||
-        processGuard.GetTransactionId() != aTransactionId ||
-        aMonitor.GetTransactionId() != aTransactionId ||
-        aMonitor.GetStatus() != PartyQuestRuntimeVerificationMonitorStatus::Waiting ||
-        acRequirement.QuestId != active->QuestId ||
-        !PartyQuestRuntimeCompatibilityPolicy::IsValidRequirement(acRequirement) ||
-        !acSnapshotObserver ||
-        !acCompatibilityObserver)
+    const bool matches = lease && lease->IsValid() && active &&
+        aSession.GetCampaignId() == aAttempt.m_campaignId &&
+        aSession.GetPlayerProfileId() == aAttempt.m_playerProfileId &&
+        active->TransactionId == aAttempt.m_transactionId &&
+        active->TargetWorldRevision == aAttempt.m_targetWorldRevision &&
+        active->QuestId == aAttempt.m_questId && active->Actions == aAttempt.m_actions &&
+        active->ExpectedVerification == aAttempt.m_expected &&
+        active->State == PartyQuestRuntimeApplyState::Verifying &&
+        aMonitor.GetTransactionId() == transactionId &&
+        aMonitor.GetStatus() == PartyQuestRuntimeVerificationMonitorStatus::Waiting;
+    if (!matches)
     {
-        return SubmitInvalidVerification(
-            aGuardedSession,
-            aMonitor,
-            aTransactionId,
-            aNowMs);
+        aAttempt.Invalidate();
+        return BuildResult(aGuarded, aMonitor, transactionId,
+            PartyQuestRuntimeVerificationEvidenceStatus::Stale);
     }
 
-    auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-    const uint64_t generation = generationFence.GetGeneration();
-    auto lease = generationFence.TryAcquire(generation);
-    if (!lease || !lease->IsValid())
+    const auto consumed = aMonitor.ConsumeAttempt(aAttempt.m_attemptId);
+    if (consumed != PartyQuestRuntimeVerificationEvidenceStatus::Accepted)
     {
-        return SubmitInvalidVerification(
-            aGuardedSession,
-            aMonitor,
-            aTransactionId,
-            aNowMs);
+        aAttempt.Invalidate();
+        return BuildResult(aGuarded, aMonitor, transactionId, consumed);
+    }
+    if (acRequirement.QuestId != active->QuestId ||
+        !PartyQuestRuntimeCompatibilityPolicy::IsValidRequirement(acRequirement))
+    {
+        aAttempt.Invalidate();
+        return BuildResult(aGuarded, aMonitor, transactionId,
+            PartyQuestRuntimeVerificationEvidenceStatus::Stale);
+    }
+    if (!acSnapshotObserver || !acCompatibilityObserver)
+    {
+        aAttempt.Invalidate();
+        return BuildResult(aGuarded, aMonitor, transactionId,
+            PartyQuestRuntimeVerificationEvidenceStatus::ObserverUnavailable);
     }
 
     std::optional<QuestSnapshot> snapshot;
@@ -112,64 +158,58 @@ PartyQuestRuntimeGuardedVerificationResult PartyQuestRuntimeVerificationGate::Su
     }
     catch (...)
     {
-        snapshot.reset();
-        facts.reset();
+        aAttempt.Invalidate();
+        return BuildResult(aGuarded, aMonitor, transactionId,
+            PartyQuestRuntimeVerificationEvidenceStatus::ObserverUnavailable);
+    }
+    if (!snapshot || !facts)
+    {
+        aAttempt.Invalidate();
+        return BuildResult(aGuarded, aMonitor, transactionId,
+            PartyQuestRuntimeVerificationEvidenceStatus::ObserverUnavailable);
     }
 
-    if (!snapshot || !facts || generationFence.GetGeneration() != generation)
+    active = aSession.GetCoordinator().GetActive();
+    if (!active || fence.GetGeneration() != aAttempt.m_runtimeGeneration ||
+        active->TransactionId != transactionId ||
+        active->TargetWorldRevision != aAttempt.m_targetWorldRevision ||
+        active->QuestId != aAttempt.m_questId || active->Actions != aAttempt.m_actions ||
+        active->ExpectedVerification != aAttempt.m_expected ||
+        active->State != PartyQuestRuntimeApplyState::Verifying)
     {
-        return SubmitInvalidVerification(
-            aGuardedSession,
-            aMonitor,
-            aTransactionId,
-            aNowMs);
+        aAttempt.Invalidate();
+        return BuildResult(aGuarded, aMonitor, transactionId,
+            PartyQuestRuntimeVerificationEvidenceStatus::Stale);
     }
 
     snapshot->Canonicalize();
-    if (snapshot->QuestId != active->QuestId)
-    {
-        return SubmitInvalidVerification(
-            aGuardedSession,
-            aMonitor,
-            aTransactionId,
-            aNowMs);
-    }
-
-    const auto compatibility =
-        PartyQuestRuntimeCompatibilityPolicy::Evaluate(acRequirement, *facts);
-    if (!compatibility.IsAuthorized() ||
+    const auto compatibility = PartyQuestRuntimeCompatibilityPolicy::Evaluate(
+        acRequirement, *facts);
+    if (snapshot->QuestId != active->QuestId || !compatibility.IsAuthorized() ||
         compatibility.SafetyProfile.GetCompatibilityFingerprint() !=
             active->ExpectedVerification.CompatibilityFingerprint ||
         compatibility.SafetyProfile.GetAdapterMutationComponents() !=
             PartyQuestVerificationComponent::QuestSnapshot)
     {
-        return SubmitInvalidVerification(
-            aGuardedSession,
-            aMonitor,
-            aTransactionId,
-            aNowMs);
+        aAttempt.Invalidate();
+        return SubmitMismatch(aGuarded, aMonitor, transactionId, aNowMs);
     }
 
-    if (!aSession.PrepareVerificationCompatibilityInternal(
-            aTransactionId,
-            generation,
-            compatibility.SafetyProfile))
+    if (!aSession.PrepareVerificationCompatibilityInternal(transactionId,
+            aAttempt.m_runtimeGeneration, compatibility.SafetyProfile))
     {
-        return SubmitInvalidVerification(
-            aGuardedSession,
-            aMonitor,
-            aTransactionId,
-            aNowMs);
+        aAttempt.Invalidate();
+        return BuildResult(aGuarded, aMonitor, transactionId,
+            PartyQuestRuntimeVerificationEvidenceStatus::Stale);
     }
-
-    const auto result = aGuardedSession.SubmitVerificationResnapshot(
-        aMonitor,
-        aTransactionId,
-        aNowMs,
-        std::move(*snapshot));
-
-    // Defensive cleanup if guarded verification rejected the call before the
-    // exact process-owned session could consume its one-shot capability.
+    aAttempt.Invalidate();
+    auto result = aGuarded.SubmitVerificationResnapshot(
+        aMonitor, transactionId, aNowMs, std::move(*snapshot));
     aSession.m_pendingVerificationCompatibility.reset();
+    result.EvidenceStatus = result.Verification == PartyQuestRuntimeVerificationStatus::Stable
+        ? PartyQuestRuntimeVerificationEvidenceStatus::VerifiedSuccess
+        : (result.Verification == PartyQuestRuntimeVerificationStatus::Diverged
+            ? PartyQuestRuntimeVerificationEvidenceStatus::VerifiedMismatch
+            : PartyQuestRuntimeVerificationEvidenceStatus::Accepted);
     return result;
 }
