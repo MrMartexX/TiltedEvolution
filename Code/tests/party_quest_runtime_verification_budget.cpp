@@ -12,6 +12,25 @@
 
 #include <utility>
 
+class PartyQuestRuntimeVerificationAttemptTestAccess
+{
+public:
+    static void SetCampaign(PartyQuestRuntimeVerificationAttempt& aAttempt,
+        PartyQuestCampaignId aCampaign) { aAttempt.m_campaignId = aCampaign; }
+    static void SetPlayer(PartyQuestRuntimeVerificationAttempt& aAttempt,
+        PartyQuestPlayerProfileId aPlayer) { aAttempt.m_playerProfileId = aPlayer; }
+    static void SetGeneration(PartyQuestRuntimeVerificationAttempt& aAttempt,
+        uint64_t aGeneration) { aAttempt.m_runtimeGeneration = aGeneration; }
+    static void SetTransaction(PartyQuestRuntimeVerificationAttempt& aAttempt,
+        uint64_t aTransaction) { aAttempt.m_transactionId = aTransaction; }
+    static void SetRevision(PartyQuestRuntimeVerificationAttempt& aAttempt,
+        uint64_t aRevision) { aAttempt.m_targetWorldRevision = aRevision; }
+    static void SetQuest(PartyQuestRuntimeVerificationAttempt& aAttempt,
+        GameId aQuest) { aAttempt.m_questId = aQuest; }
+    static void SetActions(PartyQuestRuntimeVerificationAttempt& aAttempt,
+        PartyQuestApplyAction aActions) { aAttempt.m_actions = aActions; }
+};
+
 namespace
 {
 const PartyQuestCampaignId kVerificationBudgetCampaign{
@@ -286,6 +305,69 @@ TEST_CASE("Unavailable or partial verification observers remain unknown and leav
     REQUIRE(unknown.Verification == PartyQuestRuntimeVerificationStatus::InvalidState);
     REQUIRE(monitor.GetDivergentSamples() == 0);
     REQUIRE(monitor.GetStatus() == PartyQuestRuntimeVerificationMonitorStatus::Waiting);
+    REQUIRE(session.GetCoordinator().GetActive()->StableCanonicalSamples == 0);
+    REQUIRE(session.GetCoordinator().GetActive()->State ==
+        PartyQuestRuntimeApplyState::Verifying);
+}
+
+TEST_CASE("Verification evidence is rejected when any immutable authority identity is stale", "[quest.party-state.runtime-guard][verification-envelope][identity]")
+{
+    constexpr uint64_t transactionId = 29904;
+    PartyQuestRuntimeProcessOwnerTestScope owner(kVerificationBudgetCampaign,
+        kVerificationBudgetPlayer, "tp_party_quest_verification_identity_29904");
+    auto& guarded = owner.GuardedSession();
+    auto& session = owner.RuntimeSession();
+    const auto compatibility = BuildCompatibility(GameId(96, 0x2903));
+    const auto request = BuildVerificationBudgetRequest(
+        transactionId, 0x2903, compatibility);
+    PartyQuestRuntimeVerificationMonitor monitor;
+    AdvanceToBoundedVerification(guarded, session, request, monitor);
+    auto begin = PartyQuestRuntimeVerificationGate::BeginAttempt(
+        guarded, session, monitor, transactionId);
+    REQUIRE(begin.Attempt.has_value());
+
+    SECTION("campaign")
+    {
+        PartyQuestRuntimeVerificationAttemptTestAccess::SetCampaign(*begin.Attempt,
+            {0x1111111111111111ull, 0x2222222222222222ull});
+    }
+    SECTION("player")
+    {
+        PartyQuestRuntimeVerificationAttemptTestAccess::SetPlayer(*begin.Attempt,
+            {0x3333333333333333ull, 0x4444444444444444ull});
+    }
+    SECTION("generation")
+    {
+        PartyQuestRuntimeVerificationAttemptTestAccess::SetGeneration(*begin.Attempt,
+            PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration() + 1);
+    }
+    SECTION("transaction")
+    {
+        PartyQuestRuntimeVerificationAttemptTestAccess::SetTransaction(
+            *begin.Attempt, transactionId + 1);
+    }
+    SECTION("authoritative revision")
+    {
+        PartyQuestRuntimeVerificationAttemptTestAccess::SetRevision(
+            *begin.Attempt, request.TargetWorldRevision + 1);
+    }
+    SECTION("quest target")
+    {
+        PartyQuestRuntimeVerificationAttemptTestAccess::SetQuest(
+            *begin.Attempt, GameId(96, 0x2904));
+    }
+    SECTION("operation")
+    {
+        PartyQuestRuntimeVerificationAttemptTestAccess::SetActions(
+            *begin.Attempt, PartyQuestApplyAction::StageTransition);
+    }
+
+    const auto stale = SubmitAttempt(guarded, session, monitor,
+        std::move(*begin.Attempt), 130, request.CanonicalSnapshot, compatibility);
+    REQUIRE(stale.EvidenceStatus == PartyQuestRuntimeVerificationEvidenceStatus::Stale);
+    REQUIRE(monitor.GetDivergentSamples() == 0);
+    REQUIRE(monitor.GetStatus() == PartyQuestRuntimeVerificationMonitorStatus::Waiting);
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(session.GetCoordinator().GetActive()->StableCanonicalSamples == 0);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::Verifying);

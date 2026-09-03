@@ -23,6 +23,8 @@
  * Missing observers are Unknown, not mismatch and never success. Duplicate and
  * out-of-order attempts cannot count as independent stable samples.
  */
+class PartyQuestRuntimeVerificationAttemptTestAccess;
+
 class PartyQuestRuntimeVerificationAttempt final
 {
 public:
@@ -77,6 +79,7 @@ public:
 
 private:
     friend class PartyQuestRuntimeVerificationGate;
+    friend class PartyQuestRuntimeVerificationAttemptTestAccess;
 
     void Invalidate() noexcept
     {
