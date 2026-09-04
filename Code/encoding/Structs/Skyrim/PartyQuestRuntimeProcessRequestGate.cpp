@@ -53,6 +53,22 @@ PartyQuestRuntimeProcessRequestGate::PlanLatest(
             return result;
         }
 
+        // Pin the process runtime before the first process-owner dereference.
+        // PrepareAndRelease() uses the exclusive side of this same fence before
+        // Clear(), so every pointer read below remains valid until this planning
+        // attempt returns. Previously owner/session were read first and only then
+        // pinned, leaving a concrete Clear()-vs-dereference lifetime window.
+        auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+        const uint64_t generation = generationFence.GetGeneration();
+        auto generationLease = generationFence.TryAcquire(generation);
+        if (generation == 0 || !generationLease || !generationLease->IsValid())
+        {
+            result.Status =
+                PartyQuestRuntimeProcessRequestStatus::RuntimeGenerationChanged;
+            return result;
+        }
+        result.RuntimeGeneration = generation;
+
         auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
         const auto* pRuntimeSession = owner.GetRuntimeSession();
         if (!owner.IsBound() || !pRuntimeSession)
@@ -93,17 +109,6 @@ PartyQuestRuntimeProcessRequestGate::PlanLatest(
                 PartyQuestRuntimeProcessRequestStatus::RequirementUnavailable;
             return result;
         }
-
-        auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-        const uint64_t generation = generationFence.GetGeneration();
-        auto generationLease = generationFence.TryAcquire(generation);
-        if (generation == 0 || !generationLease || !generationLease->IsValid())
-        {
-            result.Status =
-                PartyQuestRuntimeProcessRequestStatus::RuntimeGenerationChanged;
-            return result;
-        }
-        result.RuntimeGeneration = generation;
 
         if (!MatchesProcessOwnerCampaign(campaignId) ||
             !MatchesLatestCandidate(aInbox, candidate) ||
