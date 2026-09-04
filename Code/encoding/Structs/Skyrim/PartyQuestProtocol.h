@@ -106,6 +106,14 @@ public:
     /** Installs a pre-commit durability barrier. An empty handler disables it. */
     void SetDurableCommitHandler(DurableCommitHandler aHandler);
 
+    /**
+     * Permanently requires a successful durability barrier for every newly
+     * accepted authoritative transaction. Production enables this before any
+     * client can connect; absence of a handler then fails closed instead of
+     * publishing an in-memory-only commit.
+     */
+    void RequireDurableCommits() noexcept { m_durableCommitRequired = true; }
+
     /** Restores validated canonical state before any protocol session is created. */
     [[nodiscard]] bool RestoreCanonicalState(PartyQuestState aState);
 
@@ -165,6 +173,7 @@ private:
 
     PartyQuestState m_state;
     DurableCommitHandler m_durableCommitHandler;
+    bool m_durableCommitRequired{};
     uint64_t m_nextPlanId{1};
     std::unordered_map<uint32_t, Session> m_sessions;
 };

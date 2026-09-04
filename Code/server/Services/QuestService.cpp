@@ -156,12 +156,16 @@ QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
 
 bool QuestService::InitializePartyQuestPersistence() noexcept
 {
+    // Production authoritative acceptance always requires a completed durable
+    // commit. This one-way policy remains active even when persistence is
+    // disabled or initialization fails, so Accepted can never mean RAM-only.
+    m_partyQuestCoordinator.RequireDurableCommits();
     m_partyQuestPersistenceEnabled = bEnablePartyQuestStatePersistence;
     if (!m_partyQuestPersistenceEnabled)
     {
         m_campaignId = PartyQuestCampaignPersistence::GenerateCampaignId();
         spdlog::warn(
-            "PartyQuestProtocol persistence is disabled; campaign={:016X}{:016X} is ephemeral and canonical state will not survive a server restart",
+            "PartyQuestProtocol persistence is disabled; campaign={:016X}{:016X} is ephemeral and authoritative transactions will fail closed",
             m_campaignId.High,
             m_campaignId.Low);
         return true;
