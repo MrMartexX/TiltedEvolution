@@ -183,6 +183,45 @@ TEST_CASE("Failed durable commit is not published cached or applied", "[quest.pa
     REQUIRE(commitAttempts == 2);
 }
 
+TEST_CASE("Production durability policy rejects an authoritative commit without a persistence barrier", "[quest.party-state.persistence.live][durability-required]")
+{
+    PartyQuestProtocolCoordinator coordinator;
+    coordinator.RequireDurableCommits();
+    REQUIRE(coordinator.ConnectClient(4));
+
+    const GameId questId(9, 0x8100);
+    const auto request = BuildLivePersistenceRequest(210, 610, 4, questId, 0, 20);
+
+    const auto unavailable = coordinator.HandleTransaction(4, request);
+    REQUIRE(unavailable.Status == PartyQuestTransactionHandleStatus::PersistenceFailure);
+    REQUIRE(unavailable.Response.Result.Status ==
+        PartyQuestApplyStatus::TransactionConflict);
+    REQUIRE_FALSE(unavailable.Broadcast.has_value());
+    REQUIRE(unavailable.Recipients.empty());
+    REQUIRE(coordinator.GetCanonicalState().GetWorldRevision() == 0);
+    REQUIRE(coordinator.GetCanonicalState().FindQuest(questId) == nullptr);
+
+    size_t commitAttempts{};
+    coordinator.SetDurableCommitHandler(
+        [&commitAttempts](const PartyQuestState&)
+        {
+            ++commitAttempts;
+            return true;
+        });
+    const auto retried = coordinator.HandleTransaction(4, request);
+    REQUIRE(retried.Status == PartyQuestTransactionHandleStatus::Processed);
+    REQUIRE(retried.Response.Result.Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(retried.Broadcast.has_value());
+    REQUIRE(coordinator.GetCanonicalState().GetWorldRevision() == 1);
+    REQUIRE(commitAttempts == 1);
+
+    coordinator.SetDurableCommitHandler({});
+    const auto duplicate = coordinator.HandleTransaction(4, request);
+    REQUIRE(duplicate.Status == PartyQuestTransactionHandleStatus::DuplicateRequest);
+    REQUIRE(duplicate.Response == retried.Response);
+    REQUIRE(coordinator.GetCanonicalState().GetWorldRevision() == 1);
+}
+
 TEST_CASE("Canonical restore is only allowed before coordinator sessions exist", "[quest.party-state.persistence.live]")
 {
     const GameId questId(10, 0x9000);

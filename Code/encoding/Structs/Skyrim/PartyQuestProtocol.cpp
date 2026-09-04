@@ -253,16 +253,20 @@ PartyQuestTransactionDispatch PartyQuestProtocolCoordinator::HandleTransaction(
     PartyQuestState candidateState = m_state;
     const PartyQuestApplyResult candidateResult = candidateState.Apply(acRequest.Transaction);
 
-    if (candidateResult.Status == PartyQuestApplyStatus::Accepted && m_durableCommitHandler)
+    if (candidateResult.Status == PartyQuestApplyStatus::Accepted &&
+        (m_durableCommitRequired || m_durableCommitHandler))
     {
         bool committed = false;
-        try
+        if (m_durableCommitHandler)
         {
-            committed = m_durableCommitHandler(candidateState);
-        }
-        catch (...)
-        {
-            committed = false;
+            try
+            {
+                committed = m_durableCommitHandler(candidateState);
+            }
+            catch (...)
+            {
+                committed = false;
+            }
         }
 
         if (!committed)
