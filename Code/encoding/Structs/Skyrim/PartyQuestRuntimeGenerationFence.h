@@ -26,10 +26,11 @@ public:
     class ExecutionLease final
     {
     public:
-        ExecutionLease(ExecutionLease&&) noexcept = default;
-        ExecutionLease& operator=(ExecutionLease&&) noexcept = default;
+        ExecutionLease(ExecutionLease&& aOther) noexcept;
+        ExecutionLease& operator=(ExecutionLease&& aOther) noexcept;
         ExecutionLease(const ExecutionLease&) = delete;
         ExecutionLease& operator=(const ExecutionLease&) = delete;
+        ~ExecutionLease() noexcept;
 
         [[nodiscard]] uint64_t GetGeneration() const noexcept
         {
@@ -38,7 +39,7 @@ public:
 
         [[nodiscard]] bool IsValid() const noexcept
         {
-            return m_lock.owns_lock() && m_generation != 0;
+            return m_lock.owns_lock() && m_generation != 0 && m_owner != nullptr;
         }
 
     private:
@@ -46,13 +47,13 @@ public:
 
         ExecutionLease(
             std::shared_lock<std::shared_mutex>&& aLock,
-            uint64_t aGeneration) noexcept
-            : m_lock(std::move(aLock))
-            , m_generation(aGeneration)
-        {
-        }
+            uint64_t aGeneration,
+            const PartyQuestRuntimeGenerationFence* apOwner) noexcept;
+
+        void ReleaseThreadRegistration() noexcept;
 
         std::shared_lock<std::shared_mutex> m_lock;
+        const PartyQuestRuntimeGenerationFence* m_owner{};
         uint64_t m_generation{};
     };
 
@@ -110,6 +111,13 @@ public:
         return m_poisoned.load(std::memory_order_acquire);
     }
 
+    /**
+     * True only while the calling thread owns a shared execution lease on the
+     * process fence. Lifecycle code uses this to reject reentrant invalidation
+     * instead of self-deadlocking on std::shared_mutex.
+     */
+    [[nodiscard]] bool IsExecutionLeaseHeldByCurrentThread() const noexcept;
+
     /** Advance the generation and release the invalidation barrier immediately. */
     [[nodiscard]] uint64_t Invalidate() noexcept;
 
@@ -117,6 +125,8 @@ public:
      * Tries to acquire the exclusive lifecycle/resolver barrier. Any mutex-layer
      * exception irreversibly poisons this fence so future runtime dispatch is
      * denied rather than continuing without a proven synchronization domain.
+     * Reentrant invalidation from a process execution callback fails closed
+     * without waiting on its own shared lease.
      */
     [[nodiscard]] std::optional<InvalidationLease>
     TryBeginInvalidation() noexcept;
@@ -148,8 +158,13 @@ private:
         m_poisoned.store(true, std::memory_order_release);
     }
 
+    void RegisterExecutionLeaseOnCurrentThread() const noexcept;
+    void UnregisterExecutionLeaseOnCurrentThread() const noexcept;
+
     [[nodiscard]] uint64_t AdvanceGenerationLocked() noexcept;
     [[nodiscard]] uint64_t AllocateLifecycleTicketLocked() noexcept;
+
+    static thread_local uint32_t s_processExecutionLeaseDepth;
 
     mutable std::shared_mutex m_mutex;
     mutable std::atomic_bool m_poisoned{false};
