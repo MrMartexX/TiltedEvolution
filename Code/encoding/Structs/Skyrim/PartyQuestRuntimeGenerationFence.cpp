@@ -1,5 +1,57 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 
+thread_local uint32_t
+    PartyQuestRuntimeGenerationFence::s_processExecutionLeaseDepth = 0;
+
+PartyQuestRuntimeGenerationFence::ExecutionLease::ExecutionLease(
+    std::shared_lock<std::shared_mutex>&& aLock,
+    uint64_t aGeneration,
+    const PartyQuestRuntimeGenerationFence* apOwner) noexcept
+    : m_lock(std::move(aLock))
+    , m_owner(apOwner)
+    , m_generation(aGeneration)
+{
+    if (m_owner)
+        m_owner->RegisterExecutionLeaseOnCurrentThread();
+}
+
+PartyQuestRuntimeGenerationFence::ExecutionLease::ExecutionLease(
+    ExecutionLease&& aOther) noexcept
+    : m_lock(std::move(aOther.m_lock))
+    , m_owner(std::exchange(aOther.m_owner, nullptr))
+    , m_generation(std::exchange(aOther.m_generation, 0))
+{
+}
+
+PartyQuestRuntimeGenerationFence::ExecutionLease&
+PartyQuestRuntimeGenerationFence::ExecutionLease::operator=(
+    ExecutionLease&& aOther) noexcept
+{
+    if (this == &aOther)
+        return *this;
+
+    ReleaseThreadRegistration();
+    m_lock = std::move(aOther.m_lock);
+    m_owner = std::exchange(aOther.m_owner, nullptr);
+    m_generation = std::exchange(aOther.m_generation, 0);
+    return *this;
+}
+
+PartyQuestRuntimeGenerationFence::ExecutionLease::~ExecutionLease() noexcept
+{
+    ReleaseThreadRegistration();
+}
+
+void PartyQuestRuntimeGenerationFence::ExecutionLease::ReleaseThreadRegistration() noexcept
+{
+    if (!m_owner)
+        return;
+
+    m_owner->UnregisterExecutionLeaseOnCurrentThread();
+    m_owner = nullptr;
+    m_generation = 0;
+}
+
 PartyQuestRuntimeGenerationFence&
 PartyQuestRuntimeGenerationFence::GetProcessFence() noexcept
 {
@@ -7,10 +59,33 @@ PartyQuestRuntimeGenerationFence::GetProcessFence() noexcept
     return s_processFence;
 }
 
+void PartyQuestRuntimeGenerationFence::RegisterExecutionLeaseOnCurrentThread() const noexcept
+{
+    if (this == &GetProcessFence())
+        ++s_processExecutionLeaseDepth;
+}
+
+void PartyQuestRuntimeGenerationFence::UnregisterExecutionLeaseOnCurrentThread() const noexcept
+{
+    if (this == &GetProcessFence() && s_processExecutionLeaseDepth != 0)
+        --s_processExecutionLeaseDepth;
+}
+
+bool PartyQuestRuntimeGenerationFence::IsExecutionLeaseHeldByCurrentThread() const noexcept
+{
+    return this == &GetProcessFence() && s_processExecutionLeaseDepth != 0;
+}
+
 uint64_t PartyQuestRuntimeGenerationFence::GetGeneration() const noexcept
 {
     if (IsPoisoned())
         return 0;
+
+    // The calling thread already owns the shared side of m_mutex. Re-locking a
+    // std::shared_mutex recursively is not a portable operation, while the held
+    // lease already guarantees that no writer can change m_generation.
+    if (IsExecutionLeaseHeldByCurrentThread())
+        return m_generation;
 
     try
     {
@@ -53,7 +128,7 @@ uint64_t PartyQuestRuntimeGenerationFence::Invalidate() noexcept
 std::optional<PartyQuestRuntimeGenerationFence::InvalidationLease>
 PartyQuestRuntimeGenerationFence::TryBeginInvalidation() noexcept
 {
-    if (IsPoisoned())
+    if (IsPoisoned() || IsExecutionLeaseHeldByCurrentThread())
         return std::nullopt;
 
     try
@@ -82,7 +157,7 @@ PartyQuestRuntimeGenerationFence::BeginInvalidation() noexcept
 PartyQuestRuntimeGenerationFence::LifecycleTransitionTicket
 PartyQuestRuntimeGenerationFence::BeginLifecycleTransition() noexcept
 {
-    if (IsPoisoned())
+    if (IsPoisoned() || IsExecutionLeaseHeldByCurrentThread())
         return {};
 
     try
@@ -105,8 +180,11 @@ PartyQuestRuntimeGenerationFence::BeginLifecycleTransition() noexcept
 bool PartyQuestRuntimeGenerationFence::CompleteLifecycleTransition(
     LifecycleTransitionTicket aTicket) noexcept
 {
-    if (!aTicket.IsValid() || IsPoisoned())
+    if (!aTicket.IsValid() || IsPoisoned() ||
+        IsExecutionLeaseHeldByCurrentThread())
+    {
         return false;
+    }
 
     try
     {
@@ -128,6 +206,9 @@ bool PartyQuestRuntimeGenerationFence::IsLifecycleTransitionPending() const noex
 {
     if (IsPoisoned())
         return true;
+
+    if (IsExecutionLeaseHeldByCurrentThread())
+        return m_lifecycleTicket != 0;
 
     try
     {
@@ -157,7 +238,7 @@ PartyQuestRuntimeGenerationFence::TryAcquire(
             return std::nullopt;
         }
 
-        return ExecutionLease(std::move(lock), aExpectedGeneration);
+        return ExecutionLease(std::move(lock), aExpectedGeneration, this);
     }
     catch (...)
     {
