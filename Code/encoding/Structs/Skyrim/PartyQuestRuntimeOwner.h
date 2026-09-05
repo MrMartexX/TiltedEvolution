@@ -6,7 +6,6 @@
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
