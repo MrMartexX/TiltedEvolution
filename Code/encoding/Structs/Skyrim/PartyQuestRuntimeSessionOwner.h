@@ -47,6 +47,19 @@ struct PartyQuestRuntimeSessionOwnerBindResult
             Status == PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked;
     }
 
+    /**
+     * A retained owner is not necessarily safe to admit new runtime work. Durable
+     * recovery deliberately retains both the session and SaveGuard, so physical
+     * ownership (IsBound) must remain distinct from admission readiness.
+     */
+    [[nodiscard]] bool IsReadyForAdmission() const noexcept
+    {
+        return (Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound ||
+                Status == PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound) &&
+            ReconcileStatus == PartyQuestRuntimeGuardStatus::Ready &&
+            !GuardHeld;
+    }
+
     [[nodiscard]] bool RecoveryRequired() const noexcept
     {
         return Store.Status == PartyQuestRuntimeSessionStoreStatus::RecoveryRequired;

@@ -639,6 +639,7 @@ TEST_CASE("Runtime session owner reconstructs process guard for durable recovery
         PartyQuestRuntimeSessionStoreStatus::RecoveryRequired);
     REQUIRE(bound.RecoveryRequired());
     REQUIRE(bound.GuardHeld);
+    REQUIRE_FALSE(bound.IsReadyForAdmission());
     REQUIRE(owner.IsBound());
     REQUIRE(owner.IsRecoveryBlocked());
     REQUIRE(processGuard.GetTransactionId() == transactionId);

@@ -267,6 +267,17 @@ PartyQuestRuntimeLifecycleFenceResult
 PartyQuestRuntimeSessionOwner::PrepareAndRelease(
     PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 {
+    const bool processOwner = this == &GetProcessOwner();
+    if (processOwner)
+    {
+        // Revoke aggregate admission before entering the exclusive barrier. A
+        // synchronous lifecycle callback may run while this thread holds an
+        // execution lease, in which case TryBeginInvalidation must fail rather
+        // than deadlock; admission nevertheless remains closed.
+        PartyQuestRuntimeOwner::GetProcessOwner()
+            .CloseSessionLifecycleAdmission(aEvent);
+    }
+
     auto generationInvalidation =
         PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
     if (!generationInvalidation || !generationInvalidation->IsValid())
@@ -278,19 +289,11 @@ PartyQuestRuntimeSessionOwner::PrepareAndRelease(
         return result;
     }
 
-    const bool processOwner = this == &GetProcessOwner();
-    const uint64_t generation = generationInvalidation->GetGeneration();
-
     if (!IsBound())
     {
         PartyQuestRuntimeLifecycleFenceResult result;
         result.Event = aEvent;
         result.Status = PartyQuestRuntimeLifecycleFenceStatus::Allowed;
-        if (processOwner)
-        {
-            PartyQuestRuntimeOwner::GetProcessOwner()
-                .ObserveSessionLifecycleBoundary(aEvent, generation);
-        }
         return result;
     }
 
@@ -300,14 +303,6 @@ PartyQuestRuntimeSessionOwner::PrepareAndRelease(
     if (result.CanProceed())
         Clear();
 
-    // Close aggregate admission even when durable recovery prevents the external
-    // lifecycle boundary from being considered clean. A disconnect/shutdown is
-    // not a reason to let new Skyrim work enter a recovery-blocked owner.
-    if (processOwner)
-    {
-        PartyQuestRuntimeOwner::GetProcessOwner()
-            .ObserveSessionLifecycleBoundary(aEvent, generation);
-    }
     return result;
 }
 

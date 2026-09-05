@@ -12,7 +12,6 @@
 #include <PlayerCharacter.h>
 #include <Services/QuestService.h>
 #include <Structs/Skyrim/PartyQuestPlayerProfileLineage.h>
-#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeOwner.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionBootstrap.h>
 #include <World.h>
@@ -153,17 +152,14 @@ void PartyQuestRuntimeOwnerService::OnUpdate(const UpdateEvent&) noexcept
         return;
 
     TryBootstrap();
-
-    // Deferred runtime work is executed only from the client update thread. The
-    // owner itself supplies the generation execution lease across validation and
-    // callback entry; a lifecycle boundary therefore blocks before Skyrim access.
-    (void)owner.ExecuteNext();
 }
 
 void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
 {
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     if (owner.IsShutdown() || !m_world.GetPartyService().IsInParty())
+        return;
+    if (owner.IsAcceptingOperations())
         return;
 
     const auto now = std::chrono::steady_clock::now();
@@ -183,22 +179,21 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
     if (sessionOwner.IsBound())
     {
         const auto* pSession = sessionOwner.GetRuntimeSession();
-        if (pSession && pSession->GetCampaignId() == *campaign)
+        if (!pSession || pSession->GetCampaignId() != *campaign)
         {
-            owner.MarkRuntimeSessionBound(
-                PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration());
-            return;
-        }
-
-        const auto switched = sessionOwner.PrepareAndRelease(
-            PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
-        if (!switched.CanProceed())
-        {
-            LogLifecycleFailure("campaign-switch-bootstrap", switched);
-            return;
+            const auto switched = sessionOwner.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
+            if (!switched.CanProceed())
+            {
+                LogLifecycleFailure("campaign-switch-bootstrap", switched);
+                return;
+            }
         }
     }
 
+    // Resolve lineage on every admission attempt, including an already-owned
+    // campaign. LoadGame can change the exact character while campaign and form
+    // identifiers remain equal; physical owner reuse is not fresh authority.
     const auto lineage = PartyQuestSkyrimPlayerProfileLineageResolver::Resolve();
     if (!lineage.IsVerified())
         return;
@@ -220,19 +215,12 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
         return;
     }
 
-    PartyQuestRuntimeSessionBootstrapResult bootstrap;
-    const auto aggregate = owner.RunBootstrap(
-        lineage.GetRuntimeGeneration(),
-        [&]()
-        {
-            bootstrap = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
-                root,
-                *campaign,
-                lineage);
-            return bootstrap.IsBound();
-        });
+    const auto bootstrap = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
+        root,
+        *campaign,
+        lineage);
 
-    if (aggregate.Status == PartyQuestRuntimeOwner::BootstrapStatus::Bound)
+    if (bootstrap.IsBound())
     {
         spdlog::info(
             "PartyQuestRuntimeOwner production bootstrap bound: campaign={:016X}{:016X} profile={:016X}{:016X} generation={}",
@@ -240,23 +228,16 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
             campaign->Low,
             lineage.GetProfileId().High,
             lineage.GetProfileId().Low,
-            aggregate.RuntimeGeneration);
-        return;
-    }
-
-    if (aggregate.Status == PartyQuestRuntimeOwner::BootstrapStatus::Exception)
-    {
-        spdlog::error("PartyQuestRuntimeOwner bootstrap callback threw; admission remains closed");
+            lineage.GetRuntimeGeneration());
         return;
     }
 
     if (bootstrap.Status != PartyQuestRuntimeSessionBootstrapStatus::UnverifiedPlayerProfile)
     {
         spdlog::debug(
-            "PartyQuestRuntimeOwner bootstrap rejected fail-closed: aggregateStatus={} bootstrapStatus={} ownerStatus={} generation={}",
-            static_cast<uint32_t>(aggregate.Status),
+            "PartyQuestRuntimeOwner bootstrap rejected fail-closed: bootstrapStatus={} ownerStatus={} generation={}",
             static_cast<uint32_t>(bootstrap.Status),
             static_cast<uint32_t>(bootstrap.Owner.Status),
-            aggregate.RuntimeGeneration);
+            lineage.GetRuntimeGeneration());
     }
 }

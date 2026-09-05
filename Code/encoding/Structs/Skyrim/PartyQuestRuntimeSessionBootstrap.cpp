@@ -90,15 +90,26 @@ PartyQuestRuntimeSessionBootstrap::BindProcessOwnerInternal(
             acCampaignId,
             acPlayerProfile.GetProfileId(),
             *paths);
-        result.Status = result.Owner.IsBound()
-            ? PartyQuestRuntimeSessionBootstrapStatus::Bound
-            : PartyQuestRuntimeSessionBootstrapStatus::OwnerRejected;
-
-        if (result.IsBound())
+        if (!result.Owner.IsReadyForAdmission())
         {
-            runtimeOwner.MarkRuntimeSessionBound(
-                generationLease->GetGeneration());
+            result.Status = result.Owner.IsBound()
+                ? PartyQuestRuntimeSessionBootstrapStatus::OwnerRecoveryBlocked
+                : PartyQuestRuntimeSessionBootstrapStatus::OwnerRejected;
+            return result;
         }
+
+        if (!runtimeOwner.PublishRuntimeSessionBound(
+                generationLease->GetGeneration(),
+                acCampaignId,
+                acPlayerProfile.GetProfileId(),
+                result.Owner))
+        {
+            result.Status =
+                PartyQuestRuntimeSessionBootstrapStatus::RuntimeGenerationUnavailable;
+            return result;
+        }
+
+        result.Status = PartyQuestRuntimeSessionBootstrapStatus::Bound;
         return result;
     }
     catch (...)

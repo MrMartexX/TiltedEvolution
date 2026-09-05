@@ -865,3 +865,10 @@ const PartyQuestDeferredWorldEntry* PartyQuestDeferredWorldQueue::FindByTransact
         return nullptr;
     return FindByQuest(transactionIt->second);
 }
+
+void PartyQuestDeferredWorldQueue::Clear() noexcept
+{
+    m_entries.clear();
+    m_transactionQuests.clear();
+    m_transactionFingerprints.clear();
+}

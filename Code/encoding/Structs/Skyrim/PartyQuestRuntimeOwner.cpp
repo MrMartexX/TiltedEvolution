@@ -2,24 +2,30 @@
 
 #include <utility>
 
-PartyQuestRuntimeOwner::PartyQuestRuntimeOwner() noexcept
+namespace
 {
-    try
+bool ClosesAdmission(PartyQuestRuntimeOwner::ClientBoundary aBoundary) noexcept
+{
+    switch (aBoundary)
     {
-        m_callbackLifetime = std::make_shared<CallbackLifetime>();
-        m_callbackLifetime->Owner = this;
-        m_callbackLifetime->Alive = true;
+    case PartyQuestRuntimeOwner::ClientBoundary::Disconnected:
+    case PartyQuestRuntimeOwner::ClientBoundary::PartyLeft:
+    case PartyQuestRuntimeOwner::ClientBoundary::CampaignChanged:
+    case PartyQuestRuntimeOwner::ClientBoundary::RuntimeIdentityChanged:
+    case PartyQuestRuntimeOwner::ClientBoundary::Shutdown:
+        return true;
+    case PartyQuestRuntimeOwner::ClientBoundary::Connected:
+    case PartyQuestRuntimeOwner::ClientBoundary::PartyJoined:
+        return false;
     }
-    catch (...)
-    {
-        m_callbackLifetime.reset();
-        m_shutdown = true;
-    }
+    return true;
 }
+} // namespace
+
+PartyQuestRuntimeOwner::PartyQuestRuntimeOwner() noexcept = default;
 
 PartyQuestRuntimeOwner::~PartyQuestRuntimeOwner() noexcept
 {
-    CloseCallbackLifetime();
     m_compatibilityEnvironment.Stop();
 
     std::lock_guard lock(m_mutex);
@@ -28,7 +34,9 @@ PartyQuestRuntimeOwner::~PartyQuestRuntimeOwner() noexcept
     m_inParty = false;
     m_runtimeSessionBound = false;
     m_boundGeneration = 0;
-    m_deferredOperations.clear();
+    m_deferredWorld.Clear();
+    m_boundCampaignId.reset();
+    m_boundPlayerProfileId.reset();
     m_skyrimObserver = {};
     m_papyrusObserver = {};
     m_executor = {};
@@ -44,12 +52,25 @@ PartyQuestRuntimeOwner& PartyQuestRuntimeOwner::GetProcessOwner() noexcept
 PartyQuestRuntimeOwner::BoundaryStatus
 PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
 {
+    const bool closeBeforeFence = ClosesAdmission(aBoundary);
     if (aBoundary != ClientBoundary::Shutdown)
     {
         std::lock_guard lock(m_mutex);
         if (m_shutdown)
             return BoundaryStatus::AlreadyShutdown;
     }
+
+    // Revocation is local and non-blocking. Perform it before attempting the
+    // exclusive fence so reentrant lifecycle notification cannot leave the old
+    // admission epoch open when this thread already holds an execution lease.
+    if (closeBeforeFence)
+    {
+        std::lock_guard lock(m_mutex);
+        ApplyBoundaryStateLocked(aBoundary);
+    }
+
+    if (aBoundary == ClientBoundary::Shutdown)
+        m_compatibilityEnvironment.Stop();
 
     auto invalidation =
         PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
@@ -60,18 +81,15 @@ PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
         std::lock_guard lock(m_mutex);
         if (m_shutdown && aBoundary != ClientBoundary::Shutdown)
             return BoundaryStatus::AlreadyShutdown;
-        ApplyBoundaryStateLocked(aBoundary, invalidation->GetGeneration());
+        if (!closeBeforeFence)
+            ApplyBoundaryStateLocked(aBoundary);
     }
-
-    if (aBoundary == ClientBoundary::Shutdown)
-        m_compatibilityEnvironment.Stop();
 
     return BoundaryStatus::Applied;
 }
 
-void PartyQuestRuntimeOwner::ObserveSessionLifecycleBoundary(
-    PartyQuestRuntimeLifecycleEvent aEvent,
-    uint64_t aGeneration) noexcept
+void PartyQuestRuntimeOwner::CloseSessionLifecycleAdmission(
+    PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 {
     ClientBoundary boundary = ClientBoundary::RuntimeIdentityChanged;
     switch (aEvent)
@@ -98,75 +116,48 @@ void PartyQuestRuntimeOwner::ObserveSessionLifecycleBoundary(
 
     {
         std::lock_guard lock(m_mutex);
-        ApplyBoundaryStateLocked(boundary, aGeneration);
+        ApplyBoundaryStateLocked(boundary);
     }
 
     if (boundary == ClientBoundary::Shutdown)
         m_compatibilityEnvironment.Stop();
 }
 
-void PartyQuestRuntimeOwner::MarkRuntimeSessionBound(uint64_t aGeneration) noexcept
+bool PartyQuestRuntimeOwner::PublishRuntimeSessionBound(
+    uint64_t aGeneration,
+    const PartyQuestCampaignId& acCampaignId,
+    const PartyQuestPlayerProfileId& acPlayerProfileId,
+    const PartyQuestRuntimeSessionOwnerBindResult& acBindResult) noexcept
 {
-    if (aGeneration == 0 ||
-        PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration() != aGeneration)
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    if (aGeneration == 0 || !acCampaignId.IsValid() ||
+        !acPlayerProfileId.IsValid() || !acBindResult.IsReadyForAdmission() ||
+        !fence.IsExecutionLeaseHeldByCurrentThread() ||
+        fence.GetGeneration() != aGeneration || !m_sessionOwner.IsBound() ||
+        m_sessionOwner.IsRecoveryBlocked())
     {
-        return;
+        return false;
+    }
+
+    const auto* pSession = m_sessionOwner.GetRuntimeSession();
+    if (!pSession || pSession->GetCampaignId() != acCampaignId ||
+        pSession->GetPlayerProfileId() != acPlayerProfileId)
+    {
+        return false;
     }
 
     std::lock_guard lock(m_mutex);
-    if (m_shutdown || !m_sessionOwner.IsBound())
-        return;
+    if (m_shutdown || fence.GetGeneration() != aGeneration ||
+        !m_sessionOwner.IsBound() || m_sessionOwner.IsRecoveryBlocked())
+    {
+        return false;
+    }
 
     m_runtimeSessionBound = true;
     m_boundGeneration = aGeneration;
-}
-
-PartyQuestRuntimeOwner::BootstrapResult PartyQuestRuntimeOwner::RunBootstrap(
-    uint64_t aExpectedGeneration,
-    const BootstrapAction& acAction) noexcept
-{
-    BootstrapResult result;
-    result.RuntimeGeneration = aExpectedGeneration;
-    if (aExpectedGeneration == 0 || !acAction)
-        return result;
-
-    {
-        std::lock_guard lock(m_mutex);
-        if (m_shutdown)
-            return result;
-    }
-
-    try
-    {
-        if (!acAction())
-            return result;
-    }
-    catch (...)
-    {
-        result.Status = BootstrapStatus::Exception;
-        return result;
-    }
-
-    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-    if (fence.GetGeneration() != aExpectedGeneration ||
-        !m_sessionOwner.IsBound())
-    {
-        result.Status = BootstrapStatus::StaleGeneration;
-        return result;
-    }
-
-    MarkRuntimeSessionBound(aExpectedGeneration);
-    {
-        std::lock_guard lock(m_mutex);
-        if (!m_runtimeSessionBound || m_boundGeneration != aExpectedGeneration)
-        {
-            result.Status = BootstrapStatus::StaleGeneration;
-            return result;
-        }
-    }
-
-    result.Status = BootstrapStatus::Bound;
-    return result;
+    m_boundCampaignId = acCampaignId;
+    m_boundPlayerProfileId = acPlayerProfileId;
+    return true;
 }
 
 void PartyQuestRuntimeOwner::ConfigureRuntimeAdapters(
@@ -197,146 +188,13 @@ void PartyQuestRuntimeOwner::ClearRuntimeAdapters() noexcept
     m_executor = {};
 }
 
-PartyQuestRuntimeOwner::EnqueueResult PartyQuestRuntimeOwner::Enqueue(
-    Validation aValidation,
-    Operation aOperation) noexcept
-{
-    EnqueueResult result;
-    if (!aValidation || !aOperation)
-        return result;
-
-    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-    const uint64_t generation = fence.GetGeneration();
-    auto lease = fence.TryAcquire(generation);
-    if (generation == 0 || !lease || !lease->IsValid())
-    {
-        result.Status = EnqueueStatus::SynchronizationFailed;
-        return result;
-    }
-
-    try
-    {
-        std::lock_guard lock(m_mutex);
-        if (!CanAcceptLocked() || !m_sessionOwner.IsBound() ||
-            m_boundGeneration != generation)
-        {
-            result.Status = EnqueueStatus::AdmissionClosed;
-            return result;
-        }
-        if (m_deferredOperations.size() >= MaxDeferredOperations)
-        {
-            result.Status = EnqueueStatus::ResourceLimitExceeded;
-            return result;
-        }
-
-        uint64_t operationId = m_nextOperationId++;
-        if (operationId == 0)
-            operationId = m_nextOperationId++;
-
-        DeferredOperation deferred;
-        deferred.OperationId = operationId;
-        deferred.RuntimeGeneration = generation;
-        deferred.OwnerEpoch = m_ownerEpoch;
-        deferred.Validate = std::move(aValidation);
-        deferred.Execute = std::move(aOperation);
-        m_deferredOperations.emplace_back(std::move(deferred));
-
-        result.Status = EnqueueStatus::Queued;
-        result.OperationId = operationId;
-        result.RuntimeGeneration = generation;
-        result.OwnerEpoch = m_ownerEpoch;
-        return result;
-    }
-    catch (...)
-    {
-        result.Status = EnqueueStatus::InvalidOperation;
-        return result;
-    }
-}
-
-PartyQuestRuntimeOwner::ExecuteStatus PartyQuestRuntimeOwner::ExecuteNext() noexcept
-{
-    DeferredOperation deferred;
-    try
-    {
-        std::lock_guard lock(m_mutex);
-        if (m_deferredOperations.empty())
-            return ExecuteStatus::Empty;
-        deferred = std::move(m_deferredOperations.front());
-        m_deferredOperations.pop_front();
-    }
-    catch (...)
-    {
-        return ExecuteStatus::CallbackFailed;
-    }
-
-    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-    auto lease = fence.TryAcquire(deferred.RuntimeGeneration);
-    if (!lease || !lease->IsValid())
-        return ExecuteStatus::StaleGeneration;
-
-    {
-        std::lock_guard lock(m_mutex);
-        if (!CanAcceptLocked() || !m_sessionOwner.IsBound())
-            return ExecuteStatus::AdmissionClosed;
-        if (deferred.OwnerEpoch != m_ownerEpoch ||
-            deferred.RuntimeGeneration != m_boundGeneration ||
-            lease->GetGeneration() != deferred.RuntimeGeneration)
-        {
-            return ExecuteStatus::StaleGeneration;
-        }
-    }
-
-    bool validated = false;
-    try
-    {
-        validated = deferred.Validate();
-    }
-    catch (...)
-    {
-        return ExecuteStatus::CallbackFailed;
-    }
-    if (!validated)
-        return ExecuteStatus::ValidationRejected;
-
-    try
-    {
-        deferred.Execute();
-        return ExecuteStatus::Executed;
-    }
-    catch (...)
-    {
-        return ExecuteStatus::CallbackFailed;
-    }
-}
-
-std::function<void()> PartyQuestRuntimeOwner::MakeExecuteNextCallback() noexcept
-{
-    try
-    {
-        std::weak_ptr<CallbackLifetime> lifetime = m_callbackLifetime;
-        return [lifetime]() noexcept
-        {
-            const auto locked = lifetime.lock();
-            if (!locked)
-                return;
-
-            std::lock_guard callbackLock(locked->Mutex);
-            if (!locked->Alive || !locked->Owner)
-                return;
-            (void)locked->Owner->ExecuteNext();
-        };
-    }
-    catch (...)
-    {
-        return {};
-    }
-}
-
 bool PartyQuestRuntimeOwner::IsAcceptingOperations() const noexcept
 {
+    const uint64_t generation =
+        PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
     std::lock_guard lock(m_mutex);
-    return CanAcceptLocked() && m_sessionOwner.IsBound();
+    return generation != 0 && m_boundGeneration == generation &&
+        CanAcceptLocked();
 }
 
 bool PartyQuestRuntimeOwner::IsShutdown() const noexcept
@@ -354,7 +212,7 @@ uint64_t PartyQuestRuntimeOwner::GetOwnerEpoch() const noexcept
 size_t PartyQuestRuntimeOwner::GetPendingOperationCount() const noexcept
 {
     std::lock_guard lock(m_mutex);
-    return m_deferredOperations.size();
+    return m_deferredWorld.GetPendingCount();
 }
 
 bool PartyQuestRuntimeOwner::ObserveSkyrimRuntime() noexcept
@@ -443,16 +301,17 @@ PartyQuestRuntimeOwner::ObservePapyrusRuntime(uint64_t aTransactionId) noexcept
 }
 
 void PartyQuestRuntimeOwner::ApplyBoundaryStateLocked(
-    ClientBoundary aBoundary,
-    uint64_t aGeneration) noexcept
+    ClientBoundary aBoundary) noexcept
 {
     ++m_ownerEpoch;
     if (m_ownerEpoch == 0)
         m_ownerEpoch = 1;
 
-    m_deferredOperations.clear();
+    m_deferredWorld.Clear();
     m_runtimeSessionBound = false;
     m_boundGeneration = 0;
+    m_boundCampaignId.reset();
+    m_boundPlayerProfileId.reset();
 
     switch (aBoundary)
     {
@@ -482,26 +341,19 @@ void PartyQuestRuntimeOwner::ApplyBoundaryStateLocked(
         m_executor = {};
         break;
     }
-
-    (void)aGeneration;
 }
 
 bool PartyQuestRuntimeOwner::CanAcceptLocked() const noexcept
 {
-    return !m_shutdown && m_connected && m_inParty &&
-        m_runtimeSessionBound && m_boundGeneration != 0;
-}
-
-void PartyQuestRuntimeOwner::CloseCallbackLifetime() noexcept
-{
-    const auto lifetime = m_callbackLifetime;
-    if (!lifetime)
-        return;
-
+    if (m_shutdown || !m_connected || !m_inParty ||
+        !m_runtimeSessionBound || m_boundGeneration == 0 ||
+        !m_boundCampaignId || !m_boundPlayerProfileId ||
+        !m_sessionOwner.IsBound() || m_sessionOwner.IsRecoveryBlocked())
     {
-        std::lock_guard callbackLock(lifetime->Mutex);
-        lifetime->Alive = false;
-        lifetime->Owner = nullptr;
+        return false;
     }
-    m_callbackLifetime.reset();
+
+    const auto* pSession = m_sessionOwner.GetRuntimeSession();
+    return pSession && pSession->GetCampaignId() == *m_boundCampaignId &&
+        pSession->GetPlayerProfileId() == *m_boundPlayerProfileId;
 }

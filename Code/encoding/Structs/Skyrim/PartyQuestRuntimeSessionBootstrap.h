@@ -21,6 +21,7 @@ enum class PartyQuestRuntimeSessionBootstrapStatus : uint8_t
     InvalidReplicaRoot,
     InvalidLayout,
     LifecycleCoverageIncomplete,
+    OwnerRecoveryBlocked,
     OwnerRejected
 };
 
@@ -33,7 +34,7 @@ struct PartyQuestRuntimeSessionBootstrapResult
     [[nodiscard]] bool IsBound() const noexcept
     {
         return Status == PartyQuestRuntimeSessionBootstrapStatus::Bound &&
-            Owner.IsBound();
+            Owner.IsReadyForAdmission();
     }
 };
 

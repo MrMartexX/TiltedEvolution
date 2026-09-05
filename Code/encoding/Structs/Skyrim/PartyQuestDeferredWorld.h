@@ -201,6 +201,9 @@ public:
     [[nodiscard]] const PartyQuestDeferredWorldEntry* FindByTransaction(
         uint64_t aTransactionId) const noexcept;
 
+    /** Retires every pending and remembered identity at an owner boundary. */
+    void Clear() noexcept;
+
     [[nodiscard]] size_t GetPendingCount() const noexcept { return m_entries.size(); }
     [[nodiscard]] size_t GetRememberedTransactionCount() const noexcept
     {

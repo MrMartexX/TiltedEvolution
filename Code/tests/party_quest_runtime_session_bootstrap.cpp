@@ -415,6 +415,65 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Bound campaign reuse never substitutes for fresh character lineage authority",
+    "[quest.party-state.runtime-bootstrap][identity][generation][aba]")
+{
+    BootstrapSandbox sandbox;
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+
+    const auto originalAuthorization = IssueForCurrentGeneration();
+    const auto original =
+        PartyQuestRuntimeSessionBootstrapTestAccess::BindIgnoringLifecycleCoverage(
+            sandbox.CoopRoot,
+            kBootstrapCampaign,
+            originalAuthorization);
+    REQUIRE(original.IsBound());
+    REQUIRE(owner.IsBound());
+
+    const uint64_t oldGeneration =
+        originalAuthorization.GetRuntimeGeneration();
+    const uint64_t newGeneration = fence.Invalidate();
+    REQUIRE(newGeneration != 0);
+    REQUIRE(newGeneration != oldGeneration);
+    REQUIRE(owner.IsBound());
+
+    const auto stale =
+        PartyQuestRuntimeSessionBootstrapTestAccess::BindIgnoringLifecycleCoverage(
+            sandbox.CoopRoot,
+            kBootstrapCampaign,
+            originalAuthorization);
+    REQUIRE(stale.Status ==
+        PartyQuestRuntimeSessionBootstrapStatus::RuntimeGenerationUnavailable);
+    REQUIRE_FALSE(stale.IsBound());
+
+    PartyQuestPlayerProfileId differentProfile = kBootstrapProfile;
+    differentProfile.Low ^= 1;
+    const auto freshDifferentLineage =
+        PartyQuestPlayerProfileLineageTestAccess::Issue(
+            differentProfile,
+            newGeneration);
+    REQUIRE(freshDifferentLineage.IsVerified());
+
+    const auto conflict =
+        PartyQuestRuntimeSessionBootstrapTestAccess::BindIgnoringLifecycleCoverage(
+            sandbox.CoopRoot,
+            kBootstrapCampaign,
+            freshDifferentLineage);
+    REQUIRE(conflict.Status ==
+        PartyQuestRuntimeSessionBootstrapStatus::OwnerRejected);
+    REQUIRE(conflict.Owner.Status ==
+        PartyQuestRuntimeSessionOwnerBindStatus::BindConflict);
+    REQUIRE_FALSE(conflict.IsBound());
+    REQUIRE(owner.IsBound());
+    REQUIRE(owner.GetRuntimeSession()->GetPlayerProfileId() == kBootstrapProfile);
+
+    REQUIRE(owner.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::ProfileSwitch).CanProceed());
+}
+
+TEST_CASE(
     "Runtime bootstrap cannot cross a pending lifecycle transition",
     "[quest.party-state.runtime-bootstrap][generation][lifecycle]")
 {

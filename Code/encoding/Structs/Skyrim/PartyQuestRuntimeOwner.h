@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestCompatibilityEnvironmentCache.h>
+#include <Structs/Skyrim/PartyQuestDeferredWorld.h>
 #include <Structs/Skyrim/PartyQuestPapyrusRuntimeMonitor.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
@@ -8,9 +9,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <deque>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -21,14 +20,14 @@
  * This is the single production owner above PartyQuestRuntimeSessionOwner. The
  * nested session owner owns the durable apply journal, checkpoint/recovery state,
  * SaveGuard integration and workspace lease. This aggregate additionally owns
- * lifecycle admission, deferred work, the expensive compatibility cache and the
- * concrete runtime observer/executor callbacks installed by the Skyrim client.
+ * lifecycle admission, the typed deferred-world queue, the expensive compatibility
+ * cache and the concrete runtime observer/executor callbacks installed by the
+ * Skyrim client.
  *
- * Every deferred operation is stamped with both the process generation and the
- * owner epoch. ExecuteNext() acquires PartyQuestRuntimeGenerationFence::ExecutionLease
- * before the final validation callback and keeps it through the executor callback.
- * Lifecycle invalidation uses the exclusive side of that exact fence, eliminating
- * the validate -> LoadGame/disconnect -> Skyrim access TOCTOU window.
+ * Arbitrary deferred callbacks are intentionally not accepted. Runtime deferred
+ * work must use PartyQuestDeferredWorldQueue's immutable campaign/profile/
+ * generation/transaction/revision identity envelope and its point-of-use durable
+ * revalidation path. Lifecycle boundaries retire that complete typed state.
  */
 class PartyQuestRuntimeOwner final
 {
@@ -51,51 +50,6 @@ public:
         SynchronizationFailed
     };
 
-    enum class EnqueueStatus : uint8_t
-    {
-        Queued,
-        AdmissionClosed,
-        InvalidOperation,
-        SynchronizationFailed,
-        ResourceLimitExceeded
-    };
-
-    enum class ExecuteStatus : uint8_t
-    {
-        Executed,
-        Empty,
-        AdmissionClosed,
-        StaleGeneration,
-        ValidationRejected,
-        CallbackFailed,
-        SynchronizationFailed
-    };
-
-    enum class BootstrapStatus : uint8_t
-    {
-        Bound,
-        Rejected,
-        StaleGeneration,
-        Exception
-    };
-
-    struct EnqueueResult
-    {
-        EnqueueStatus Status{EnqueueStatus::InvalidOperation};
-        uint64_t OperationId{};
-        uint64_t RuntimeGeneration{};
-        uint64_t OwnerEpoch{};
-    };
-
-    struct BootstrapResult
-    {
-        BootstrapStatus Status{BootstrapStatus::Rejected};
-        uint64_t RuntimeGeneration{};
-    };
-
-    using Validation = std::function<bool()>;
-    using Operation = std::function<void()>;
-    using BootstrapAction = std::function<bool()>;
     using SkyrimObserver = std::function<bool()>;
     using PapyrusObserver = std::function<PartyQuestPapyrusRuntimeObservation(uint64_t)>;
     using RuntimeExecutor = std::function<bool(const PartyQuestRuntimeApplyRequest&)>;
@@ -129,19 +83,13 @@ public:
     [[nodiscard]] BoundaryStatus ApplyClientBoundary(ClientBoundary aBoundary) noexcept;
 
     /**
-     * Called by PartyQuestRuntimeSessionOwner while it owns the exclusive process
-     * generation invalidation lease. It must never try to acquire that lease again.
+     * Closes local admission before PartyQuestRuntimeSessionOwner attempts the
+     * exclusive generation transition. This must remain non-blocking so a
+     * same-thread/reentrant lifecycle callback cannot leave stale admission open
+     * merely because the current thread already owns an execution lease.
      */
-    void ObserveSessionLifecycleBoundary(
-        PartyQuestRuntimeLifecycleEvent aEvent,
-        uint64_t aGeneration) noexcept;
-
-    /** Mark a successful durable process-session bind for the exact generation. */
-    void MarkRuntimeSessionBound(uint64_t aGeneration) noexcept;
-
-    [[nodiscard]] BootstrapResult RunBootstrap(
-        uint64_t aExpectedGeneration,
-        const BootstrapAction& acAction) noexcept;
+    void CloseSessionLifecycleAdmission(
+        PartyQuestRuntimeLifecycleEvent aEvent) noexcept;
 
     /**
      * Installs concrete client adapters into this owner. The mutation executor is
@@ -155,17 +103,6 @@ public:
         RuntimeExecutor aExecutor) noexcept;
     void ClearRuntimeAdapters() noexcept;
 
-    [[nodiscard]] EnqueueResult Enqueue(
-        Validation aValidation,
-        Operation aOperation) noexcept;
-    [[nodiscard]] ExecuteStatus ExecuteNext() noexcept;
-
-    /**
-     * Safe callback for external queues. Its lifetime gate is held through the
-     * complete ExecuteNext() call, so invoking it after owner destruction is a no-op.
-     */
-    [[nodiscard]] std::function<void()> MakeExecuteNextCallback() noexcept;
-
     [[nodiscard]] bool IsAcceptingOperations() const noexcept;
     [[nodiscard]] bool IsShutdown() const noexcept;
     [[nodiscard]] uint64_t GetOwnerEpoch() const noexcept;
@@ -177,39 +114,29 @@ public:
     ObservePapyrusRuntime(uint64_t aTransactionId) noexcept;
 
 private:
-    struct DeferredOperation
-    {
-        uint64_t OperationId{};
-        uint64_t RuntimeGeneration{};
-        uint64_t OwnerEpoch{};
-        Validation Validate;
-        Operation Execute;
-    };
+    friend class PartyQuestRuntimeSessionBootstrap;
+    friend class PartyQuestRuntimeOwnerTestAccess;
+    friend class PartyQuestRuntimeSessionOwnerTestAccess;
 
-    struct CallbackLifetime
-    {
-        std::mutex Mutex;
-        PartyQuestRuntimeOwner* Owner{};
-        bool Alive{};
-    };
-
-    static constexpr size_t MaxDeferredOperations = 1024;
-
-    void ApplyBoundaryStateLocked(ClientBoundary aBoundary, uint64_t aGeneration) noexcept;
+    [[nodiscard]] bool PublishRuntimeSessionBound(
+        uint64_t aGeneration,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acPlayerProfileId,
+        const PartyQuestRuntimeSessionOwnerBindResult& acBindResult) noexcept;
+    void ApplyBoundaryStateLocked(ClientBoundary aBoundary) noexcept;
     [[nodiscard]] bool CanAcceptLocked() const noexcept;
-    void CloseCallbackLifetime() noexcept;
 
     mutable std::mutex m_mutex;
     PartyQuestRuntimeSessionOwner m_sessionOwner;
     PartyQuestCompatibilityEnvironmentCache m_compatibilityEnvironment;
-    std::deque<DeferredOperation> m_deferredOperations;
+    PartyQuestDeferredWorldQueue m_deferredWorld;
     SkyrimObserver m_skyrimObserver;
     PapyrusObserver m_papyrusObserver;
     RuntimeExecutor m_executor;
-    std::shared_ptr<CallbackLifetime> m_callbackLifetime;
     uint64_t m_ownerEpoch{1};
-    uint64_t m_nextOperationId{1};
     uint64_t m_boundGeneration{};
+    std::optional<PartyQuestCampaignId> m_boundCampaignId;
+    std::optional<PartyQuestPlayerProfileId> m_boundPlayerProfileId;
     bool m_connected{};
     bool m_inParty{};
     bool m_runtimeSessionBound{};
