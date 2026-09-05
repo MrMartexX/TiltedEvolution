@@ -8,6 +8,7 @@
 #include <functional>
 
 class PartyQuestRuntimeSessionBootstrapTestAccess;
+class PartyQuestRuntimeSessionBootstrapConcurrencyTestAccess;
 
 /**
  * Fail-closed result for binding the shared process runtime owner from a proven
@@ -74,4 +75,5 @@ private:
 
     // Defined only in Code/tests; no production implementation/API exists.
     friend class PartyQuestRuntimeSessionBootstrapTestAccess;
+    friend class PartyQuestRuntimeSessionBootstrapConcurrencyTestAccess;
 };
