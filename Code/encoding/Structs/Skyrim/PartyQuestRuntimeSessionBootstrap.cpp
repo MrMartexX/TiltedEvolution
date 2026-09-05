@@ -23,7 +23,8 @@ PartyQuestRuntimeSessionBootstrap::BindProcessOwnerInternal(
     const std::filesystem::path& acCoopReplicaRoot,
     const PartyQuestCampaignId& acCampaignId,
     const PartyQuestPlayerProfileLineageAuthorization& acPlayerProfile,
-    bool aRequireCompleteLifecycleCoverage) noexcept
+    bool aRequireCompleteLifecycleCoverage,
+    const std::function<void()>& acAfterGenerationLeaseAcquired) noexcept
 {
     PartyQuestRuntimeSessionBootstrapResult result;
 
@@ -52,6 +53,12 @@ PartyQuestRuntimeSessionBootstrap::BindProcessOwnerInternal(
 
     try
     {
+        // Test-only seam used to prove that lifecycle invalidation cannot cross
+        // the complete synchronous bind while the generation lease is held.
+        // Production passes an empty callback.
+        if (acAfterGenerationLeaseAcquired)
+            acAfterGenerationLeaseAcquired();
+
         if (acCoopReplicaRoot.empty() || !acCoopReplicaRoot.is_absolute())
         {
             result.Status =
