@@ -53,6 +53,7 @@ PartyQuestRuntimeOwner::BoundaryStatus
 PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
 {
     const bool closeBeforeFence = ClosesAdmission(aBoundary);
+    uint64_t closedEpoch{};
     if (aBoundary != ClientBoundary::Shutdown)
     {
         std::lock_guard lock(m_mutex);
@@ -67,6 +68,8 @@ PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
     {
         std::lock_guard lock(m_mutex);
         ApplyBoundaryStateLocked(aBoundary);
+        m_lifecycleInvalidationPending = true;
+        closedEpoch = m_ownerEpoch;
     }
 
     if (aBoundary == ClientBoundary::Shutdown)
@@ -83,12 +86,14 @@ PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
             return BoundaryStatus::AlreadyShutdown;
         if (!closeBeforeFence)
             ApplyBoundaryStateLocked(aBoundary);
+        else if (m_ownerEpoch == closedEpoch)
+            m_lifecycleInvalidationPending = false;
     }
 
     return BoundaryStatus::Applied;
 }
 
-void PartyQuestRuntimeOwner::CloseSessionLifecycleAdmission(
+uint64_t PartyQuestRuntimeOwner::CloseSessionLifecycleAdmission(
     PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 {
     ClientBoundary boundary = ClientBoundary::RuntimeIdentityChanged;
@@ -114,13 +119,33 @@ void PartyQuestRuntimeOwner::CloseSessionLifecycleAdmission(
         break;
     }
 
+    uint64_t ownerEpoch{};
     {
         std::lock_guard lock(m_mutex);
         ApplyBoundaryStateLocked(boundary);
+        m_lifecycleInvalidationPending = true;
+        ownerEpoch = m_ownerEpoch;
     }
 
     if (boundary == ClientBoundary::Shutdown)
         m_compatibilityEnvironment.Stop();
+    return ownerEpoch;
+}
+
+void PartyQuestRuntimeOwner::CompleteSessionLifecycleInvalidation(
+    uint64_t aOwnerEpoch,
+    uint64_t aGeneration) noexcept
+{
+    if (aOwnerEpoch == 0 || aGeneration == 0)
+        return;
+
+    std::lock_guard lock(m_mutex);
+    if (m_ownerEpoch == aOwnerEpoch)
+        m_lifecycleInvalidationPending = false;
+
+    // The caller owns the exclusive generation invalidation lease. Re-locking
+    // that shared_mutex here would self-deadlock; nonzero is the local contract.
+    (void)aGeneration;
 }
 
 bool PartyQuestRuntimeOwner::PublishRuntimeSessionBound(
@@ -147,7 +172,8 @@ bool PartyQuestRuntimeOwner::PublishRuntimeSessionBound(
     }
 
     std::lock_guard lock(m_mutex);
-    if (m_shutdown || fence.GetGeneration() != aGeneration ||
+    if (m_shutdown || m_lifecycleInvalidationPending ||
+        fence.GetGeneration() != aGeneration ||
         !m_sessionOwner.IsBound() || m_sessionOwner.IsRecoveryBlocked())
     {
         return false;
@@ -192,12 +218,16 @@ bool PartyQuestRuntimeOwner::IsAcceptingOperations() const noexcept
 {
     auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
     const uint64_t generation = fence.GetGeneration();
-    auto lease = fence.TryAcquire(generation);
-    if (!lease || !lease->IsValid())
-        return false;
+    std::optional<PartyQuestRuntimeGenerationFence::ExecutionLease> lease;
+    if (!fence.IsExecutionLeaseHeldByCurrentThread())
+    {
+        lease = fence.TryAcquire(generation);
+        if (!lease || !lease->IsValid())
+            return false;
+    }
 
     std::lock_guard lock(m_mutex);
-    return m_boundGeneration == lease->GetGeneration() &&
+    return generation != 0 && m_boundGeneration == generation &&
         CanAcceptLocked();
 }
 
@@ -313,6 +343,7 @@ void PartyQuestRuntimeOwner::ApplyBoundaryStateLocked(
 
     m_deferredWorld.Clear();
     m_runtimeSessionBound = false;
+    m_lifecycleInvalidationPending = false;
     m_boundGeneration = 0;
     m_boundCampaignId.reset();
     m_boundPlayerProfileId.reset();
@@ -349,7 +380,8 @@ void PartyQuestRuntimeOwner::ApplyBoundaryStateLocked(
 
 bool PartyQuestRuntimeOwner::CanAcceptLocked() const noexcept
 {
-    if (m_shutdown || !m_connected || !m_inParty ||
+    if (m_shutdown || m_lifecycleInvalidationPending ||
+        !m_connected || !m_inParty ||
         !m_runtimeSessionBound || m_boundGeneration == 0 ||
         !m_boundCampaignId || !m_boundPlayerProfileId ||
         !m_sessionOwner.IsBound() || m_sessionOwner.IsRecoveryBlocked())

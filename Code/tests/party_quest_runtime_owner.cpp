@@ -40,6 +40,22 @@ public:
             return PartyQuestDeferredWorldEnqueueStatus::RuntimeOwnerRequired;
         return aOwner.m_deferredWorld.Enqueue(std::move(aRequest));
     }
+
+    static bool RepublishUnderHeldLease(
+        PartyQuestRuntimeOwner& aOwner,
+        const PartyQuestCampaignId& acCampaignId,
+        const PartyQuestPlayerProfileId& acProfileId) noexcept
+    {
+        PartyQuestRuntimeSessionOwnerBindResult ready;
+        ready.Status = PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound;
+        ready.ReconcileStatus = PartyQuestRuntimeGuardStatus::Ready;
+        ready.GuardHeld = false;
+        return aOwner.PublishRuntimeSessionBound(
+            PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration(),
+            acCampaignId,
+            acProfileId,
+            ready);
+    }
 };
 
 namespace
@@ -252,6 +268,36 @@ TEST_CASE(
 
     executionLease.reset();
     PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+}
+
+TEST_CASE(
+    "Revoked owner epoch cannot be republished by an older bootstrap lease",
+    "[quest.party-state.runtime-owner][bootstrap][lifecycle][reentrant][race]")
+{
+    RuntimeOwnerSandbox sandbox;
+    PartyQuestRuntimeOwner owner;
+    MakeRuntimeOwnerReady(owner, sandbox.Root);
+
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t generation = fence.GetGeneration();
+    auto bootstrapLease = fence.TryAcquire(generation);
+    REQUIRE(bootstrapLease.has_value());
+    REQUIRE(bootstrapLease->IsValid());
+
+    REQUIRE(owner.ApplyClientBoundary(
+                PartyQuestRuntimeOwner::ClientBoundary::RuntimeIdentityChanged) ==
+        PartyQuestRuntimeOwner::BoundaryStatus::SynchronizationFailed);
+    REQUIRE_FALSE(owner.IsAcceptingOperations());
+    REQUIRE_FALSE(PartyQuestRuntimeOwnerTestAccess::RepublishUnderHeldLease(
+        owner,
+        kRuntimeOwnerCampaign,
+        kRuntimeOwnerProfile));
+
+    bootstrapLease.reset();
+    REQUIRE(owner.ApplyClientBoundary(
+                PartyQuestRuntimeOwner::ClientBoundary::RuntimeIdentityChanged) ==
+        PartyQuestRuntimeOwner::BoundaryStatus::Applied);
+    REQUIRE_FALSE(owner.IsAcceptingOperations());
 }
 
 TEST_CASE(

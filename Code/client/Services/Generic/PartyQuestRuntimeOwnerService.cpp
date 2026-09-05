@@ -198,6 +198,28 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
     if (!lineage.IsVerified())
         return;
 
+    if (sessionOwner.IsBound())
+    {
+        const auto* pSession = sessionOwner.GetRuntimeSession();
+        if (!pSession ||
+            pSession->GetPlayerProfileId() != lineage.GetProfileId())
+        {
+            const auto switched = sessionOwner.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::ProfileSwitch);
+            if (!switched.CanProceed())
+            {
+                LogLifecycleFailure("profile-switch-bootstrap", switched);
+                return;
+            }
+
+            // PrepareAndRelease advances the generation, so this authorization
+            // is intentionally stale now. Resolve a fresh lineage on the next
+            // update rather than carrying it across the profile boundary.
+            m_nextBootstrapAttempt = {};
+            return;
+        }
+    }
+
     const auto root = ResolveCoopReplicaRoot();
     if (root.empty() || !root.is_absolute() || root.filename() != L"CoopCampaigns")
     {

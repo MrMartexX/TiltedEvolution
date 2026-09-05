@@ -268,13 +268,14 @@ PartyQuestRuntimeSessionOwner::PrepareAndRelease(
     PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 {
     const bool processOwner = this == &GetProcessOwner();
+    uint64_t aggregateEpoch{};
     if (processOwner)
     {
         // Revoke aggregate admission before entering the exclusive barrier. A
         // synchronous lifecycle callback may run while this thread holds an
         // execution lease, in which case TryBeginInvalidation must fail rather
         // than deadlock; admission nevertheless remains closed.
-        PartyQuestRuntimeOwner::GetProcessOwner()
+        aggregateEpoch = PartyQuestRuntimeOwner::GetProcessOwner()
             .CloseSessionLifecycleAdmission(aEvent);
     }
 
@@ -287,6 +288,14 @@ PartyQuestRuntimeSessionOwner::PrepareAndRelease(
         result.Status = PartyQuestRuntimeLifecycleFenceStatus::InvalidState;
         result.GuardHeld = PartyQuestSaveGuard::GetProcessGuard().IsActive();
         return result;
+    }
+
+    if (processOwner)
+    {
+        PartyQuestRuntimeOwner::GetProcessOwner()
+            .CompleteSessionLifecycleInvalidation(
+                aggregateEpoch,
+                generationInvalidation->GetGeneration());
     }
 
     if (!IsBound())

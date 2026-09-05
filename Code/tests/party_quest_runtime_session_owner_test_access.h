@@ -28,6 +28,7 @@ public:
             aggregate.m_connected = false;
             aggregate.m_inParty = false;
             aggregate.m_runtimeSessionBound = false;
+            aggregate.m_lifecycleInvalidationPending = false;
             aggregate.m_shutdown = false;
         }
 

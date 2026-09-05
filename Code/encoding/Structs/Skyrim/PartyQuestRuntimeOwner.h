@@ -88,7 +88,7 @@ public:
      * same-thread/reentrant lifecycle callback cannot leave stale admission open
      * merely because the current thread already owns an execution lease.
      */
-    void CloseSessionLifecycleAdmission(
+    [[nodiscard]] uint64_t CloseSessionLifecycleAdmission(
         PartyQuestRuntimeLifecycleEvent aEvent) noexcept;
 
     /**
@@ -115,6 +115,7 @@ public:
 
 private:
     friend class PartyQuestRuntimeSessionBootstrap;
+    friend class PartyQuestRuntimeSessionOwner;
     friend class PartyQuestRuntimeOwnerTestAccess;
     friend class PartyQuestRuntimeSessionOwnerTestAccess;
 
@@ -123,6 +124,10 @@ private:
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestPlayerProfileId& acPlayerProfileId,
         const PartyQuestRuntimeSessionOwnerBindResult& acBindResult) noexcept;
+    /** Completes only the exact revocation epoch holding the exclusive fence. */
+    void CompleteSessionLifecycleInvalidation(
+        uint64_t aOwnerEpoch,
+        uint64_t aGeneration) noexcept;
     void ApplyBoundaryStateLocked(ClientBoundary aBoundary) noexcept;
     [[nodiscard]] bool CanAcceptLocked() const noexcept;
 
@@ -140,6 +145,7 @@ private:
     bool m_connected{};
     bool m_inParty{};
     bool m_runtimeSessionBound{};
+    bool m_lifecycleInvalidationPending{};
     bool m_shutdown{};
 };
 

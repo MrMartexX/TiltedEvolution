@@ -471,6 +471,22 @@ TEST_CASE(
 
     REQUIRE(owner.PrepareAndRelease(
                 PartyQuestRuntimeLifecycleEvent::ProfileSwitch).CanProceed());
+    REQUIRE_FALSE(owner.IsBound());
+
+    const auto reboundAuthorization =
+        PartyQuestPlayerProfileLineageTestAccess::Issue(
+            differentProfile,
+            fence.GetGeneration());
+    REQUIRE(reboundAuthorization.IsVerified());
+    const auto rebound =
+        PartyQuestRuntimeSessionBootstrapTestAccess::BindIgnoringLifecycleCoverage(
+            sandbox.CoopRoot,
+            kBootstrapCampaign,
+            reboundAuthorization);
+    REQUIRE(rebound.IsBound());
+    REQUIRE(owner.GetRuntimeSession()->GetPlayerProfileId() == differentProfile);
+    REQUIRE(owner.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::ProfileSwitch).CanProceed());
 }
 
 TEST_CASE(
