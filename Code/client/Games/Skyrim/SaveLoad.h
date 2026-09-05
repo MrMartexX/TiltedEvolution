@@ -1,5 +1,52 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestRuntimeLifecycleFence.h>
+
+#include <cstdint>
+
+/**
+ * Register the process-lifetime TESLoadGameEvent sink used to close a pending
+ * PartyQuest LoadGame lifecycle ticket. Safe to call more than once.
+ */
+void InstallPartyQuestLoadGameLifecycleFence() noexcept;
+void UninstallPartyQuestLoadGameLifecycleFence() noexcept;
+
+/** Process-local installation evidence used only by read-only P0 diagnostics. */
+[[nodiscard]] bool IsPartyQuestSaveHookInstalled() noexcept;
+[[nodiscard]] bool IsPartyQuestLoadCompletionSinkInstalled() noexcept;
+
+/**
+ * Publish save-hook installation evidence after the post-commit native hook
+ * validator has proven the actual MinHook target enabled.
+ */
+void ConfirmPartyQuestSaveHookInstalled() noexcept;
+
+struct PartyQuestEngineIdentityTransition
+{
+    PartyQuestRuntimeLifecycleEvent Event{
+        PartyQuestRuntimeLifecycleEvent::LoadGame};
+    uint64_t Ticket{};
+    uint64_t Generation{};
+
+    [[nodiscard]] bool CanProceed() const noexcept
+    {
+        return Ticket != 0u && Generation != 0u;
+    }
+};
+
+/**
+ * Fence one synchronous identity-changing Skyrim engine entrypoint.
+ * Begin must run before the original function and Complete only after it
+ * returns. A failed Begin means the original transition must not be entered.
+ */
+[[nodiscard]] PartyQuestEngineIdentityTransition
+BeginPartyQuestEngineIdentityTransition(
+    PartyQuestRuntimeLifecycleEvent aEvent,
+    const char* acReason) noexcept;
+void CompletePartyQuestEngineIdentityTransition(
+    PartyQuestEngineIdentityTransition aTransition,
+    const char* acReason) noexcept;
+
 #pragma pack(push, 1)
 
 struct BGSSaveLoadManager
@@ -21,7 +68,18 @@ struct BGSSaveLoadManager
         char* saveName; // 0xBB0
     };
 
+    static BGSSaveLoadManager* Get() noexcept;
+
     void Save(SaveData* apData);
+
+    /**
+     * Enters Skyrim's normal manual-save pipeline (device id 2) by name.
+     *
+     * The Address Library entry is the hooked Save_Impl address, not the
+     * trampoline/original pointer. Therefore PartyQuestSaveGuard interception
+     * still runs and a critical repair requires PartyQuestControlledSaveScope.
+     */
+    bool SaveByName(const char* acFileName) noexcept;
 
     struct Struct330
     {

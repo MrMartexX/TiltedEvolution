@@ -1,0 +1,153 @@
+#pragma once
+
+#include <Structs/Skyrim/PartyQuestReplicaDurableRestoreExecutor.h>
+#include <Structs/Skyrim/PartyQuestReplicaDurableRestorePreparation.h>
+#include <Structs/Skyrim/PartyQuestReplicaRestoreExecutor.h>
+#include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
+#include <Structs/Skyrim/PartyQuestRuntimeRestoreAttempt.h>
+
+#include <cstdint>
+#include <filesystem>
+#include <optional>
+
+class PartyQuestRuntimeGuardedSession;
+class PartyQuestRuntimeRecoveryCoordinatorTestAccess;
+
+enum class PartyQuestRuntimeRecoveryStatus : uint8_t
+{
+    Restored,
+    AlreadyRestored,
+    RollbackRecoveredRetryRequired,
+    InvalidIdentity,
+    InvalidLayout,
+    InvalidRecoveryState,
+    SaveGuardBusy,
+    SaveGuardReleaseFailed,
+    CheckpointMissing,
+    CheckpointManifestRecoveryRequired,
+    CheckpointManifestInvalid,
+    CheckpointVerificationFailed,
+    RestorePlanInvalid,
+    RestoreJournalConflict,
+    RestoreFailed,
+    RuntimeStatePersistenceFailed
+};
+
+enum class PartyQuestRuntimeRestoreDurabilityDomain : uint8_t
+{
+    None,
+    ProcessCrashResilient,
+    PowerLossDurable
+};
+
+struct PartyQuestRuntimeRecoveryResult
+{
+    PartyQuestRuntimeRecoveryStatus Status{
+        PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState};
+    PartyQuestReplicaManifestPersistenceStatus ManifestStatus{
+        PartyQuestReplicaManifestPersistenceStatus::InvalidData};
+    PartyQuestReplicaManifestVerificationStatus VerificationStatus{
+        PartyQuestReplicaManifestVerificationStatus::InvalidManifest};
+    PartyQuestReplicaRestorePlanStatus RestorePlanStatus{
+        PartyQuestReplicaRestorePlanStatus::InvalidIdentity};
+    PartyQuestReplicaRestoreExecutionStatus RestoreStatus{
+        PartyQuestReplicaRestoreExecutionStatus::InvalidPlan};
+    std::optional<PartyQuestRuntimeRestoreAttemptStatus> RestoreAttemptStatus;
+    std::optional<PartyQuestReplicaDurableRestorePreparationStatus>
+        DurablePreparationStatus;
+    std::optional<PartyQuestReplicaDurableRestoreStatus> DurableRestoreStatus;
+    PartyQuestRuntimeRestoreDurabilityDomain RestoreDomain{
+        PartyQuestRuntimeRestoreDurabilityDomain::None};
+    PartyQuestRuntimeDurableTransitionStatus RuntimeTransition{
+        PartyQuestRuntimeDurableTransitionStatus::InvalidState};
+    uint64_t TransactionId{};
+    uint64_t TargetWorldRevision{};
+    // Legacy v3 recovery uses TransactionId. Strong recovery reports the exact
+    // local RestoreId persisted for the current (TransactionId, attempt ordinal).
+    uint64_t RestoreId{};
+    std::filesystem::path ManifestPath;
+    std::filesystem::path RestoreJournalPath;
+
+    [[nodiscard]] bool IsResolved() const noexcept
+    {
+        return Status == PartyQuestRuntimeRecoveryStatus::Restored ||
+            Status == PartyQuestRuntimeRecoveryStatus::AlreadyRestored;
+    }
+};
+
+/**
+ * Coordinates exact recovery after a runtime quest mutation may have occurred.
+ *
+ * This layer intentionally supports only the exact immutable
+ * PreRepair/Revision_<TargetWorldRevision> checkpoint recorded by the runtime
+ * transaction. It does not guess a LastKnownGood fallback.
+ *
+ * Runtime TransactionId remains the stable higher-level repair identity. Legacy
+ * v3 restore journals still use RestoreId == TransactionId. The Linux strong
+ * route instead persists a local attempt ordinal and a collision-free allocated
+ * RestoreId; terminal RolledBack attempts remain permanent tombstones and a
+ * retry advances to a new persisted attempt rather than reusing that id.
+ *
+ * Ordering is fail-closed:
+ *
+ *  1. require the exact campaign/player-bound runtime recovery record;
+ *  2. load and verify the exact PreRepair revision manifest and bytes;
+ *  3. build a confined restore plan;
+ *  4. prove an exact kernel-backed workspace lease/capability;
+ *  5. preserve an existing explicit v3 legacy transaction when present;
+ *  6. otherwise, on the supported strong platform, resume/create the persisted
+ *     runtime restore attempt and accept only explicit v4 strong evidence;
+ *  7. while still holding that exact workspace capability, independently
+ *     reverify the live replica against the exact restore plan;
+ *  8. clear the runtime barrier only when checkpoint bytes are proven present
+ *     in the live co-op replica at that instant;
+ *  9. persist that cleared runtime state before releasing workspace authority
+ *     or exposing recovery as resolved.
+ *
+ * Existing ambiguous v1/v2 or wrong-domain evidence is never migrated or
+ * overwritten. Existing strong attempt evidence is never downgraded through the
+ * legacy executor. Windows continues the legacy process-crash path for a fresh
+ * recovery until its strong directory/delete durability contract is accepted,
+ * but fails closed if a strong attempt record is already present.
+ *
+ * ResolveCrashRecovery() consumes a persisted crash barrier. ResolveLiveRecovery()
+ * consumes the still-active post-mutation transaction after a live fail-closed
+ * condition such as a terminal Papyrus monitor outcome. Strong live routing is
+ * wired separately so each production boundary can be proved independently.
+ *
+ * SaveGuard and the replica workspace lease protect different boundaries and
+ * neither substitutes for the other. PartyQuestRuntimeGuardedSession proves or
+ * acquires the physical process SaveGuard before entering this layer. For the
+ * filesystem restore, a RuntimeSessionOwner-bound session reuses its exact
+ * session-bound workspace publication capability. A standalone guarded session
+ * acquires an exact temporary OS workspace lease and hands its pinned native
+ * lease state to a capability that remains alive through restore, live-byte
+ * re-verification and durable barrier clear. This prevents both recursive owner
+ * lock acquisition and a post-restore/pre-clear workspace TOCTOU window.
+ *
+ * The coordinator entry points remain private because direct use could let a
+ * logical SaveGuardActive field substitute for the physical process save lease.
+ * Production access is only through PartyQuestRuntimeGuardedSession. A named
+ * test friend exists solely for isolated filesystem recovery tests.
+ *
+ * A recovered rollback is deliberately not success: the old replica bytes are
+ * safe again, but the requested checkpoint still has to be restored by a later
+ * call. Strong rollback additionally persists/advances local attempt identity
+ * before reporting RetryRequired.
+ */
+class PartyQuestRuntimeRecoveryCoordinator final
+{
+private:
+    [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveCrashRecovery(
+        PartyQuestRuntimeApplySession& aSession,
+        const PartyQuestCoopSavePaths& acPaths) noexcept;
+
+    [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveLiveRecovery(
+        PartyQuestRuntimeApplySession& aSession,
+        const PartyQuestCoopSavePaths& acPaths) noexcept;
+
+    friend class PartyQuestRuntimeGuardedSession;
+    // Defined only in Code/tests; isolated filesystem recovery tests use it
+    // without expanding the production authority surface.
+    friend class PartyQuestRuntimeRecoveryCoordinatorTestAccess;
+};

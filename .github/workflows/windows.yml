@@ -1,6 +1,7 @@
 name: Build windows
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches:
@@ -21,6 +22,10 @@ on:
         description: "Skyrim Together version string"
         value: ${{ jobs.build.outputs.version }}
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     strategy:
@@ -35,29 +40,62 @@ jobs:
       version: ${{ steps.output-version.outputs.version }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # We need full history in order to create a version string (BuildInfo.h)
+          # and to classify the PR diff without a second checkout.
           fetch-depth: 0
 
-      - name: Checkout submodules
+      - name: Classify validation scope
+        id: scope
+        shell: pwsh
         run: |
-          git submodule sync --recursive
-          git submodule update --init --force --recursive --depth=1
+          $needsFull = ("${{ github.event_name }}" -ne "pull_request") -or ("${{ github.event.action }}" -ne "synchronize") -or [string]::IsNullOrWhiteSpace("${{ github.event.before }}") -or [string]::IsNullOrWhiteSpace("${{ github.event.after }}")
+          if ($needsFull) {
+            "full=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Full validation: non-synchronize event or missing push range."
+            exit 0
+          }
+
+          $before = "${{ github.event.before }}"
+          $after = "${{ github.event.after }}"
+          $files = @(git diff --name-only $before $after)
+          $isolated = $files.Count -gt 0
+
+          foreach ($file in $files) {
+            $isPartyQuest = ($file -match '^Code/encoding/Structs/Skyrim/PartyQuest') -or ($file -match '^Code/tests/party_quest_')
+            if (-not $isPartyQuest) {
+              $isolated = $false
+              break
+            }
+          }
+
+          $full = (-not $isolated).ToString().ToLowerInvariant()
+          "full=$full" >> $env:GITHUB_OUTPUT
+          Write-Host "PartyQuest-only pushed range: $isolated"
 
       - name: Checkout master on tag push
         if: github.ref_type == 'tag'
         # Checkout only if the tag was pushed to master
         run: (git rev-parse HEAD) -eq (git rev-parse origin/master) -and (git checkout master)
 
+      - name: Checkout submodules
+        if: steps.scope.outputs.full == 'true'
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive --depth=1
+
       - name: Cache xmake dependencies
-        uses: actions/cache@v4
+        if: steps.scope.outputs.full == 'true'
+        uses: actions/cache@v6
         with:
           path: ~/AppData/Local/.xmake/packages
-          key: ${{ runner.os }}-xmake-${{ hashFiles('**/xmake.lua') }}
+          # Keep full source-built GNS packages isolated from targeted caches.
+          key: ${{ runner.os }}-xmake-full-${{ matrix.arch }}-${{ inputs.build-mode || 'releasedbg' }}-3.0.9-${{ hashFiles('**/xmake.lua') }}
 
       # Install xmake
       - name: Setup xmake
+        if: steps.scope.outputs.full == 'true'
         uses: xmake-io/github-action-setup-xmake@v1
         with:
           xmake-version: 3.0.9
@@ -65,49 +103,82 @@ jobs:
           actions-cache-key: ${{ matrix.os }}
 
       - name: Configure xmake and install dependencies
-        run: xmake config --arch=${{ matrix.arch }} --mode=${{ inputs.build-mode }} --yes -vD
+        if: steps.scope.outputs.full == 'true'
+        run: xmake config --arch=${{ matrix.arch }} --mode=${{ inputs.build-mode || 'releasedbg' }} --yes -vD
 
       # Build the client
       - name: Build with xmake
+        if: steps.scope.outputs.full == 'true'
         run: |
           xmake -y
-          echo "STR_BUILD_DIR=build/windows/${{ matrix.arch }}/${{ inputs.build-mode }}/" >> $env:GITHUB_ENV
+          echo "STR_BUILD_DIR=build/windows/${{ matrix.arch }}/${{ inputs.build-mode || 'releasedbg' }}/" >> $env:GITHUB_ENV
 
       # Create distrib
       - name: Output distrib binaries via xmake
+        if: steps.scope.outputs.full == 'true'
         run: |
           xmake install -o distrib
           cp -Force -Recurse distrib/bin/* ${{ env.STR_BUILD_DIR }}
 
-      # Building the Together UI
+      - name: Stage SKSE lineage bridge
+        if: steps.scope.outputs.full == 'true'
+        shell: pwsh
+        run: |
+          $plugin = Join-Path $env:STR_BUILD_DIR "SkyrimTogetherLineageBridge.dll"
+          $pluginDir = "GameFiles/Skyrim/SKSE/Plugins"
+          if (-not (Test-Path -LiteralPath $plugin -PathType Leaf)) {
+            throw "Missing built SKSE lineage bridge: $plugin"
+          }
 
+          New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
+          Move-Item -LiteralPath $plugin -Destination (Join-Path $pluginDir "SkyrimTogetherLineageBridge.dll") -Force
+
+          if (-not (Test-Path -LiteralPath (Join-Path $pluginDir "SkyrimTogetherLineageBridge.dll") -PathType Leaf)) {
+            throw "Failed to stage SKSE lineage bridge in Data-relative plugin layout"
+          }
+
+      # Building the Together UI
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        if: steps.scope.outputs.full == 'true'
+        uses: pnpm/action-setup@v6
         with:
           version: 9
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        if: steps.scope.outputs.full == 'true'
+        uses: actions/setup-node@v7
         with:
           node-version: lts/iron
           cache-dependency-path: Code/skyrim_ui/pnpm-lock.yaml
           cache: 'pnpm'
 
       - name: Build the UI
+        if: steps.scope.outputs.full == 'true'
         run: |
           pnpm --prefix Code/skyrim_ui/ install
           pnpm --prefix Code/skyrim_ui/ deploy:production
           cp -r Code/skyrim_ui/dist/UI ${{ env.STR_BUILD_DIR }}
 
       - id: output-version
-        run: echo "version=$(git describe --tags)" >> $env:GITHUB_OUTPUT
+        run: echo "version=$(git describe --tags --always)" >> $env:GITHUB_OUTPUT
 
       - name: Upload build files for the next job
-        if: ${{ inputs.upload-build-for-next-job }}
-        uses: actions/upload-artifact@v4
+        if: ${{ inputs.upload-build-for-next-job && steps.scope.outputs.full == 'true' }}
+        uses: actions/upload-artifact@v7
         with:
           name: internal-job-files
           retention-days: 1
+          path: |
+            ${{ env.STR_BUILD_DIR }}
+            GameFiles/Skyrim/
+
+      - name: Upload short-lived PR live-validation build
+        if: ${{ github.event_name == 'pull_request' && steps.scope.outputs.full == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: equal-party-p0-live-windows-${{ github.sha }}
+          retention-days: 3
+          if-no-files-found: error
           path: |
             ${{ env.STR_BUILD_DIR }}
             GameFiles/Skyrim/
