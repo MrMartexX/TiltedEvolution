@@ -23,6 +23,11 @@ ModSystem::~ModSystem() noexcept
     m_modsConnection.release();
 }
 
+bool ModSystem::IsReady() const noexcept
+{
+    return m_mappingPublication.IsReady();
+}
+
 bool ModSystem::GetServerModId(const uint32_t aGameId, uint32_t& aModId, uint32_t& aBaseId) const noexcept
 {
     auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();

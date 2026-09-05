@@ -42,6 +42,12 @@ DiscoveryService::~DiscoveryService() noexcept
 
 void DiscoveryService::VisitCell(bool aForceTrigger) noexcept
 {
+    // Cell/worldspace identities cannot be translated until the server has
+    // published a complete mod mapping. Readiness is expected to be false
+    // before connecting, so do not retry and log the same lookup every frame.
+    if (!m_world.GetModSystem().IsReady())
+        return;
+
     const PlayerCharacter* pPlayer = PlayerCharacter::Get();
     if (!pPlayer)
         return;
