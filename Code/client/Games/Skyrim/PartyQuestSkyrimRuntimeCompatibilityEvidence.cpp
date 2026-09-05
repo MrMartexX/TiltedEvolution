@@ -13,9 +13,7 @@
 #include <array>
 #include <cctype>
 #include <filesystem>
-#include <fstream>
 #include <string>
-#include <vector>
 
 namespace
 {
@@ -63,38 +61,6 @@ public:
 private:
     uint64_t m_value{14695981039346656037ull};
 };
-
-bool MixFile(CompatibilityHash& aHash, const std::filesystem::path& acPath) noexcept
-{
-    try
-    {
-        std::ifstream file(acPath, std::ios::binary);
-        if (!file)
-            return false;
-
-        std::array<char, 64 * 1024> buffer{};
-        uint64_t total = 0;
-        while (file)
-        {
-            file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
-            const auto count = file.gcount();
-            if (count > 0)
-            {
-                aHash.Mix(buffer.data(), static_cast<size_t>(count));
-                total += static_cast<uint64_t>(count);
-            }
-        }
-        if (!file.eof())
-            return false;
-
-        aHash.MixPod(total);
-        return true;
-    }
-    catch (...)
-    {
-        return false;
-    }
-}
 
 std::optional<std::filesystem::path> GetSkyrimDataDirectory() noexcept
 {
@@ -223,146 +189,6 @@ uint64_t HashResolvedQuestTopology(
     }
 }
 
-uint64_t HashOrderedPluginEnvironment(
-    const std::filesystem::path& acDataDirectory) noexcept
-{
-    try
-    {
-        const auto* pManager = ModManager::Get();
-        if (!pManager)
-            return 0;
-
-        CompatibilityHash hash;
-        constexpr uint64_t domain = 0x504C55474F524452ull; // "PLUGORDR"
-        hash.MixPod(domain);
-
-        uint64_t count = 0;
-        for (auto* pMod : const_cast<ModManager*>(pManager)->mods)
-        {
-            if (!pMod || !pMod->IsLoaded())
-                continue;
-
-            std::string filename(pMod->filename);
-            if (filename.empty())
-                return 0;
-
-            ++count;
-            hash.MixPod(count);
-            hash.MixString(filename);
-            const bool lite = pMod->IsLite();
-            hash.MixPod(lite);
-
-            const auto pluginPath = acDataDirectory / filename;
-            std::error_code ec;
-            if (!std::filesystem::is_regular_file(pluginPath, ec) || ec ||
-                !MixFile(hash, pluginPath))
-            {
-                return 0;
-            }
-        }
-
-        if (count == 0)
-            return 0;
-        hash.MixPod(count);
-        return hash.Value();
-    }
-    catch (...)
-    {
-        return 0;
-    }
-}
-
-uint64_t HashScriptEnvironment(
-    const std::filesystem::path& acDataDirectory) noexcept
-{
-    try
-    {
-        std::vector<std::filesystem::path> files;
-        std::error_code ec;
-
-        for (std::filesystem::directory_iterator it(acDataDirectory, ec), end;
-             !ec && it != end;
-             it.increment(ec))
-        {
-            if (!it->is_regular_file(ec) || ec)
-                continue;
-            std::string extension = it->path().extension().string();
-            std::transform(extension.begin(), extension.end(), extension.begin(),
-                [](unsigned char aCharacter)
-                {
-                    return static_cast<char>(std::tolower(aCharacter));
-                });
-            if (extension == ".bsa")
-                files.push_back(it->path());
-        }
-        if (ec)
-            return 0;
-
-        const auto scripts = acDataDirectory / "Scripts";
-        ec.clear();
-        if (std::filesystem::is_directory(scripts, ec) && !ec)
-        {
-            for (std::filesystem::recursive_directory_iterator it(
-                     scripts,
-                     std::filesystem::directory_options::skip_permission_denied,
-                     ec),
-                 end;
-                 !ec && it != end;
-                 it.increment(ec))
-            {
-                if (!it->is_regular_file(ec) || ec)
-                    continue;
-                std::string extension = it->path().extension().string();
-                std::transform(extension.begin(), extension.end(), extension.begin(),
-                    [](unsigned char aCharacter)
-                    {
-                        return static_cast<char>(std::tolower(aCharacter));
-                    });
-                if (extension == ".pex")
-                    files.push_back(it->path());
-            }
-            if (ec)
-                return 0;
-        }
-        else if (ec)
-        {
-            return 0;
-        }
-
-        std::sort(files.begin(), files.end(), [](const auto& acLeft, const auto& acRight)
-        {
-            auto left = acLeft.generic_string();
-            auto right = acRight.generic_string();
-            std::transform(left.begin(), left.end(), left.begin(),
-                [](unsigned char aCharacter) { return static_cast<char>(std::tolower(aCharacter)); });
-            std::transform(right.begin(), right.end(), right.begin(),
-                [](unsigned char aCharacter) { return static_cast<char>(std::tolower(aCharacter)); });
-            return left < right;
-        });
-
-        CompatibilityHash hash;
-        constexpr uint64_t domain = 0x534352495054454Eull; // "SCRIPTEN"
-        hash.MixPod(domain);
-        const uint64_t count = static_cast<uint64_t>(files.size());
-        hash.MixPod(count);
-        for (const auto& file : files)
-        {
-            std::error_code relativeEc;
-            auto relative = std::filesystem::relative(file, acDataDirectory, relativeEc);
-            if (relativeEc || relative.empty())
-                return 0;
-            hash.MixString(relative.generic_string());
-            if (!MixFile(hash, file))
-                return 0;
-        }
-        return hash.Value();
-    }
-    catch (...)
-    {
-        return 0;
-    }
-}
-
 uint64_t CombineWinningOverrideFingerprint(
     uint64_t aResolvedRecordFingerprint,
     uint64_t aPluginEnvironmentFingerprint) noexcept
@@ -409,37 +235,63 @@ bool PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(
     return false;
 }
 
+std::optional<PartyQuestCompatibilityEnvironmentSnapshot>
+PartyQuestSkyrimRuntimeCompatibilityEvidence::CaptureEnvironmentSnapshot() noexcept
+{
+    try
+    {
+        const auto dataDirectory = GetSkyrimDataDirectory();
+        auto* pManager = ModManager::Get();
+        if (!dataDirectory || !pManager)
+            return std::nullopt;
+
+        PartyQuestCompatibilityEnvironmentSnapshot snapshot;
+        snapshot.DataDirectory = *dataDirectory;
+        for (auto* pMod : pManager->mods)
+        {
+            if (!pMod || !pMod->IsLoaded())
+                continue;
+            std::string filename(pMod->filename);
+            if (filename.empty())
+                return std::nullopt;
+            snapshot.OrderedPlugins.push_back(
+                {std::filesystem::path(std::move(filename)), pMod->IsLite()});
+        }
+        if (snapshot.OrderedPlugins.empty())
+            return std::nullopt;
+        return snapshot;
+    }
+    catch (...)
+    {
+        return std::nullopt;
+    }
+}
+
 std::optional<PartyQuestRuntimeCompatibilityFacts>
 PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
     TESQuest* apQuest,
     const ModSystem& acModSystem,
-    const GameId& acExpectedQuestId) noexcept
+    const GameId& acExpectedQuestId,
+    const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept
 {
-    if (!apQuest || !acExpectedQuestId)
-        return std::nullopt;
-
-    const auto dataDirectory = GetSkyrimDataDirectory();
-    if (!dataDirectory)
+    if (!apQuest || !acExpectedQuestId || !acEnvironment.IsValid())
         return std::nullopt;
 
     const uint64_t resolvedRecord = HashResolvedQuestTopology(
         apQuest,
         acModSystem,
         acExpectedQuestId);
-    const uint64_t pluginEnvironment =
-        HashOrderedPluginEnvironment(*dataDirectory);
     const uint64_t winningOverride = CombineWinningOverrideFingerprint(
         resolvedRecord,
-        pluginEnvironment);
-    const uint64_t scriptEnvironment = HashScriptEnvironment(*dataDirectory);
-    if (resolvedRecord == 0 || winningOverride == 0 || scriptEnvironment == 0)
+        acEnvironment.PluginEnvironment);
+    if (resolvedRecord == 0 || winningOverride == 0)
         return std::nullopt;
 
     PartyQuestRuntimeCompatibilityFacts facts;
     facts.ProfileVersion = ProfileVersion;
     facts.ResolvedRecordFingerprint = resolvedRecord;
     facts.WinningOverrideFingerprint = winningOverride;
-    facts.ScriptFingerprint = scriptEnvironment;
+    facts.ScriptFingerprint = acEnvironment.ScriptEnvironment;
     facts.NativeAdapterFingerprint = NativeAdapterFingerprint;
     facts.AdapterMutationComponents =
         PartyQuestVerificationComponent::QuestSnapshot;
@@ -450,7 +302,8 @@ std::optional<PartyQuestRuntimeProcessPlanningEvidence>
 PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveFresh(
     TESQuest* apQuest,
     const ModSystem& acModSystem,
-    const PartyQuestRuntimeCanonicalCandidate& acCandidate) noexcept
+    const PartyQuestRuntimeCanonicalCandidate& acCandidate,
+    const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept
 {
     if (!apQuest || !acCandidate.CampaignId.IsValid() ||
         acCandidate.TransactionId == 0 || acCandidate.WorldRevision == 0 ||
@@ -463,7 +316,8 @@ PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveFresh(
     const auto compatibility = ObserveDiagnostic(
         apQuest,
         acModSystem,
-        acCandidate.CanonicalSnapshot.QuestId);
+        acCandidate.CanonicalSnapshot.QuestId,
+        acEnvironment);
     if (!compatibility)
         return std::nullopt;
 

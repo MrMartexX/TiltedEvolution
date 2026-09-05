@@ -3,6 +3,7 @@
 #include <World.h>
 #include <Events/EventDispatcher.h>
 #include <Games/Events.h>
+#include <Structs/Skyrim/PartyQuestCompatibilityEnvironmentCache.h>
 #include <Structs/Skyrim/PartyQuestProtocol.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCanonicalInbox.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
@@ -59,6 +60,7 @@ private:
     void FlushQueuedPartyQuestSnapshots(const char* acReason) noexcept;
     void SendPartyQuestReplicaReport(bool aReconnect, const char* acReason) noexcept;
     void PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexcept;
+    void StartPartyQuestCompatibilityEnvironment() noexcept;
 
     World& m_world;
     EventDispatcher<TESQuestStartStopEvent>* m_pQuestStartStopDispatcher{};
@@ -71,6 +73,7 @@ private:
     PartyQuestClientSubmissionQueue m_partyQuestSubmissions;
     PartyQuestRuntimeCanonicalInbox m_partyQuestRuntimeCanonicalInbox;
     PartyQuestRuntimeCompatibilityManifest m_partyQuestRuntimeCompatibilityManifest;
+    PartyQuestCompatibilityEnvironmentCache m_partyQuestCompatibilityEnvironment;
     std::unordered_map<uint64_t, uint64_t> m_requestTransactions;
     std::unordered_map<GameId, PartyQuestSyncFacts> m_partyQuestSyncFacts;
     bool m_partyQuestProtocolVerified{};

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestCompatibilityEnvironmentCache.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 #include <Structs/Skyrim/PartyQuestRuntimeProcessRequestGate.h>
 
@@ -18,9 +19,9 @@ struct TESQuest;
  * manifest is intentionally empty and production planning therefore stops at
  * RequirementUnavailable.
  *
- * When a profile exists, ObserveFresh() independently fingerprints the resolved
- * live TESQuest topology, the ordered loaded plugin bytes and the installed
- * script/archive bytes under the mapped Skyrim Data directory. These
+ * When a profile exists, ObserveFresh() fingerprints the resolved live TESQuest
+ * topology and combines it with process-owned environment fingerprints computed
+ * once by PartyQuestCompatibilityEnvironmentCache. These
  * fingerprints are deterministic compatibility identities, not authentication
  * primitives. Any unavailable file, malformed runtime object or unresolved
  * GameId fails closed.
@@ -40,6 +41,10 @@ public:
 
     [[nodiscard]] static bool HasReviewedProfile(const GameId& acQuestId) noexcept;
 
+    /** Capture paths/order only; the caller may hash this snapshot off-thread. */
+    [[nodiscard]] static std::optional<PartyQuestCompatibilityEnvironmentSnapshot>
+    CaptureEnvironmentSnapshot() noexcept;
+
     /**
      * Collect the same live compatibility fingerprints used by production
      * planning without minting planning or mutation authority.
@@ -53,11 +58,13 @@ public:
     ObserveDiagnostic(
         TESQuest* apQuest,
         const ModSystem& acModSystem,
-        const GameId& acExpectedQuestId) noexcept;
+        const GameId& acExpectedQuestId,
+        const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept;
 
     [[nodiscard]] static std::optional<PartyQuestRuntimeProcessPlanningEvidence>
     ObserveFresh(
         TESQuest* apQuest,
         const ModSystem& acModSystem,
-        const PartyQuestRuntimeCanonicalCandidate& acCandidate) noexcept;
+        const PartyQuestRuntimeCanonicalCandidate& acCandidate,
+        const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept;
 };

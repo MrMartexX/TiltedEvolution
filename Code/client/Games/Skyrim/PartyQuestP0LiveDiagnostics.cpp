@@ -685,7 +685,8 @@ void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
 void PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(
     TESQuest* apQuest,
     const GameId& acExpectedQuestId,
-    const ModSystem& acModSystem) noexcept
+    const ModSystem& acModSystem,
+    const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept
 {
     if (!apQuest || !acExpectedQuestId || !IsEnabled())
         return;
@@ -697,7 +698,8 @@ void PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(
                 PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
                     apQuest,
                     acModSystem,
-                    acExpectedQuestId);
+                    acExpectedQuestId,
+                    acEnvironment);
 
             std::ostringstream fields;
             fields << "\"generation\":"

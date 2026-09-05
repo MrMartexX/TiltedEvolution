@@ -79,6 +79,8 @@ QuestService::~QuestService() noexcept
 
 void QuestService::OnConnected(const ConnectedEvent& acEvent) noexcept
 {
+    StartPartyQuestCompatibilityEnvironment();
+
     const bool retainedReplica = m_partyQuestSession.has_value();
     const uint32_t previousPlayerId = m_partyQuestSession ? m_partyQuestSession->GetClientId() : 0;
 
@@ -115,6 +117,36 @@ void QuestService::OnConnected(const ConnectedEvent& acEvent) noexcept
         m_partyQuestSubmissions.GetQueuedCount());
 
     // The legacy quest-selection behavior remains intentionally disabled.
+}
+
+void QuestService::StartPartyQuestCompatibilityEnvironment() noexcept
+{
+    if (m_partyQuestCompatibilityEnvironment.GetStatus() !=
+        PartyQuestCompatibilityEnvironmentCacheStatus::Empty)
+    {
+        return;
+    }
+
+    auto snapshot =
+        PartyQuestSkyrimRuntimeCompatibilityEvidence::CaptureEnvironmentSnapshot();
+    if (!snapshot)
+    {
+        spdlog::warn(
+            "PartyQuestRuntime compatibility environment capture unavailable; planning remains fail-closed");
+        return;
+    }
+
+    const auto pluginCount = snapshot->OrderedPlugins.size();
+    if (!m_partyQuestCompatibilityEnvironment.Start(std::move(*snapshot)))
+    {
+        spdlog::warn(
+            "PartyQuestRuntime compatibility environment worker did not start; planning remains fail-closed");
+        return;
+    }
+
+    spdlog::info(
+        "PartyQuestRuntime compatibility environment hashing started off-thread: plugins={}",
+        pluginCount);
 }
 
 void QuestService::OnDisconnected(const DisconnectedEvent&) noexcept
@@ -546,17 +578,19 @@ void QuestService::PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexce
             return;
         }
 
-        // Full compatibility evidence hashes the plugin and script environment.
-        // Never perform that expensive diagnostic scan on Skyrim's runtime
-        // thread for a quest that cannot pass the immutable reviewed manifest
-        // anyway. Unreviewed quests remain fail-closed at PlanLatest below.
+        const auto environment = m_partyQuestCompatibilityEnvironment.GetReady();
+
+        // Environment bytes are hashed once by an owner-bound worker. Runtime
+        // planning never reads plugin/archive/script files on Skyrim's thread.
+        // Until the immutable result is ready, planning remains fail-closed.
         if (PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(
-                aQuestId))
+                aQuestId) && environment)
         {
             PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(
                 pQuest,
                 aQuestId,
-                m_world.GetModSystem());
+                m_world.GetModSystem(),
+                *environment);
         }
 
         const auto result = PartyQuestRuntimeProcessRequestGate::PlanLatest(
@@ -564,13 +598,16 @@ void QuestService::PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexce
             m_partyQuestSession->GetReplica(),
             aQuestId,
             m_partyQuestRuntimeCompatibilityManifest,
-            [this, pQuest](const PartyQuestRuntimeCanonicalCandidate& acCandidate)
+            [this, pQuest, environment](const PartyQuestRuntimeCanonicalCandidate& acCandidate)
                 -> std::optional<PartyQuestRuntimeProcessPlanningEvidence>
             {
+                if (!environment)
+                    return std::nullopt;
                 return PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveFresh(
                     pQuest,
                     m_world.GetModSystem(),
-                    acCandidate);
+                    acCandidate,
+                    *environment);
             });
 
         if (result.IsPlanned())

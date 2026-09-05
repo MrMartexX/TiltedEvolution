@@ -6,6 +6,7 @@
 #include <cstdint>
 
 struct ModSystem;
+struct PartyQuestCompatibilityEnvironmentFingerprints;
 struct TESQuest;
 
 /**
@@ -83,7 +84,8 @@ public:
     static void RecordCompatibilityObservation(
         TESQuest* apQuest,
         const GameId& acExpectedQuestId,
-        const ModSystem& acModSystem) noexcept;
+        const ModSystem& acModSystem,
+        const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept;
 
     static void RecordQuestObservation(
         TESQuest* apQuest,
