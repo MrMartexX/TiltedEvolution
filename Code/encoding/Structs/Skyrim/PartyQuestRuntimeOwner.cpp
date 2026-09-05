@@ -190,10 +190,14 @@ void PartyQuestRuntimeOwner::ClearRuntimeAdapters() noexcept
 
 bool PartyQuestRuntimeOwner::IsAcceptingOperations() const noexcept
 {
-    const uint64_t generation =
-        PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration();
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t generation = fence.GetGeneration();
+    auto lease = fence.TryAcquire(generation);
+    if (!lease || !lease->IsValid())
+        return false;
+
     std::lock_guard lock(m_mutex);
-    return generation != 0 && m_boundGeneration == generation &&
+    return m_boundGeneration == lease->GetGeneration() &&
         CanAcceptLocked();
 }
 
