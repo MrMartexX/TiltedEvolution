@@ -546,13 +546,18 @@ void QuestService::PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexce
             return;
         }
 
-        // Observation is intentionally tied to the process-owned canonical
-        // planning boundary. It can discover exact fingerprints for source
-        // review without scanning every quest and without minting authority.
-        PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(
-            pQuest,
-            aQuestId,
-            m_world.GetModSystem());
+        // Full compatibility evidence hashes the plugin and script environment.
+        // Never perform that expensive diagnostic scan on Skyrim's runtime
+        // thread for a quest that cannot pass the immutable reviewed manifest
+        // anyway. Unreviewed quests remain fail-closed at PlanLatest below.
+        if (PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(
+                aQuestId))
+        {
+            PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(
+                pQuest,
+                aQuestId,
+                m_world.GetModSystem());
+        }
 
         const auto result = PartyQuestRuntimeProcessRequestGate::PlanLatest(
             m_partyQuestRuntimeCanonicalInbox,
