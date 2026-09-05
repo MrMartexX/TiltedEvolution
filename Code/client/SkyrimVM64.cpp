@@ -5,6 +5,7 @@ extern std::unique_ptr<TiltedOnlineApp> g_appInstance;
 
 #include <GameVM.h>
 #include <Games/Skyrim/SaveLoad.h>
+#include <PartyQuestSkyrimRuntimeThread.h>
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
 
 struct Main
@@ -56,6 +57,11 @@ int TP_MAKE_THISCALL(HookVMUpdate, VMContext, float a2)
 short TP_MAKE_THISCALL(HookMainLoop, Main)
 {
     TP_EMPTY_HOOK_PLACEHOLDER
+
+    // Main::Update is the engine-owned game-loop boundary. VMUpdate callbacks
+    // may run on several Papyrus worker threads, so they cannot establish the
+    // thread identity used to confine canonical runtime mutation.
+    (void)PartyQuestSkyrimRuntimeThread::ObserveCurrentUpdateThread();
 
     PartyQuestEngineIdentityTransition transition;
     if (apThis && (apThis->resetGame || apThis->fullReset))

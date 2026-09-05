@@ -19,7 +19,6 @@
 #include <Services/DiscordService.h>
 
 #include <PartyQuestP0LiveDiagnostics.h>
-#include <PartyQuestSkyrimRuntimeThread.h>
 #include <PartyQuestSkyrimReferenceReadiness.h>
 #include <SaveLoad.h>
 #include <NvidiaUtil.h>
@@ -119,12 +118,6 @@ bool TiltedOnlineApp::EndMain()
 
 void TiltedOnlineApp::Update()
 {
-    // Bind canonical Skyrim mutation to the same frame-update thread that drains
-    // RunnerService and drives World::Update. A direct network-thread executor
-    // call will therefore fail closed; queued work must perform the complete
-    // guarded Dispatch after it reaches this thread rather than carrying a
-    // prevalidated capability across the queue boundary.
-    (void)PartyQuestSkyrimRuntimeThread::ObserveCurrentUpdateThread();
     PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation();
 
     // Reverting a change that used to be here to disable bUseFaceGenPreprocessedHeads==true (which is 
