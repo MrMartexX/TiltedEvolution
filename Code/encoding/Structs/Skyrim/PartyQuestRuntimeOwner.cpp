@@ -72,9 +72,6 @@ PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
         closedEpoch = m_ownerEpoch;
     }
 
-    if (aBoundary == ClientBoundary::Shutdown)
-        m_compatibilityEnvironment.Stop();
-
     auto invalidation =
         PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
     if (!invalidation || !invalidation->IsValid())
@@ -89,6 +86,9 @@ PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
         else if (m_ownerEpoch == closedEpoch)
             m_lifecycleInvalidationPending = false;
     }
+
+    if (aBoundary == ClientBoundary::Shutdown)
+        m_compatibilityEnvironment.Stop();
 
     return BoundaryStatus::Applied;
 }
@@ -127,8 +127,6 @@ uint64_t PartyQuestRuntimeOwner::CloseSessionLifecycleAdmission(
         ownerEpoch = m_ownerEpoch;
     }
 
-    if (boundary == ClientBoundary::Shutdown)
-        m_compatibilityEnvironment.Stop();
     return ownerEpoch;
 }
 
@@ -139,13 +137,21 @@ void PartyQuestRuntimeOwner::CompleteSessionLifecycleInvalidation(
     if (aOwnerEpoch == 0 || aGeneration == 0)
         return;
 
-    std::lock_guard lock(m_mutex);
-    if (m_ownerEpoch == aOwnerEpoch)
-        m_lifecycleInvalidationPending = false;
+    bool stopCompatibility{};
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_ownerEpoch == aOwnerEpoch)
+        {
+            m_lifecycleInvalidationPending = false;
+            stopCompatibility = m_shutdown;
+        }
+    }
 
     // The caller owns the exclusive generation invalidation lease. Re-locking
     // that shared_mutex here would self-deadlock; nonzero is the local contract.
     (void)aGeneration;
+    if (stopCompatibility)
+        m_compatibilityEnvironment.Stop();
 }
 
 bool PartyQuestRuntimeOwner::PublishRuntimeSessionBound(
