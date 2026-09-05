@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 
 class PartyQuestRuntimeSessionBootstrapTestAccess;
 
@@ -68,7 +69,8 @@ private:
         const std::filesystem::path& acCoopReplicaRoot,
         const PartyQuestCampaignId& acCampaignId,
         const PartyQuestPlayerProfileLineageAuthorization& acPlayerProfile,
-        bool aRequireCompleteLifecycleCoverage) noexcept;
+        bool aRequireCompleteLifecycleCoverage,
+        const std::function<void()>& acAfterGenerationLeaseAcquired = {}) noexcept;
 
     // Defined only in Code/tests; no production implementation/API exists.
     friend class PartyQuestRuntimeSessionBootstrapTestAccess;
