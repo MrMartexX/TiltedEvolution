@@ -234,20 +234,20 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
     if (sessionOwner.IsBound())
     {
         const auto* pSession = sessionOwner.GetRuntimeSession();
-        if (pSession && pSession->GetCampaignId() == *campaign)
+        if (!pSession || pSession->GetCampaignId() != *campaign)
         {
-            owner.MarkRuntimeSessionBound(
-                PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration());
-            return;
+            const auto switched = sessionOwner.PrepareAndRelease(
+                PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
+            if (!switched.CanProceed())
+            {
+                LogLifecycleFailure("campaign-switch-bootstrap", switched);
+                return;
+            }
         }
-
-        const auto switched = sessionOwner.PrepareAndRelease(
-            PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
-        if (!switched.CanProceed())
-        {
-            LogLifecycleFailure("campaign-switch-bootstrap", switched);
-            return;
-        }
+        // An identical campaign is deliberately not a shortcut. Duplicate bind
+        // is idempotent in PartyQuestRuntimeSessionOwner, but rebinding aggregate
+        // admission still requires a freshly resolved lineage authorization for
+        // the current runtime generation.
     }
 
     const auto lineage = PartyQuestSkyrimPlayerProfileLineageResolver::Resolve();
