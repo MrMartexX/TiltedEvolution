@@ -7,10 +7,12 @@
 #include <Events/PartyJoinedEvent.h>
 #include <Events/PartyLeftEvent.h>
 #include <Events/UpdateEvent.h>
+#include <Messages/PartyQuestMessages.h>
 #include <PartyQuestSkyrimPapyrusRuntimeObserver.h>
 #include <PartyQuestSkyrimStageMutationExecutor.h>
 #include <PlayerCharacter.h>
 #include <Services/QuestService.h>
+#include <Structs/Skyrim/PartyQuestExternalSinkLifetime.h>
 #include <Structs/Skyrim/PartyQuestPlayerProfileLineage.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeOwner.h>
@@ -94,12 +96,30 @@ PartyQuestRuntimeOwnerService::PartyQuestRuntimeOwnerService(
         .connect<&PartyQuestRuntimeOwnerService::OnPartyJoined>(this);
     m_partyLeftConnection = aDispatcher.sink<PartyLeftEvent>()
         .connect<&PartyQuestRuntimeOwnerService::OnPartyLeft>(this);
+    m_partyQuestRepairPlanConnection = aDispatcher.sink<NotifyPartyQuestRepairPlan>()
+        .connect<&PartyQuestRuntimeOwnerService::OnPartyQuestRepairPlan>(this);
     m_updateConnection = aDispatcher.sink<UpdateEvent>()
         .connect<&PartyQuestRuntimeOwnerService::OnUpdate>(this);
+
+    // Persisted lineage is created only by the SKSE co-save load path. Observe
+    // the engine's completed LoadGame edge as a retry trigger, never as identity
+    // authority: TryBootstrap still requires the resolver's stable persisted
+    // double-snapshot under the current generation lease.
+    auto* pEventList = EventDispatcherManager::Get();
+    if (pEventList)
+    {
+        m_pLoadGameDispatcher = &pEventList->loadGameEvent;
+        m_pLoadGameDispatcher->RegisterSink(this);
+    }
 }
 
 PartyQuestRuntimeOwnerService::~PartyQuestRuntimeOwnerService() noexcept
 {
+    PartyQuestReleaseExternalSink(
+        m_pLoadGameDispatcher,
+        static_cast<BSTEventSink<TESLoadGameEvent>*>(this));
+    m_bootstrapSignal.Reset();
+
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     if (!owner.IsShutdown())
     {
@@ -117,11 +137,16 @@ void PartyQuestRuntimeOwnerService::OnConnected(const ConnectedEvent&) noexcept
         PartyQuestRuntimeOwner::ClientBoundary::Connected);
     if (status == PartyQuestRuntimeOwner::BoundaryStatus::SynchronizationFailed)
         spdlog::error("PartyQuestRuntimeOwner failed closed at connect generation boundary");
-    m_nextBootstrapAttempt = {};
+
+    // A connection boundary invalidates every previously latched retry. The
+    // accepted repair plan for this connection will publish a fresh signal.
+    m_bootstrapSignal.Reset();
 }
 
 void PartyQuestRuntimeOwnerService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
+    m_bootstrapSignal.Reset();
+
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(
         PartyQuestRuntimeLifecycleEvent::Disconnect);
@@ -135,15 +160,46 @@ void PartyQuestRuntimeOwnerService::OnPartyJoined(const PartyJoinedEvent&) noexc
         PartyQuestRuntimeOwner::ClientBoundary::PartyJoined);
     if (status == PartyQuestRuntimeOwner::BoundaryStatus::SynchronizationFailed)
         spdlog::error("PartyQuestRuntimeOwner failed closed at party-join generation boundary");
-    m_nextBootstrapAttempt = {};
+
+    // Party join itself is not campaign authorization. Wait for the server
+    // repair-plan edge that QuestService validates into verified campaign state.
+    m_bootstrapSignal.Reset();
 }
 
 void PartyQuestRuntimeOwnerService::OnPartyLeft(const PartyLeftEvent&) noexcept
 {
+    m_bootstrapSignal.Reset();
+
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(
         PartyQuestRuntimeLifecycleEvent::PartyLeave);
     LogLifecycleFailure("party-leave", lifecycle);
+}
+
+void PartyQuestRuntimeOwnerService::OnPartyQuestRepairPlan(
+    const NotifyPartyQuestRepairPlan& acPlan) noexcept
+{
+    // The server repair plan is only an edge. QuestService remains the sole
+    // owner of protocol/campaign admission and may reject it; the deferred
+    // game-thread attempt below queries only GetVerifiedPartyQuestCampaignId().
+    // Restrict the wakeup to structurally authoritative candidates so malformed
+    // packets cannot create a retry loop.
+    if (acPlan.IsValid && acPlan.CampaignId.IsValid() &&
+        acPlan.ReportId != 0 && acPlan.PlanId != 0)
+    {
+        m_bootstrapSignal.Publish();
+    }
+}
+
+BSTEventResult PartyQuestRuntimeOwnerService::OnEvent(
+    const TESLoadGameEvent*,
+    const EventDispatcher<TESLoadGameEvent>*)
+{
+    // This event means the character-load lifecycle produced new evidence that
+    // may include a freshly persisted SKSE lineage. It grants no authority by
+    // itself; the resolver revalidates the bridge and generation on consumption.
+    m_bootstrapSignal.Publish();
+    return BSTEventResult::kOk;
 }
 
 void PartyQuestRuntimeOwnerService::OnUpdate(const UpdateEvent&) noexcept
@@ -152,7 +208,10 @@ void PartyQuestRuntimeOwnerService::OnUpdate(const UpdateEvent&) noexcept
     if (owner.IsShutdown())
         return;
 
-    TryBootstrap();
+    // Update is only the thread-affinity consumer for already-published edges.
+    // No bridge/campaign state is scanned unless an authoritative producer fired.
+    if (m_bootstrapSignal.Consume())
+        TryBootstrap();
 
     // Deferred runtime work is executed only from the client update thread. The
     // owner itself supplies the generation execution lease across validation and
@@ -165,14 +224,6 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     if (owner.IsShutdown() || !m_world.GetPartyService().IsInParty())
         return;
-
-    const auto now = std::chrono::steady_clock::now();
-    if (m_nextBootstrapAttempt.time_since_epoch().count() != 0 &&
-        now < m_nextBootstrapAttempt)
-    {
-        return;
-    }
-    m_nextBootstrapAttempt = now + std::chrono::seconds(1);
 
     const auto campaign = m_world.ctx().at<QuestService>()
         .GetVerifiedPartyQuestCampaignId();
