@@ -62,6 +62,64 @@ void LogLifecycleFailure(
         acResult.TransactionId,
         acResult.GuardHeld);
 }
+
+[[nodiscard]] constexpr const char* BootstrapStatusName(
+    PartyQuestRuntimeSessionBootstrapStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestRuntimeSessionBootstrapStatus::Bound:
+        return "bound";
+    case PartyQuestRuntimeSessionBootstrapStatus::InvalidCampaign:
+        return "invalid-campaign";
+    case PartyQuestRuntimeSessionBootstrapStatus::UnverifiedPlayerProfile:
+        return "unverified-player-profile";
+    case PartyQuestRuntimeSessionBootstrapStatus::RuntimeGenerationUnavailable:
+        return "generation-mismatch-or-unavailable";
+    case PartyQuestRuntimeSessionBootstrapStatus::InvalidReplicaRoot:
+        return "invalid-replica-root";
+    case PartyQuestRuntimeSessionBootstrapStatus::InvalidLayout:
+        return "invalid-layout";
+    case PartyQuestRuntimeSessionBootstrapStatus::LifecycleCoverageIncomplete:
+        return "lifecycle-coverage-incomplete";
+    case PartyQuestRuntimeSessionBootstrapStatus::OwnerRejected:
+        return "owner-rejected";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] constexpr const char* OwnerStatusName(
+    PartyQuestRuntimeSessionOwnerBindStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestRuntimeSessionOwnerBindStatus::Bound:
+        return "bound";
+    case PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound:
+        return "already-bound";
+    case PartyQuestRuntimeSessionOwnerBindStatus::BindConflict:
+        return "bind-conflict";
+    case PartyQuestRuntimeSessionOwnerBindStatus::ProcessBootstrapRequired:
+        return "process-bootstrap-required";
+    case PartyQuestRuntimeSessionOwnerBindStatus::ProcessGuardBusy:
+        return "process-guard-busy";
+    case PartyQuestRuntimeSessionOwnerBindStatus::InvalidIdentity:
+        return "invalid-identity";
+    case PartyQuestRuntimeSessionOwnerBindStatus::InvalidLayout:
+        return "invalid-layout";
+    case PartyQuestRuntimeSessionOwnerBindStatus::StoreRejected:
+        return "store-rejected";
+    case PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked:
+        return "reconcile-blocked";
+    case PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceBusy:
+        return "workspace-busy";
+    case PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure:
+        return "workspace-lease-failure";
+    case PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure:
+        return "workspace-recovery-failure";
+    }
+    return "unknown";
+}
 } // namespace
 
 PartyQuestRuntimeOwnerService::PartyQuestRuntimeOwnerService(
@@ -250,9 +308,17 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
         // the current runtime generation.
     }
 
-    const auto lineage = PartyQuestSkyrimPlayerProfileLineageResolver::Resolve();
-    if (!lineage.IsVerified())
+    const auto lineageResolution =
+        PartyQuestSkyrimPlayerProfileLineageResolver::ResolveDetailed();
+    if (!lineageResolution.IsVerified())
+    {
+        spdlog::debug(
+            "PartyQuestRuntimeOwner bootstrap awaiting verified lineage: status={}",
+            PartyQuestPlayerProfileLineageResolveStatusName(
+                lineageResolution.Status));
         return;
+    }
+    const auto& lineage = lineageResolution.Authorization;
 
     const auto root = ResolveCoopReplicaRoot();
     if (root.empty() || !root.is_absolute() || root.filename() != L"CoopCampaigns")
@@ -301,13 +367,10 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
         return;
     }
 
-    if (bootstrap.Status != PartyQuestRuntimeSessionBootstrapStatus::UnverifiedPlayerProfile)
-    {
-        spdlog::debug(
-            "PartyQuestRuntimeOwner bootstrap rejected fail-closed: aggregateStatus={} bootstrapStatus={} ownerStatus={} generation={}",
-            static_cast<uint32_t>(aggregate.Status),
-            static_cast<uint32_t>(bootstrap.Status),
-            static_cast<uint32_t>(bootstrap.Owner.Status),
-            aggregate.RuntimeGeneration);
-    }
+    spdlog::debug(
+        "PartyQuestRuntimeOwner bootstrap rejected fail-closed: aggregateStatus={} bootstrapStatus={} ownerStatus={} generation={}",
+        static_cast<uint32_t>(aggregate.Status),
+        BootstrapStatusName(bootstrap.Status),
+        OwnerStatusName(bootstrap.Owner.Status),
+        aggregate.RuntimeGeneration);
 }
