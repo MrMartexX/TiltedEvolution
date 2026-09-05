@@ -11,6 +11,7 @@
 #include <Services/DiscordService.h>
 #include <Services/ObjectService.h>
 #include <Services/QuestService.h>
+#include <Services/PartyQuestRuntimeOwnerService.h>
 #include <Services/ActorValueService.h>
 #include <Services/InventoryService.h>
 #include <Services/MagicService.h>
@@ -61,6 +62,13 @@ World::World()
     ctx().emplace<CalendarService>(*this, m_dispatcher, m_transport);
     ctx().emplace<QuestService>(*this, m_dispatcher);
     ctx().emplace<PartyService>(*this, m_dispatcher, m_transport);
+
+    // Equal-party runtime ownership is created once per STR client World after
+    // QuestService and PartyService exist, so bootstrap can observe only their
+    // verified session state. The durable process owner itself survives World
+    // recreation and is generation-invalidated by this service's boundaries.
+    ctx().emplace<PartyQuestRuntimeOwnerService>(*this, m_dispatcher);
+
     ctx().emplace<ActorValueService>(*this, m_dispatcher, m_transport);
     ctx().emplace<InventoryService>(*this, m_dispatcher, m_transport);
     ctx().emplace<MagicService>(*this, m_dispatcher, m_transport);

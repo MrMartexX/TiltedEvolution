@@ -46,10 +46,11 @@ struct PartyQuestRuntimeSessionBootstrapResult
  * the complete layout + owner bind so a lifecycle transition cannot race
  * profile verification and session hydration.
  *
- * Until New Game and Main Menu have real pre-transition hooks the production
- * entrypoint returns LifecycleCoverageIncomplete even for otherwise valid
- * lineage evidence. Unit tests have a private friend seam to exercise the lower
- * binding mechanism without weakening this production gate.
+ * Lifecycle coverage is production-visible only after the native hook validator
+ * proves that every required pre-transition target was actually committed and
+ * enabled. Unsupported/mismatched runtimes therefore remain fail-closed with
+ * LifecycleCoverageIncomplete rather than turning queued hook intent into
+ * bootstrap authority.
  *
  * This class does not discover a Skyrim character identity, generate a profile
  * id, infer identity from a save filename, or hook any engine lifecycle source.

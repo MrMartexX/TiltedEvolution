@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeOwner.h>
 #include <Structs/Skyrim/PartyQuestRuntimeWorkspacePublicationAuthority.h>
 
 namespace
@@ -22,11 +23,10 @@ PartyQuestRuntimeSessionOwnerBindResult MakeEarlyFailure(
 PartyQuestRuntimeSessionOwner&
 PartyQuestRuntimeSessionOwner::GetProcessOwner() noexcept
 {
-    // Construct the generation fence first so static destruction tears down the
-    // process owner while its generation barrier is still alive.
-    (void)PartyQuestRuntimeGenerationFence::GetProcessFence();
-    static PartyQuestRuntimeSessionOwner s_processOwner;
-    return s_processOwner;
+    // There is exactly one production ownership graph. The durable session owner
+    // is a nested component of PartyQuestRuntimeOwner rather than an independent
+    // function-local singleton with a competing lifetime.
+    return PartyQuestRuntimeOwner::GetProcessOwner().GetSessionOwner();
 }
 
 PartyQuestRuntimeSessionOwner::~PartyQuestRuntimeSessionOwner() noexcept
@@ -119,10 +119,6 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
                 return result;
             }
 
-            // An idempotent exact bind also retries physical guard reconciliation.
-            // This lets a previously bound-but-blocked owner recover after an
-            // unrelated guard conflict is externally resolved without reloading
-            // or replacing its durable session.
             const auto reconciled = m_guardedSession->ReconcileLoadedState();
             result.ReconcileStatus = reconciled.Status;
             result.GuardHeld = reconciled.GuardHeld;
@@ -196,11 +192,6 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
             return result;
         }
 
-        // Finish all potentially throwing path/capability copies before
-        // reconciliation can acquire the physical process SaveGuard for a
-        // RecoveryRequired journal. The store receives the exact lease-backed
-        // capability before hydration so its selected writer and restart cleanup
-        // share one namespace/durability contract from the first transition.
         PartyQuestCoopSavePaths ownedPaths = acPaths;
         auto session = std::make_unique<PartyQuestRuntimeApplySession>(
             acCampaignId,
@@ -225,9 +216,6 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
         auto guardedSession =
             std::make_unique<PartyQuestRuntimeGuardedSession>(*session);
 
-        // Publish the successfully hydrated ownership graph before the noexcept
-        // guard reconciliation. From this point forward, even a guard conflict
-        // leaves a live owner able to retry instead of discarding durable state.
         m_paths.emplace(std::move(ownedPaths));
         m_storeResult = store;
         m_workspaceRecoveryResult = workspaceRecovery;
@@ -279,10 +267,6 @@ PartyQuestRuntimeLifecycleFenceResult
 PartyQuestRuntimeSessionOwner::PrepareAndRelease(
     PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 {
-    // Advance and pin the process generation before touching the guarded runtime
-    // owner. If the synchronization layer cannot provide the exclusive lease,
-    // retain every owner/recovery resource and report InvalidState. The poisoned
-    // generation fence prevents any new runtime dispatch from entering.
     auto generationInvalidation =
         PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
     if (!generationInvalidation || !generationInvalidation->IsValid())
@@ -294,11 +278,19 @@ PartyQuestRuntimeSessionOwner::PrepareAndRelease(
         return result;
     }
 
+    const bool processOwner = this == &GetProcessOwner();
+    const uint64_t generation = generationInvalidation->GetGeneration();
+
     if (!IsBound())
     {
         PartyQuestRuntimeLifecycleFenceResult result;
         result.Event = aEvent;
         result.Status = PartyQuestRuntimeLifecycleFenceStatus::Allowed;
+        if (processOwner)
+        {
+            PartyQuestRuntimeOwner::GetProcessOwner()
+                .ObserveSessionLifecycleBoundary(aEvent, generation);
+        }
         return result;
     }
 
@@ -307,6 +299,15 @@ PartyQuestRuntimeSessionOwner::PrepareAndRelease(
         aEvent);
     if (result.CanProceed())
         Clear();
+
+    // Close aggregate admission even when durable recovery prevents the external
+    // lifecycle boundary from being considered clean. A disconnect/shutdown is
+    // not a reason to let new Skyrim work enter a recovery-blocked owner.
+    if (processOwner)
+    {
+        PartyQuestRuntimeOwner::GetProcessOwner()
+            .ObserveSessionLifecycleBoundary(aEvent, generation);
+    }
     return result;
 }
 

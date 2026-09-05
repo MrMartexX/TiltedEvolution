@@ -3,10 +3,10 @@
 #include <World.h>
 #include <Events/EventDispatcher.h>
 #include <Games/Events.h>
-#include <Structs/Skyrim/PartyQuestCompatibilityEnvironmentCache.h>
 #include <Structs/Skyrim/PartyQuestProtocol.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCanonicalInbox.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
+#include <Structs/Skyrim/PartyQuestRuntimeOwner.h>
 
 #include <optional>
 #include <unordered_map>
@@ -38,6 +38,21 @@ public:
     static bool IsNonSyncableQuest(TESQuest* apQuest);
     static void DebugDumpQuests();
     static bool StopQuest(uint32_t aformId);
+
+    /**
+     * Read-only production-bootstrap view. Campaign identity is exposed only
+     * after the server repair handshake has established a verified local replica.
+     */
+    [[nodiscard]] std::optional<PartyQuestCampaignId>
+    GetVerifiedPartyQuestCampaignId() const noexcept
+    {
+        if (!m_partyQuestProtocolVerified || !m_partyQuestSession)
+            return std::nullopt;
+        const auto campaign = m_partyQuestSession->GetCampaignId();
+        return campaign.IsValid()
+            ? std::optional<PartyQuestCampaignId>(campaign)
+            : std::nullopt;
+    }
 
 private:
     friend struct QuestEventHandler;
@@ -73,7 +88,7 @@ private:
     PartyQuestClientSubmissionQueue m_partyQuestSubmissions;
     PartyQuestRuntimeCanonicalInbox m_partyQuestRuntimeCanonicalInbox;
     PartyQuestRuntimeCompatibilityManifest m_partyQuestRuntimeCompatibilityManifest;
-    PartyQuestCompatibilityEnvironmentCache m_partyQuestCompatibilityEnvironment;
+    PartyQuestRuntimeCompatibilityEnvironmentHandle m_partyQuestCompatibilityEnvironment;
     std::unordered_map<uint64_t, uint64_t> m_requestTransactions;
     std::unordered_map<GameId, PartyQuestSyncFacts> m_partyQuestSyncFacts;
     bool m_partyQuestProtocolVerified{};

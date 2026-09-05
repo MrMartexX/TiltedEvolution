@@ -3,6 +3,7 @@
 #include <Structs/Skyrim/PartyQuestCoopSaveLayout.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
+#include <Structs/Skyrim/PartyQuestRuntimeOwner.h>
 
 PartyQuestRuntimeSessionBootstrapResult
 PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
@@ -72,10 +73,6 @@ PartyQuestRuntimeSessionBootstrap::BindProcessOwnerInternal(
             return result;
         }
 
-        // P0-C: a correct lineage token is not enough while identity-changing
-        // engine transitions can bypass the owner/generation fence. Keep this
-        // check immediately before publication so all ordinary input/generation
-        // validation still fails with its more specific status.
         if (aRequireCompleteLifecycleCoverage &&
             !PartyQuestRuntimeLifecycleIntegrationPolicy::
                 HasCompleteCharacterIdentityCoverage())
@@ -86,18 +83,22 @@ PartyQuestRuntimeSessionBootstrap::BindProcessOwnerInternal(
         }
 
         // Keep generationLease alive through the complete synchronous process
-        // bind. Lifecycle invalidation requires the exclusive side of the same
-        // fence, so no character/runtime transition can cross publication.
-        // BindVerifiedProcessOwner is private: the verified profile bootstrap is
-        // structurally required for production access to the shared owner.
-        auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
-        result.Owner = owner.BindVerifiedProcessOwner(
+        // bind. All identity-changing engine boundaries need the exclusive side
+        // of this same fence and therefore cannot cross durable publication.
+        auto& runtimeOwner = PartyQuestRuntimeOwner::GetProcessOwner();
+        result.Owner = runtimeOwner.GetSessionOwner().BindVerifiedProcessOwner(
             acCampaignId,
             acPlayerProfile.GetProfileId(),
             *paths);
         result.Status = result.Owner.IsBound()
             ? PartyQuestRuntimeSessionBootstrapStatus::Bound
             : PartyQuestRuntimeSessionBootstrapStatus::OwnerRejected;
+
+        if (result.IsBound())
+        {
+            runtimeOwner.MarkRuntimeSessionBound(
+                generationLease->GetGeneration());
+        }
         return result;
     }
     catch (...)
