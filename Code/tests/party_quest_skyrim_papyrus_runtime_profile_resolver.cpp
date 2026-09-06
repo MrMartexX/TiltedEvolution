@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestSkyrimPapyrusRuntimeProfileResolver.h>
+#include <Structs/Skyrim/PartyQuestSkyrimPapyrusRuntimeEvidence.h>
 
 #include <party_quest_papyrus_runtime_observer_test_access.h>
 
@@ -512,4 +513,101 @@ TEST_CASE("Production Skyrim runtime profile registry fails closed before VM sam
     PartyQuestPapyrusRuntimeMonitor monitor(observer);
     REQUIRE_FALSE(monitor.Begin(9100, 0, 1000, observerAuthorization));
     REQUIRE(observer.GetObserveCount() == 0);
+}
+
+TEST_CASE("Production Skyrim runtime profile selects only the installed 1.6.1170 image", "[quest.party-state.quiescence][runtime-profile][1.6.1170]")
+{
+    const auto identity = PartyQuestPapyrusRuntimeObserverTestAccess::
+        AuthorizeInstalledRuntime161170Identity();
+    const auto generation =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource(
+            0x505147454E313631ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true, true, true,
+            1, 6, 1170, 0);
+    const auto snapshot =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot(
+            0x5051534E50313631ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true, true, true,
+            1, 6, 1170, 0);
+
+    REQUIRE(identity.IsVerified());
+    REQUIRE(PartyQuestSkyrimPapyrusRuntimeProfileResolver::Resolve(
+        identity, generation, snapshot).IsVerified());
+
+    const auto otherImage =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeRuntimeIdentity(
+            1, 6, 1170, 0, true, true, 0x5Au);
+    REQUIRE_FALSE(PartyQuestSkyrimPapyrusRuntimeProfileResolver::Resolve(
+        otherImage, generation, snapshot).IsVerified());
+}
+
+TEST_CASE("Exact runtime profile rejects another executable with the same version", "[quest.party-state.quiescence][runtime-profile][executable-identity]")
+{
+    const auto wrongExecutable =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeRuntimeIdentity(
+            9, 9, 9001, 42, true, true, 0x5Au);
+    const auto generation =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeGenerationSource();
+    const auto snapshot =
+        PartyQuestPapyrusRuntimeObserverTestAccess::AuthorizeSnapshot();
+
+    REQUIRE(wrongExecutable.IsVerified());
+    REQUIRE_FALSE(
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            ResolveRuntimeProfileWithEvidenceForTesting(
+                wrongExecutable,
+                generation,
+                snapshot,
+                9, 9, 9001, 42,
+                0x1122334455667788ull,
+                kPartyQuestPapyrusRuntimeRequiredWorkDomains).IsVerified());
+}
+
+TEST_CASE("Skyrim 1.6.1170 Papyrus evidence rejects unproven Address Library variants", "[quest.party-state.quiescence][runtime-profile][address-library]")
+{
+    PartyQuestSkyrimPapyrusRuntimeEvidence evidence{
+        {1, 6, 1170, 0},
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            AuthorizeInstalledRuntime161170Identity().GetExecutableIdentity(),
+        true,
+        2,
+        252631,
+        0x1AA0B48ull,
+        true,
+        true};
+    REQUIRE(evidence.Validate() ==
+        PartyQuestSkyrimPapyrusRuntimeEvidenceStatus::Supported);
+
+    evidence.AddressLibraryLoaded = false;
+    REQUIRE(evidence.Validate() ==
+        PartyQuestSkyrimPapyrusRuntimeEvidenceStatus::AddressLibraryUnavailable);
+    evidence.AddressLibraryLoaded = true;
+
+    // versionlib-1-6-1170-0-1.bin resolves this ID to the alternate RVA. It
+    // does not describe the controlled executable and must not be preferred.
+    evidence.VirtualTableOffset = 0x1A9D588ull;
+    REQUIRE(evidence.Validate() ==
+        PartyQuestSkyrimPapyrusRuntimeEvidenceStatus::WrongVirtualTableRecord);
+}
+
+TEST_CASE("Skyrim 1.6.1170 Papyrus evidence rejects invalid vtable targets", "[quest.party-state.quiescence][runtime-profile][vtable]")
+{
+    PartyQuestSkyrimPapyrusRuntimeEvidence evidence{
+        {1, 6, 1170, 0},
+        PartyQuestPapyrusRuntimeObserverTestAccess::
+            AuthorizeInstalledRuntime161170Identity().GetExecutableIdentity(),
+        true,
+        2,
+        252631,
+        0x1AA0B48ull,
+        false,
+        true};
+    REQUIRE(evidence.Validate() ==
+        PartyQuestSkyrimPapyrusRuntimeEvidenceStatus::InvalidVirtualTable);
+    evidence.VirtualTableReadable = true;
+    evidence.RequiredEntriesExecutable = false;
+    REQUIRE(evidence.Validate() ==
+        PartyQuestSkyrimPapyrusRuntimeEvidenceStatus::InvalidVirtualTable);
 }
