@@ -67,10 +67,11 @@ struct RawHashMap final
     uint32_t Free;
     uint32_t Good;
     const void* Sentinel;
+    uint64_t AllocatorPadding20;
     void* Entries;
-    uint8_t Padding28[0x08];
 };
 static_assert(sizeof(RawHashMap) == 0x30);
+static_assert(offsetof(RawHashMap, Entries) == 0x28);
 
 bool IsReadableProtection(DWORD aProtection) noexcept
 {
