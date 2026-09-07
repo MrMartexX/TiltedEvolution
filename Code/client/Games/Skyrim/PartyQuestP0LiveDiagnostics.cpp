@@ -695,6 +695,16 @@ void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
                    << PartyQuestSkyrimPapyrusRuntimeObserver::LayoutFailureName(
                           sample.LayoutFailure)
                    << "\""
+                   << ",\"failed_hash_map\":{"
+                      "\"capacity\":"
+                   << sample.FailedHashMap.Capacity
+                   << ",\"free\":" << sample.FailedHashMap.Free
+                   << ",\"good\":" << sample.FailedHashMap.Good
+                   << ",\"entries_present\":"
+                   << (sample.FailedHashMap.EntriesPresent ? "true" : "false")
+                   << ",\"entries_range_readable\":"
+                   << (sample.FailedHashMap.EntriesRangeReadable ? "true" : "false")
+                   << '}'
                    << ",\"observation_status\":\""
                    << PapyrusObservationStatusName(observation.Status) << "\""
                    << ",\"pending_work_count\":" << observation.PendingWorkCount

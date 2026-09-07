@@ -46,6 +46,15 @@ struct PartyQuestSkyrimPapyrusDomainCounts final
     uint32_t LatentReturnQueue{};
 };
 
+struct PartyQuestSkyrimPapyrusHashMapDiagnostic final
+{
+    uint32_t Capacity{};
+    uint32_t Free{};
+    uint32_t Good{};
+    bool EntriesPresent{};
+    bool EntriesRangeReadable{};
+};
+
 struct PartyQuestSkyrimPapyrusDiagnosticSample final
 {
     PartyQuestPapyrusRuntimeObservation Observation;
@@ -54,6 +63,7 @@ struct PartyQuestSkyrimPapyrusDiagnosticSample final
         PartyQuestSkyrimPapyrusDiagnosticStatus::VirtualMachineUnavailable};
     PartyQuestSkyrimPapyrusLayoutFailure LayoutFailure{
         PartyQuestSkyrimPapyrusLayoutFailure::None};
+    PartyQuestSkyrimPapyrusHashMapDiagnostic FailedHashMap;
     uint64_t IngressHookInvocationCount{};
     uint64_t ProcessGeneration{};
     bool ExactRuntimeIdentity{};

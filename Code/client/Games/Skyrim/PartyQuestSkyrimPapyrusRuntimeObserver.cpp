@@ -319,11 +319,25 @@ bool TryArrayCount(
     return true;
 }
 
-bool TryHashCount(void* apVm, size_t aOffset, uint32_t& aOut) noexcept
+bool TryHashCount(
+    void* apVm,
+    size_t aOffset,
+    uint32_t& aOut,
+    PartyQuestSkyrimPapyrusHashMapDiagnostic* apDiagnostic = nullptr) noexcept
 {
     const auto* pMap = At<const RawHashMap>(apVm, aOffset);
-    if (!IsReadableRange(pMap, sizeof(*pMap)) ||
-        pMap->Free > pMap->Capacity ||
+    if (!IsReadableRange(pMap, sizeof(*pMap)))
+        return false;
+
+    if (apDiagnostic)
+    {
+        apDiagnostic->Capacity = pMap->Capacity;
+        apDiagnostic->Free = pMap->Free;
+        apDiagnostic->Good = pMap->Good;
+        apDiagnostic->EntriesPresent = pMap->Entries != nullptr;
+    }
+
+    if (pMap->Free > pMap->Capacity ||
         pMap->Capacity > kMaximumPlausibleDomainCount ||
         (pMap->Capacity != 0 && !std::has_single_bit(pMap->Capacity)) ||
         (pMap->Capacity != 0 && pMap->Good >= pMap->Capacity))
@@ -348,7 +362,11 @@ bool TryHashCount(void* apVm, size_t aOffset, uint32_t& aOut) noexcept
             static_cast<size_t>(pMap->Capacity) * kHashMapEntrySize;
         const auto* pLast = reinterpret_cast<const uint8_t*>(pMap->Entries) +
             bytes - 1;
-        if (!IsReadableRange(pMap->Entries, 1) || !IsReadableRange(pLast, 1))
+        const bool entriesRangeReadable =
+            IsReadableRange(pMap->Entries, 1) && IsReadableRange(pLast, 1);
+        if (apDiagnostic)
+            apDiagnostic->EntriesRangeReadable = entriesRangeReadable;
+        if (!entriesRangeReadable)
             return false;
     }
 
@@ -814,12 +832,14 @@ PartyQuestSkyrimPapyrusRuntimeObserver::SampleDiagnostics() noexcept
     else if (!TryHashCount(
                  pVm,
                  kAllRunningStacksOffset,
-                 result.Counts.RunningStacks))
+                 result.Counts.RunningStacks,
+                 &result.FailedHashMap))
         rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::RunningStacks);
     else if (!TryHashCount(
                  pVm,
                  kWaitingLatentReturnsOffset,
-                 result.Counts.LatentReturnQueue))
+                 result.Counts.LatentReturnQueue,
+                 &result.FailedHashMap))
         rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::WaitingLatentReturns);
     else if (!TryAdd(
                  linkedFunctions,
