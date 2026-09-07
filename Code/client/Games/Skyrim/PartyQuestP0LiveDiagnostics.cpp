@@ -699,7 +699,8 @@ void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
                       "\"capacity\":"
                    << sample.FailedHashMap.Capacity
                    << ",\"free\":" << sample.FailedHashMap.Free
-                   << ",\"good\":" << sample.FailedHashMap.Good
+                   << ",\"free_search_start\":"
+                   << sample.FailedHashMap.FreeSearchStart
                    << ",\"entries_present\":"
                    << (sample.FailedHashMap.EntriesPresent ? "true" : "false")
                    << ",\"entries_range_readable\":"

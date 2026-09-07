@@ -7,11 +7,11 @@
 #include <Structs/Skyrim/PartyQuestSkyrimPapyrusRuntimeEvidence.h>
 #include <Structs/Skyrim/PartyQuestSkyrimPapyrusRuntimeProfileResolver.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestPapyrusHashMapLayout.h>
 #include <VersionDb.h>
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <limits>
 
 namespace
@@ -333,14 +333,14 @@ bool TryHashCount(
     {
         apDiagnostic->Capacity = pMap->Capacity;
         apDiagnostic->Free = pMap->Free;
-        apDiagnostic->Good = pMap->Good;
+        apDiagnostic->FreeSearchStart = pMap->Good;
         apDiagnostic->EntriesPresent = pMap->Entries != nullptr;
     }
 
-    if (pMap->Free > pMap->Capacity ||
-        pMap->Capacity > kMaximumPlausibleDomainCount ||
-        (pMap->Capacity != 0 && !std::has_single_bit(pMap->Capacity)) ||
-        (pMap->Capacity != 0 && pMap->Good >= pMap->Capacity))
+    if (!IsPlausiblePartyQuestPapyrusHashMapHeader(
+            pMap->Capacity,
+            pMap->Free,
+            pMap->Good))
     {
         return false;
     }

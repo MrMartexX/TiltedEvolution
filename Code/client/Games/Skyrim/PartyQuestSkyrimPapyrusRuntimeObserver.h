@@ -50,7 +50,7 @@ struct PartyQuestSkyrimPapyrusHashMapDiagnostic final
 {
     uint32_t Capacity{};
     uint32_t Free{};
-    uint32_t Good{};
+    uint32_t FreeSearchStart{};
     bool EntriesPresent{};
     bool EntriesRangeReadable{};
 };
