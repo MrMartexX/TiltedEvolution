@@ -691,6 +691,10 @@ void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
                    << PartyQuestSkyrimPapyrusRuntimeObserver::DiagnosticStatusName(
                           sample.DiagnosticStatus)
                    << "\""
+                   << ",\"layout_failure\":\""
+                   << PartyQuestSkyrimPapyrusRuntimeObserver::LayoutFailureName(
+                          sample.LayoutFailure)
+                   << "\""
                    << ",\"observation_status\":\""
                    << PapyrusObservationStatusName(observation.Status) << "\""
                    << ",\"pending_work_count\":" << observation.PendingWorkCount

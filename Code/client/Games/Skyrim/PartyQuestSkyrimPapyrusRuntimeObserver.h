@@ -18,6 +18,24 @@ enum class PartyQuestSkyrimPapyrusDiagnosticStatus : uint8_t
     GenerationChanged
 };
 
+enum class PartyQuestSkyrimPapyrusLayoutFailure : uint8_t
+{
+    None,
+    LinkedFunctionMessages,
+    OverflowFunctionMessages,
+    VmTasks,
+    SuspendQueue1,
+    SuspendQueue2,
+    OverflowSuspendArray1,
+    OverflowSuspendArray2,
+    RunningStacks,
+    WaitingLatentReturns,
+    FunctionMessageTotal,
+    SuspendResumeTotal,
+    UiWaiting,
+    PendingWorkTotal
+};
+
 struct PartyQuestSkyrimPapyrusDomainCounts final
 {
     uint32_t FunctionMessageQueues{};
@@ -34,6 +52,8 @@ struct PartyQuestSkyrimPapyrusDiagnosticSample final
     PartyQuestSkyrimPapyrusDomainCounts Counts;
     PartyQuestSkyrimPapyrusDiagnosticStatus DiagnosticStatus{
         PartyQuestSkyrimPapyrusDiagnosticStatus::VirtualMachineUnavailable};
+    PartyQuestSkyrimPapyrusLayoutFailure LayoutFailure{
+        PartyQuestSkyrimPapyrusLayoutFailure::None};
     uint64_t IngressHookInvocationCount{};
     uint64_t ProcessGeneration{};
     bool ExactRuntimeIdentity{};
@@ -74,6 +94,9 @@ public:
 
     [[nodiscard]] static const char* DiagnosticStatusName(
         PartyQuestSkyrimPapyrusDiagnosticStatus aStatus) noexcept;
+
+    [[nodiscard]] static const char* LayoutFailureName(
+        PartyQuestSkyrimPapyrusLayoutFailure aFailure) noexcept;
 
     [[nodiscard]] uint64_t GetIngressHookInvocationCount() const noexcept
     {

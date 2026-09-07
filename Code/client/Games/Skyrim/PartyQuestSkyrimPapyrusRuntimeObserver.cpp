@@ -778,46 +778,67 @@ PartyQuestSkyrimPapyrusRuntimeObserver::SampleDiagnostics() noexcept
     uint32_t suspend2 = 0;
     uint32_t overflowSuspend1 = 0;
     uint32_t overflowSuspend2 = 0;
-    if (!TryLinkedFunctionMessageCount(pVm, linkedFunctions) ||
-        !TryArrayCount(
-            pVm,
-            kOverflowFunctionMessagesOffset,
-            kFunctionMessageSize,
-            overflowFunctions) ||
-        !TryArrayCount(pVm, kVmTasksOffset, sizeof(void*), vmTasks) ||
-        !TryStaticQueueCount(pVm, kSuspendQueue1Offset, suspend1) ||
-        !TryStaticQueueCount(pVm, kSuspendQueue2Offset, suspend2) ||
-        !TryArrayCount(
-            pVm,
-            kOverflowSuspendArray1Offset,
-            0x10,
-            overflowSuspend1) ||
-        !TryArrayCount(
-            pVm,
-            kOverflowSuspendArray2Offset,
-            0x10,
-            overflowSuspend2) ||
-        !TryHashCount(pVm, kAllRunningStacksOffset, result.Counts.RunningStacks) ||
-        !TryHashCount(
-            pVm,
-            kWaitingLatentReturnsOffset,
-            result.Counts.LatentReturnQueue) ||
-        !TryAdd(
-            linkedFunctions,
-            overflowFunctions,
-            result.Counts.FunctionMessageQueues) ||
-        !TryAdd(suspend1, suspend2, result.Counts.SuspendResumeQueues) ||
-        !TryAdd(
-            result.Counts.SuspendResumeQueues,
-            overflowSuspend1,
-            result.Counts.SuspendResumeQueues) ||
-        !TryAdd(
-            result.Counts.SuspendResumeQueues,
-            overflowSuspend2,
-            result.Counts.SuspendResumeQueues))
+    const auto rejectLayout = [&result](
+                                  PartyQuestSkyrimPapyrusLayoutFailure aFailure)
     {
+        result.LayoutFailure = aFailure;
         result.DiagnosticStatus =
             PartyQuestSkyrimPapyrusDiagnosticStatus::LayoutValidationFailed;
+    };
+    if (!TryLinkedFunctionMessageCount(pVm, linkedFunctions))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::LinkedFunctionMessages);
+    else if (!TryArrayCount(
+                 pVm,
+                 kOverflowFunctionMessagesOffset,
+                 kFunctionMessageSize,
+                 overflowFunctions))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::OverflowFunctionMessages);
+    else if (!TryArrayCount(pVm, kVmTasksOffset, sizeof(void*), vmTasks))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::VmTasks);
+    else if (!TryStaticQueueCount(pVm, kSuspendQueue1Offset, suspend1))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::SuspendQueue1);
+    else if (!TryStaticQueueCount(pVm, kSuspendQueue2Offset, suspend2))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::SuspendQueue2);
+    else if (!TryArrayCount(
+                 pVm,
+                 kOverflowSuspendArray1Offset,
+                 0x10,
+                 overflowSuspend1))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::OverflowSuspendArray1);
+    else if (!TryArrayCount(
+                 pVm,
+                 kOverflowSuspendArray2Offset,
+                 0x10,
+                 overflowSuspend2))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::OverflowSuspendArray2);
+    else if (!TryHashCount(
+                 pVm,
+                 kAllRunningStacksOffset,
+                 result.Counts.RunningStacks))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::RunningStacks);
+    else if (!TryHashCount(
+                 pVm,
+                 kWaitingLatentReturnsOffset,
+                 result.Counts.LatentReturnQueue))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::WaitingLatentReturns);
+    else if (!TryAdd(
+                 linkedFunctions,
+                 overflowFunctions,
+                 result.Counts.FunctionMessageQueues))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::FunctionMessageTotal);
+    else if (!TryAdd(suspend1, suspend2, result.Counts.SuspendResumeQueues) ||
+             !TryAdd(
+                 result.Counts.SuspendResumeQueues,
+                 overflowSuspend1,
+                 result.Counts.SuspendResumeQueues) ||
+             !TryAdd(
+                 result.Counts.SuspendResumeQueues,
+                 overflowSuspend2,
+                 result.Counts.SuspendResumeQueues))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::SuspendResumeTotal);
+
+    if (result.LayoutFailure != PartyQuestSkyrimPapyrusLayoutFailure::None)
+    {
         return result;
     }
 
@@ -827,6 +848,7 @@ PartyQuestSkyrimPapyrusRuntimeObserver::SampleDiagnostics() noexcept
         kUiWaitingFunctionMessagesOffset);
     if (result.Counts.UiWaitingQueue > kMaximumPlausibleDomainCount)
     {
+        result.LayoutFailure = PartyQuestSkyrimPapyrusLayoutFailure::UiWaiting;
         result.DiagnosticStatus =
             PartyQuestSkyrimPapyrusDiagnosticStatus::LayoutValidationFailed;
         return result;
@@ -858,6 +880,8 @@ PartyQuestSkyrimPapyrusRuntimeObserver::SampleDiagnostics() noexcept
     {
         if (!TryAdd(pending, count, pending))
         {
+            result.LayoutFailure =
+                PartyQuestSkyrimPapyrusLayoutFailure::PendingWorkTotal;
             result.DiagnosticStatus =
                 PartyQuestSkyrimPapyrusDiagnosticStatus::LayoutValidationFailed;
             return result;
@@ -912,6 +936,43 @@ const char* PartyQuestSkyrimPapyrusRuntimeObserver::DiagnosticStatusName(
         return "layout-validation-failed";
     case PartyQuestSkyrimPapyrusDiagnosticStatus::GenerationChanged:
         return "generation-changed-during-snapshot";
+    }
+    return "unknown";
+}
+
+const char* PartyQuestSkyrimPapyrusRuntimeObserver::LayoutFailureName(
+    PartyQuestSkyrimPapyrusLayoutFailure aFailure) noexcept
+{
+    switch (aFailure)
+    {
+    case PartyQuestSkyrimPapyrusLayoutFailure::None:
+        return "none";
+    case PartyQuestSkyrimPapyrusLayoutFailure::LinkedFunctionMessages:
+        return "linked-function-messages";
+    case PartyQuestSkyrimPapyrusLayoutFailure::OverflowFunctionMessages:
+        return "overflow-function-messages";
+    case PartyQuestSkyrimPapyrusLayoutFailure::VmTasks:
+        return "vm-tasks";
+    case PartyQuestSkyrimPapyrusLayoutFailure::SuspendQueue1:
+        return "suspend-queue-1";
+    case PartyQuestSkyrimPapyrusLayoutFailure::SuspendQueue2:
+        return "suspend-queue-2";
+    case PartyQuestSkyrimPapyrusLayoutFailure::OverflowSuspendArray1:
+        return "overflow-suspend-array-1";
+    case PartyQuestSkyrimPapyrusLayoutFailure::OverflowSuspendArray2:
+        return "overflow-suspend-array-2";
+    case PartyQuestSkyrimPapyrusLayoutFailure::RunningStacks:
+        return "running-stacks";
+    case PartyQuestSkyrimPapyrusLayoutFailure::WaitingLatentReturns:
+        return "waiting-latent-returns";
+    case PartyQuestSkyrimPapyrusLayoutFailure::FunctionMessageTotal:
+        return "function-message-total";
+    case PartyQuestSkyrimPapyrusLayoutFailure::SuspendResumeTotal:
+        return "suspend-resume-total";
+    case PartyQuestSkyrimPapyrusLayoutFailure::UiWaiting:
+        return "ui-waiting";
+    case PartyQuestSkyrimPapyrusLayoutFailure::PendingWorkTotal:
+        return "pending-work-total";
     }
     return "unknown";
 }
