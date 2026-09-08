@@ -430,9 +430,6 @@ using TDispatchMethodCall2 = bool(
     void*, uint64_t, const void*, const void*, BSScript::IFunctionArguments*, void*);
 using TDispatchUnboundMethodCall = bool(void*);
 using TReturnFromLatent = void(void*, uint32_t, const void*);
-using TUpdate = void(void*, float);
-using TUpdateTasklets = void(void*, float);
-using TTasksToJobs = void(void*, void*);
 
 TSendEvent* s_sendEvent{};
 TSendEventAll* s_sendEventAll{};
@@ -441,9 +438,6 @@ TDispatchMethodCall1* s_dispatchMethodCall1{};
 TDispatchMethodCall2* s_dispatchMethodCall2{};
 TDispatchUnboundMethodCall* s_dispatchUnboundMethodCall{};
 TReturnFromLatent* s_returnFromLatent{};
-TUpdate* s_update{};
-TUpdateTasklets* s_updateTasklets{};
-TTasksToJobs* s_tasksToJobs{};
 
 bool IsSupportedRuntimeIdentity(
     const PartyQuestSkyrimRuntimeIdentityAuthorization& acIdentity) noexcept
@@ -531,11 +525,6 @@ public:
             BeginIngress();
     }
 
-    static PartyQuestPapyrusIngressEpoch::Scope BeginExecution() noexcept
-    {
-        return PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver().
-            m_ingressEpoch.BeginExecution();
-    }
 };
 
 namespace
@@ -611,24 +600,6 @@ void HookReturnFromLatent(
     s_returnFromLatent(apVm, aStackId, apValue);
 }
 
-void HookUpdate(void* apVm, float aBudget)
-{
-    auto execution = PartyQuestSkyrimPapyrusHookBridge::BeginExecution();
-    s_update(apVm, aBudget);
-}
-
-void HookUpdateTasklets(void* apVm, float aBudget)
-{
-    auto execution = PartyQuestSkyrimPapyrusHookBridge::BeginExecution();
-    s_updateTasklets(apVm, aBudget);
-}
-
-void HookTasksToJobs(void* apVm, void* apJobList)
-{
-    auto execution = PartyQuestSkyrimPapyrusHookBridge::BeginExecution();
-    s_tasksToJobs(apVm, apJobList);
-}
-
 bool ResolveIngressHookTargets() noexcept
 {
     const auto identity = PartyQuestSkyrimRuntimeIdentityResolver::Resolve();
@@ -642,8 +613,8 @@ bool ResolveIngressHookTargets() noexcept
     if (!IsReadableRange(pVtable, sizeof(void*) * 0x2C))
         return false;
 
-    constexpr std::array<size_t, 10> indices{
-        0x04, 0x05, 0x12, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2B};
+    constexpr std::array<size_t, 7> indices{
+        0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2B};
     for (const size_t index : indices)
     {
         if (!IsExecutableAddress(pVtable[index]))
@@ -662,9 +633,6 @@ bool ResolveIngressHookTargets() noexcept
         reinterpret_cast<TDispatchUnboundMethodCall*>(pVtable[0x29]);
     s_returnFromLatent =
         reinterpret_cast<TReturnFromLatent*>(pVtable[0x2B]);
-    s_update = reinterpret_cast<TUpdate*>(pVtable[0x04]);
-    s_updateTasklets = reinterpret_cast<TUpdateTasklets*>(pVtable[0x05]);
-    s_tasksToJobs = reinterpret_cast<TTasksToJobs*>(pVtable[0x12]);
     return true;
 }
 
@@ -681,10 +649,13 @@ static TiltedPhoques::Initializer s_partyQuestPapyrusObserverHooks(
         TP_HOOK(&s_dispatchMethodCall2, HookDispatchMethodCall2);
         TP_HOOK(&s_dispatchUnboundMethodCall, HookDispatchUnboundMethodCall);
         TP_HOOK(&s_returnFromLatent, HookReturnFromLatent);
-        TP_HOOK(&s_update, HookUpdate);
-        TP_HOOK(&s_updateTasklets, HookUpdateTasklets);
-        TP_HOOK(&s_tasksToJobs, HookTasksToJobs);
-        s_ingressHooksRegistered = true;
+        // The core Update/UpdateTasklets/TasksToJobs detours are deliberately
+        // disabled after live evidence showed that installing the Task 03 hook
+        // set prevented ordinary follower, guard and courier Papyrus behavior.
+        // Event ingress alone is insufficient to authorize a coherent runtime
+        // snapshot, so keep publication fail-closed until an execution fence
+        // with proven non-interference is available.
+        s_ingressHooksRegistered = false;
     });
 } // namespace
 
