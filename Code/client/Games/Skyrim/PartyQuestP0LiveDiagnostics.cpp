@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -646,22 +647,47 @@ void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
     RunDiagnostic(
         [&]()
         {
+            // Sampling the Papyrus VM takes several engine locks. Do not do
+            // that every render update: the diagnostics must not compete with
+            // gameplay scripts merely to produce live evidence.
+            static constexpr uint64_t kSampleIntervalMs = 250;
+            static std::atomic<uint64_t> s_nextSampleAtMs{0};
+            const auto now = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            uint64_t nextSampleAtMs = s_nextSampleAtMs.load(
+                std::memory_order_relaxed);
+            while (now >= nextSampleAtMs)
+            {
+                const uint64_t desired = now <=
+                        std::numeric_limits<uint64_t>::max() - kSampleIntervalMs
+                    ? now + kSampleIntervalMs
+                    : std::numeric_limits<uint64_t>::max();
+                if (s_nextSampleAtMs.compare_exchange_weak(
+                        nextSampleAtMs,
+                        desired,
+                        std::memory_order_relaxed,
+                        std::memory_order_relaxed))
+                {
+                    break;
+                }
+            }
+            if (now < nextSampleAtMs)
+                return;
+
             // Capture a short startup sequence to prove repeated observations,
             // then a sparse heartbeat so a longer live run can show real ingress
-            // transitions without generating an unbounded per-frame log.
+            // transitions without generating an unbounded log.
             static uint64_t s_callCount = 0;
             static PartyQuestSkyrimPapyrusDiagnosticStatus s_lastStatus =
                 PartyQuestSkyrimPapyrusDiagnosticStatus::VirtualMachineUnavailable;
             ++s_callCount;
             const bool startupWindow = s_callCount <= 24;
-            const bool heartbeat = (s_callCount % 300) == 0;
+            const bool heartbeat = (s_callCount % 40) == 0;
 
             auto& observer =
                 PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver();
             const auto sample = observer.SampleDiagnostics();
-            const auto now = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count());
             static PartyQuestPapyrusRuntimeMonitor s_monitor(observer);
             static bool s_monitorStarted = false;
             static constexpr uint64_t kDiagnosticTransactionId =
@@ -738,6 +764,7 @@ void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
                    << ",\"bounded_monitor_status\":\""
                    << PapyrusMonitorStatusName(monitorStatus) << "\""
                    << ",\"bounded_monitor_timeout_ms\":30000"
+                   << ",\"sample_interval_ms\":" << kSampleIntervalMs
                    << ",\"authoritative\":false"
                    << ",\"grants_mutation_authority\":false";
             WriteEvent("papyrus_runtime_observation", fields.str());
