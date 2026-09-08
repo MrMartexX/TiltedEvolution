@@ -422,21 +422,10 @@ using TSendEvent = void(
     void*, uint64_t, const void*, BSScript::IFunctionArguments*);
 using TSendEventAll = void(
     void*, const void*, BSScript::IFunctionArguments*);
-using TDispatchStaticCall = bool(
-    void*, const void*, const void*, BSScript::IFunctionArguments*, void*);
-using TDispatchMethodCall1 = bool(
-    void*, void*, const void*, BSScript::IFunctionArguments*, void*);
-using TDispatchMethodCall2 = bool(
-    void*, uint64_t, const void*, const void*, BSScript::IFunctionArguments*, void*);
-using TDispatchUnboundMethodCall = bool(void*);
 using TReturnFromLatent = void(void*, uint32_t, const void*);
 
 TSendEvent* s_sendEvent{};
 TSendEventAll* s_sendEventAll{};
-TDispatchStaticCall* s_dispatchStaticCall{};
-TDispatchMethodCall1* s_dispatchMethodCall1{};
-TDispatchMethodCall2* s_dispatchMethodCall2{};
-TDispatchUnboundMethodCall* s_dispatchUnboundMethodCall{};
 TReturnFromLatent* s_returnFromLatent{};
 
 bool IsSupportedRuntimeIdentity(
@@ -548,49 +537,6 @@ void HookSendEventAll(
     s_sendEventAll(apVm, apEventName, apArguments);
 }
 
-bool HookDispatchStaticCall(
-    void* apVm,
-    const void* apClassName,
-    const void* apFunctionName,
-    BSScript::IFunctionArguments* apArguments,
-    void* apResult)
-{
-    auto ingress = PartyQuestSkyrimPapyrusHookBridge::Begin();
-    return s_dispatchStaticCall(
-        apVm, apClassName, apFunctionName, apArguments, apResult);
-}
-
-bool HookDispatchMethodCall1(
-    void* apVm,
-    void* apObject,
-    const void* apFunctionName,
-    BSScript::IFunctionArguments* apArguments,
-    void* apResult)
-{
-    auto ingress = PartyQuestSkyrimPapyrusHookBridge::Begin();
-    return s_dispatchMethodCall1(
-        apVm, apObject, apFunctionName, apArguments, apResult);
-}
-
-bool HookDispatchMethodCall2(
-    void* apVm,
-    uint64_t aHandle,
-    const void* apClassName,
-    const void* apFunctionName,
-    BSScript::IFunctionArguments* apArguments,
-    void* apResult)
-{
-    auto ingress = PartyQuestSkyrimPapyrusHookBridge::Begin();
-    return s_dispatchMethodCall2(
-        apVm, aHandle, apClassName, apFunctionName, apArguments, apResult);
-}
-
-bool HookDispatchUnboundMethodCall(void* apVm)
-{
-    auto ingress = PartyQuestSkyrimPapyrusHookBridge::Begin();
-    return s_dispatchUnboundMethodCall(apVm);
-}
-
 void HookReturnFromLatent(
     void* apVm,
     uint32_t aStackId,
@@ -613,8 +559,7 @@ bool ResolveIngressHookTargets() noexcept
     if (!IsReadableRange(pVtable, sizeof(void*) * 0x2C))
         return false;
 
-    constexpr std::array<size_t, 7> indices{
-        0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2B};
+    constexpr std::array<size_t, 3> indices{0x24, 0x25, 0x2B};
     for (const size_t index : indices)
     {
         if (!IsExecutableAddress(pVtable[index]))
@@ -623,14 +568,6 @@ bool ResolveIngressHookTargets() noexcept
 
     s_sendEvent = reinterpret_cast<TSendEvent*>(pVtable[0x24]);
     s_sendEventAll = reinterpret_cast<TSendEventAll*>(pVtable[0x25]);
-    s_dispatchStaticCall =
-        reinterpret_cast<TDispatchStaticCall*>(pVtable[0x26]);
-    s_dispatchMethodCall1 =
-        reinterpret_cast<TDispatchMethodCall1*>(pVtable[0x27]);
-    s_dispatchMethodCall2 =
-        reinterpret_cast<TDispatchMethodCall2*>(pVtable[0x28]);
-    s_dispatchUnboundMethodCall =
-        reinterpret_cast<TDispatchUnboundMethodCall*>(pVtable[0x29]);
     s_returnFromLatent =
         reinterpret_cast<TReturnFromLatent*>(pVtable[0x2B]);
     return true;
@@ -644,10 +581,6 @@ static TiltedPhoques::Initializer s_partyQuestPapyrusObserverHooks(
 
         TP_HOOK(&s_sendEvent, HookSendEvent);
         TP_HOOK(&s_sendEventAll, HookSendEventAll);
-        TP_HOOK(&s_dispatchStaticCall, HookDispatchStaticCall);
-        TP_HOOK(&s_dispatchMethodCall1, HookDispatchMethodCall1);
-        TP_HOOK(&s_dispatchMethodCall2, HookDispatchMethodCall2);
-        TP_HOOK(&s_dispatchUnboundMethodCall, HookDispatchUnboundMethodCall);
         TP_HOOK(&s_returnFromLatent, HookReturnFromLatent);
         // The core Update/UpdateTasklets/TasksToJobs detours are deliberately
         // disabled after live evidence showed that installing the Task 03 hook
