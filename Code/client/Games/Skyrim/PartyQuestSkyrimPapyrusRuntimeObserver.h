@@ -18,6 +18,24 @@ enum class PartyQuestSkyrimPapyrusDiagnosticStatus : uint8_t
     GenerationChanged
 };
 
+enum class PartyQuestSkyrimPapyrusLayoutFailure : uint8_t
+{
+    None,
+    LinkedFunctionMessages,
+    OverflowFunctionMessages,
+    VmTasks,
+    SuspendQueue1,
+    SuspendQueue2,
+    OverflowSuspendArray1,
+    OverflowSuspendArray2,
+    RunningStacks,
+    WaitingLatentReturns,
+    FunctionMessageTotal,
+    SuspendResumeTotal,
+    UiWaiting,
+    PendingWorkTotal
+};
+
 struct PartyQuestSkyrimPapyrusDomainCounts final
 {
     uint32_t FunctionMessageQueues{};
@@ -28,20 +46,33 @@ struct PartyQuestSkyrimPapyrusDomainCounts final
     uint32_t LatentReturnQueue{};
 };
 
+struct PartyQuestSkyrimPapyrusHashMapDiagnostic final
+{
+    uint32_t Capacity{};
+    uint32_t Free{};
+    uint32_t FreeSearchStart{};
+    bool EntriesPresent{};
+    bool EntriesRangeReadable{};
+};
+
 struct PartyQuestSkyrimPapyrusDiagnosticSample final
 {
     PartyQuestPapyrusRuntimeObservation Observation;
     PartyQuestSkyrimPapyrusDomainCounts Counts;
     PartyQuestSkyrimPapyrusDiagnosticStatus DiagnosticStatus{
         PartyQuestSkyrimPapyrusDiagnosticStatus::VirtualMachineUnavailable};
+    PartyQuestSkyrimPapyrusLayoutFailure LayoutFailure{
+        PartyQuestSkyrimPapyrusLayoutFailure::None};
+    PartyQuestSkyrimPapyrusHashMapDiagnostic FailedHashMap;
     uint64_t IngressHookInvocationCount{};
+    uint64_t ProcessGeneration{};
     bool ExactRuntimeIdentity{};
     bool IngressHooksRegistered{};
     bool VirtualTableMatched{};
 };
 
 /**
- * Read-only, fail-closed Papyrus VM diagnostic adapter for Skyrim 1.7.104.
+ * Read-only, fail-closed Papyrus VM observer for exact registered images.
  *
  * The layout and vtable contract is intentionally exact-version bound. Every
  * sampled pointer/range and container invariant is checked, all relevant VM
@@ -50,10 +81,9 @@ struct PartyQuestSkyrimPapyrusDiagnosticSample final
  * Unsupported for another runtime) and never falls back to unlocked/partial
  * counts.
  *
- * This diagnostic implementation does not issue a runtime-profile capability.
- * Live samples and source review are evidence needed before the production
- * profile registry may be populated; merely compiling this class cannot grant
- * mutation or authoritative quiescence.
+ * Authorize() issues a capability only when exact executable identity,
+ * Address Library selection, hook coverage and snapshot contracts all match a
+ * registered profile. Sampling alone never grants mutation authority.
  */
 class PartyQuestSkyrimPapyrusRuntimeObserver final
     : public PartyQuestPapyrusRuntimeObserver
@@ -68,8 +98,15 @@ public:
     [[nodiscard]] PartyQuestSkyrimPapyrusDiagnosticSample
     SampleDiagnostics() noexcept;
 
+    /** Exact-profile capability; invalid for unsupported/unproven images. */
+    [[nodiscard]] PartyQuestPapyrusRuntimeObserverAuthorization
+    Authorize() noexcept;
+
     [[nodiscard]] static const char* DiagnosticStatusName(
         PartyQuestSkyrimPapyrusDiagnosticStatus aStatus) noexcept;
+
+    [[nodiscard]] static const char* LayoutFailureName(
+        PartyQuestSkyrimPapyrusLayoutFailure aFailure) noexcept;
 
     [[nodiscard]] uint64_t GetIngressHookInvocationCount() const noexcept
     {

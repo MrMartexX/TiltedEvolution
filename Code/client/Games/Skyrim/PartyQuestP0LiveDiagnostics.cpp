@@ -25,6 +25,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <iomanip>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -322,6 +323,25 @@ const char* PapyrusObservationStatusName(
         return "busy";
     case PartyQuestPapyrusRuntimeObservationStatus::Idle:
         return "idle";
+    }
+    return "unknown";
+}
+
+const char* PapyrusMonitorStatusName(
+    PartyQuestPapyrusRuntimeMonitorStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestPapyrusRuntimeMonitorStatus::Inactive: return "inactive";
+    case PartyQuestPapyrusRuntimeMonitorStatus::Waiting: return "waiting";
+    case PartyQuestPapyrusRuntimeMonitorStatus::Quiescent: return "quiescent";
+    case PartyQuestPapyrusRuntimeMonitorStatus::TimedOut: return "timed-out";
+    case PartyQuestPapyrusRuntimeMonitorStatus::Unsupported: return "unsupported";
+    case PartyQuestPapyrusRuntimeMonitorStatus::InvalidTransaction:
+        return "invalid-transaction";
+    case PartyQuestPapyrusRuntimeMonitorStatus::InvalidClock: return "invalid-clock";
+    case PartyQuestPapyrusRuntimeMonitorStatus::InvalidObservation:
+        return "invalid-observation";
     }
     return "unknown";
 }
@@ -627,19 +647,63 @@ void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
     RunDiagnostic(
         [&]()
         {
+            // Sampling the Papyrus VM takes several engine locks. Do not do
+            // that every render update: the diagnostics must not compete with
+            // gameplay scripts merely to produce live evidence.
+            static constexpr uint64_t kSampleIntervalMs = 250;
+            static std::atomic<uint64_t> s_nextSampleAtMs{0};
+            const auto now = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
+            uint64_t nextSampleAtMs = s_nextSampleAtMs.load(
+                std::memory_order_relaxed);
+            while (now >= nextSampleAtMs)
+            {
+                const uint64_t desired = now <=
+                        std::numeric_limits<uint64_t>::max() - kSampleIntervalMs
+                    ? now + kSampleIntervalMs
+                    : std::numeric_limits<uint64_t>::max();
+                if (s_nextSampleAtMs.compare_exchange_weak(
+                        nextSampleAtMs,
+                        desired,
+                        std::memory_order_relaxed,
+                        std::memory_order_relaxed))
+                {
+                    break;
+                }
+            }
+            if (now < nextSampleAtMs)
+                return;
+
             // Capture a short startup sequence to prove repeated observations,
             // then a sparse heartbeat so a longer live run can show real ingress
-            // transitions without generating an unbounded per-frame log.
+            // transitions without generating an unbounded log.
             static uint64_t s_callCount = 0;
             static PartyQuestSkyrimPapyrusDiagnosticStatus s_lastStatus =
                 PartyQuestSkyrimPapyrusDiagnosticStatus::VirtualMachineUnavailable;
             ++s_callCount;
             const bool startupWindow = s_callCount <= 24;
-            const bool heartbeat = (s_callCount % 300) == 0;
+            const bool heartbeat = (s_callCount % 40) == 0;
 
             auto& observer =
                 PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver();
             const auto sample = observer.SampleDiagnostics();
+            static PartyQuestPapyrusRuntimeMonitor s_monitor(observer);
+            static bool s_monitorStarted = false;
+            static constexpr uint64_t kDiagnosticTransactionId =
+                0x50514C4956453136ull;
+            const auto authorization = observer.Authorize();
+            if (!s_monitorStarted && authorization.IsVerified())
+            {
+                s_monitorStarted = s_monitor.Begin(
+                    kDiagnosticTransactionId,
+                    now,
+                    30000,
+                    authorization);
+            }
+            const auto monitorStatus = s_monitorStarted
+                ? s_monitor.Poll(kDiagnosticTransactionId, now)
+                : PartyQuestPapyrusRuntimeMonitorStatus::Inactive;
             const bool statusChanged = sample.DiagnosticStatus != s_lastStatus;
             s_lastStatus = sample.DiagnosticStatus;
             if (!startupWindow && !heartbeat && !statusChanged)
@@ -653,11 +717,28 @@ void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
                    << PartyQuestSkyrimPapyrusRuntimeObserver::DiagnosticStatusName(
                           sample.DiagnosticStatus)
                    << "\""
+                   << ",\"layout_failure\":\""
+                   << PartyQuestSkyrimPapyrusRuntimeObserver::LayoutFailureName(
+                          sample.LayoutFailure)
+                   << "\""
+                   << ",\"failed_hash_map\":{"
+                      "\"capacity\":"
+                   << sample.FailedHashMap.Capacity
+                   << ",\"free\":" << sample.FailedHashMap.Free
+                   << ",\"free_search_start\":"
+                   << sample.FailedHashMap.FreeSearchStart
+                   << ",\"entries_present\":"
+                   << (sample.FailedHashMap.EntriesPresent ? "true" : "false")
+                   << ",\"entries_range_readable\":"
+                   << (sample.FailedHashMap.EntriesRangeReadable ? "true" : "false")
+                   << '}'
                    << ",\"observation_status\":\""
                    << PapyrusObservationStatusName(observation.Status) << "\""
                    << ",\"pending_work_count\":" << observation.PendingWorkCount
                    << ",\"papyrus_generation\":"
                    << observation.QuestEventGeneration
+                   << ",\"process_generation\":"
+                   << sample.ProcessGeneration
                    << ",\"observed_work_domains\":"
                    << observation.ObservedWorkDomains
                    << ",\"domain_counts\":{"
@@ -676,6 +757,14 @@ void PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation() noexcept
                    << (sample.IngressHooksRegistered ? "true" : "false")
                    << ",\"virtual_table_matched\":"
                    << (sample.VirtualTableMatched ? "true" : "false")
+                   << ",\"runtime_profile_authorized\":"
+                   << (authorization.IsVerified() ? "true" : "false")
+                   << ",\"runtime_profile_fingerprint\":"
+                   << authorization.GetRuntimeProfileFingerprint()
+                   << ",\"bounded_monitor_status\":\""
+                   << PapyrusMonitorStatusName(monitorStatus) << "\""
+                   << ",\"bounded_monitor_timeout_ms\":30000"
+                   << ",\"sample_interval_ms\":" << kSampleIntervalMs
                    << ",\"authoritative\":false"
                    << ",\"grants_mutation_authority\":false";
             WriteEvent("papyrus_runtime_observation", fields.str());

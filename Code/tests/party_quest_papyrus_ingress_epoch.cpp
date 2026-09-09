@@ -88,3 +88,22 @@ TEST_CASE("Concurrent Papyrus arrivals cannot look like a stable idle sample", "
     REQUIRE(epoch.GetIngressCount() == 1);
     REQUIRE_FALSE(PartyQuestPapyrusIngressEpoch::IsStable(before, after));
 }
+
+TEST_CASE("Papyrus execution blocks snapshots without advancing idle-frame generation", "[quest.party-state.quiescence][papyrus-ingress][execution]")
+{
+    PartyQuestPapyrusIngressEpoch epoch;
+    const auto before = epoch.Capture();
+    {
+        auto execution = epoch.BeginExecution();
+        REQUIRE(execution.IsActive());
+        REQUIRE_FALSE(PartyQuestPapyrusIngressEpoch::IsStable(
+            before, epoch.Capture()));
+    }
+
+    const auto after = epoch.Capture();
+    REQUIRE(after.Healthy);
+    REQUIRE(after.ActiveIngress == 0);
+    REQUIRE(after.Generation == before.Generation);
+    REQUIRE(PartyQuestPapyrusIngressEpoch::IsStable(before, after));
+    REQUIRE(epoch.GetIngressCount() == 0);
+}

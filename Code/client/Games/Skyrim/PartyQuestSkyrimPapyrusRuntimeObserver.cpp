@@ -4,17 +4,20 @@
 
 #include <Misc/BSScript.h>
 #include <Misc/GameVM.h>
+#include <Structs/Skyrim/PartyQuestSkyrimPapyrusRuntimeEvidence.h>
 #include <Structs/Skyrim/PartyQuestSkyrimPapyrusRuntimeProfileResolver.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestPapyrusHashMapLayout.h>
 #include <VersionDb.h>
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <limits>
 
 namespace
 {
-constexpr PartyQuestSkyrimRuntimeVersion kSupportedRuntime{1, 7, 104, 0};
+constexpr PartyQuestSkyrimRuntimeVersion kRuntime161170{1, 6, 1170, 0};
+constexpr PartyQuestSkyrimRuntimeVersion kRuntime17104{1, 7, 104, 0};
 constexpr uint32_t kInternalVirtualMachineVtableId = 252631;
 constexpr size_t kInternalVirtualMachineReadableSize = 0x9380;
 constexpr uint32_t kMaximumPlausibleDomainCount = 1u << 24;
@@ -64,10 +67,11 @@ struct RawHashMap final
     uint32_t Free;
     uint32_t Good;
     const void* Sentinel;
+    uint64_t AllocatorPadding20;
     void* Entries;
-    uint8_t Padding28[0x08];
 };
 static_assert(sizeof(RawHashMap) == 0x30);
+static_assert(offsetof(RawHashMap, Entries) == 0x28);
 
 bool IsReadableProtection(DWORD aProtection) noexcept
 {
@@ -315,14 +319,28 @@ bool TryArrayCount(
     return true;
 }
 
-bool TryHashCount(void* apVm, size_t aOffset, uint32_t& aOut) noexcept
+bool TryHashCount(
+    void* apVm,
+    size_t aOffset,
+    uint32_t& aOut,
+    PartyQuestSkyrimPapyrusHashMapDiagnostic* apDiagnostic = nullptr) noexcept
 {
     const auto* pMap = At<const RawHashMap>(apVm, aOffset);
-    if (!IsReadableRange(pMap, sizeof(*pMap)) ||
-        pMap->Free > pMap->Capacity ||
-        pMap->Capacity > kMaximumPlausibleDomainCount ||
-        (pMap->Capacity != 0 && !std::has_single_bit(pMap->Capacity)) ||
-        (pMap->Capacity != 0 && pMap->Good >= pMap->Capacity))
+    if (!IsReadableRange(pMap, sizeof(*pMap)))
+        return false;
+
+    if (apDiagnostic)
+    {
+        apDiagnostic->Capacity = pMap->Capacity;
+        apDiagnostic->Free = pMap->Free;
+        apDiagnostic->FreeSearchStart = pMap->Good;
+        apDiagnostic->EntriesPresent = pMap->Entries != nullptr;
+    }
+
+    if (!IsPlausiblePartyQuestPapyrusHashMapHeader(
+            pMap->Capacity,
+            pMap->Free,
+            pMap->Good))
     {
         return false;
     }
@@ -344,7 +362,11 @@ bool TryHashCount(void* apVm, size_t aOffset, uint32_t& aOut) noexcept
             static_cast<size_t>(pMap->Capacity) * kHashMapEntrySize;
         const auto* pLast = reinterpret_cast<const uint8_t*>(pMap->Entries) +
             bytes - 1;
-        if (!IsReadableRange(pMap->Entries, 1) || !IsReadableRange(pLast, 1))
+        const bool entriesRangeReadable =
+            IsReadableRange(pMap->Entries, 1) && IsReadableRange(pLast, 1);
+        if (apDiagnostic)
+            apDiagnostic->EntriesRangeReadable = entriesRangeReadable;
+        if (!entriesRangeReadable)
             return false;
     }
 
@@ -400,23 +422,99 @@ using TSendEvent = void(
     void*, uint64_t, const void*, BSScript::IFunctionArguments*);
 using TSendEventAll = void(
     void*, const void*, BSScript::IFunctionArguments*);
-using TDispatchStaticCall = bool(
-    void*, const void*, const void*, BSScript::IFunctionArguments*, void*);
-using TDispatchMethodCall1 = bool(
-    void*, void*, const void*, BSScript::IFunctionArguments*, void*);
-using TDispatchMethodCall2 = bool(
-    void*, uint64_t, const void*, const void*, BSScript::IFunctionArguments*, void*);
-using TDispatchUnboundMethodCall = bool(void*);
 using TReturnFromLatent = void(void*, uint32_t, const void*);
+using TUpdate = void(BSScript::IVirtualMachine*, float);
+using TUpdateTasklets = void(BSScript::IVirtualMachine*, float);
+
+// The local reverse-engineered headers do not expose BSJobs::JobList. Keep an
+// opaque reference here: it preserves the exact x64 reference ABI while making
+// it impossible for the observer to inspect or mutate the engine-owned list.
+struct OpaqueBsJobsJobList;
+using TTasksToJobs = void(BSScript::IVirtualMachine*, OpaqueBsJobsJobList&);
 
 TSendEvent* s_sendEvent{};
 TSendEventAll* s_sendEventAll{};
-TDispatchStaticCall* s_dispatchStaticCall{};
-TDispatchMethodCall1* s_dispatchMethodCall1{};
-TDispatchMethodCall2* s_dispatchMethodCall2{};
-TDispatchUnboundMethodCall* s_dispatchUnboundMethodCall{};
 TReturnFromLatent* s_returnFromLatent{};
+TUpdate* s_update{};
+TUpdateTasklets* s_updateTasklets{};
+TTasksToJobs* s_tasksToJobs{};
+
+bool IsSupportedRuntimeIdentity(
+    const PartyQuestSkyrimRuntimeIdentityAuthorization& acIdentity) noexcept
+{
+    if (!acIdentity.IsVerified())
+        return false;
+
+    if (acIdentity.GetRuntimeVersion().Matches(kRuntime161170))
+    {
+        uint64_t vtableOffset = 0;
+        const bool found = VersionDb::Get().FindOffsetById(
+            kInternalVirtualMachineVtableId, vtableOffset);
+        const PartyQuestSkyrimPapyrusRuntimeEvidence evidence{
+            acIdentity.GetRuntimeVersion(),
+            acIdentity.GetExecutableIdentity(),
+            VersionDb::Get().IsLoaded(),
+            VersionDb::Get().GetLoadedDatabaseFormat(),
+            kInternalVirtualMachineVtableId,
+            found ? vtableOffset : 0,
+            true,
+            true};
+        return evidence.Validate() ==
+            PartyQuestSkyrimPapyrusRuntimeEvidenceStatus::Supported;
+    }
+
+    // Retain the existing 1.7.104 diagnostic surface. It still cannot issue a
+    // production profile while its stable executable identity is unregistered.
+    return acIdentity.GetRuntimeVersion().Matches(kRuntime17104);
+}
 } // namespace
+
+class PartyQuestSkyrimPapyrusGenerationSourceResolver final
+{
+public:
+    [[nodiscard]] static PartyQuestPapyrusRuntimeGenerationAuthorization
+    Resolve(
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acIdentity) noexcept
+    {
+        if (!s_ingressHooksRegistered ||
+            !acIdentity.GetRuntimeVersion().Matches(kRuntime161170) ||
+            !IsSupportedRuntimeIdentity(acIdentity))
+        {
+            return {};
+        }
+
+        return PartyQuestPapyrusRuntimeGenerationAuthorization(
+            kRuntime161170,
+            0x505147454E313631ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true,
+            true);
+    }
+};
+
+class PartyQuestSkyrimPapyrusSnapshotResolver final
+{
+public:
+    [[nodiscard]] static PartyQuestPapyrusRuntimeSnapshotAuthorization Resolve(
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acIdentity) noexcept
+    {
+        if (!s_ingressHooksRegistered ||
+            !acIdentity.GetRuntimeVersion().Matches(kRuntime161170) ||
+            !IsSupportedRuntimeIdentity(acIdentity))
+        {
+            return {};
+        }
+
+        return PartyQuestPapyrusRuntimeSnapshotAuthorization(
+            kRuntime161170,
+            0x5051534E50313631ull,
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains,
+            true,
+            true,
+            true);
+    }
+};
 
 class PartyQuestSkyrimPapyrusHookBridge final
 {
@@ -426,6 +524,13 @@ public:
         return PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver().
             BeginIngress();
     }
+
+    static PartyQuestPapyrusIngressEpoch::Scope BeginExecution() noexcept
+    {
+        return PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver().
+            m_ingressEpoch.BeginExecution();
+    }
+
 };
 
 namespace
@@ -449,49 +554,6 @@ void HookSendEventAll(
     s_sendEventAll(apVm, apEventName, apArguments);
 }
 
-bool HookDispatchStaticCall(
-    void* apVm,
-    const void* apClassName,
-    const void* apFunctionName,
-    BSScript::IFunctionArguments* apArguments,
-    void* apResult)
-{
-    auto ingress = PartyQuestSkyrimPapyrusHookBridge::Begin();
-    return s_dispatchStaticCall(
-        apVm, apClassName, apFunctionName, apArguments, apResult);
-}
-
-bool HookDispatchMethodCall1(
-    void* apVm,
-    void* apObject,
-    const void* apFunctionName,
-    BSScript::IFunctionArguments* apArguments,
-    void* apResult)
-{
-    auto ingress = PartyQuestSkyrimPapyrusHookBridge::Begin();
-    return s_dispatchMethodCall1(
-        apVm, apObject, apFunctionName, apArguments, apResult);
-}
-
-bool HookDispatchMethodCall2(
-    void* apVm,
-    uint64_t aHandle,
-    const void* apClassName,
-    const void* apFunctionName,
-    BSScript::IFunctionArguments* apArguments,
-    void* apResult)
-{
-    auto ingress = PartyQuestSkyrimPapyrusHookBridge::Begin();
-    return s_dispatchMethodCall2(
-        apVm, aHandle, apClassName, apFunctionName, apArguments, apResult);
-}
-
-bool HookDispatchUnboundMethodCall(void* apVm)
-{
-    auto ingress = PartyQuestSkyrimPapyrusHookBridge::Begin();
-    return s_dispatchUnboundMethodCall(apVm);
-}
-
 void HookReturnFromLatent(
     void* apVm,
     uint32_t aStackId,
@@ -501,11 +563,30 @@ void HookReturnFromLatent(
     s_returnFromLatent(apVm, aStackId, apValue);
 }
 
+void HookUpdate(BSScript::IVirtualMachine* apVm, float aBudget)
+{
+    auto execution = PartyQuestSkyrimPapyrusHookBridge::BeginExecution();
+    s_update(apVm, aBudget);
+}
+
+void HookUpdateTasklets(BSScript::IVirtualMachine* apVm, float aBudget)
+{
+    auto execution = PartyQuestSkyrimPapyrusHookBridge::BeginExecution();
+    s_updateTasklets(apVm, aBudget);
+}
+
+void HookTasksToJobs(
+    BSScript::IVirtualMachine* apVm,
+    OpaqueBsJobsJobList& aJobList)
+{
+    auto execution = PartyQuestSkyrimPapyrusHookBridge::BeginExecution();
+    s_tasksToJobs(apVm, aJobList);
+}
+
 bool ResolveIngressHookTargets() noexcept
 {
     const auto identity = PartyQuestSkyrimRuntimeIdentityResolver::Resolve();
-    if (!identity.IsVerified() ||
-        !identity.GetRuntimeVersion().Matches(kSupportedRuntime))
+    if (!IsSupportedRuntimeIdentity(identity))
     {
         return false;
     }
@@ -515,8 +596,8 @@ bool ResolveIngressHookTargets() noexcept
     if (!IsReadableRange(pVtable, sizeof(void*) * 0x2C))
         return false;
 
-    constexpr std::array<size_t, 7> indices{
-        0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2B};
+    constexpr std::array<size_t, 6> indices{
+        0x04, 0x05, 0x12, 0x24, 0x25, 0x2B};
     for (const size_t index : indices)
     {
         if (!IsExecutableAddress(pVtable[index]))
@@ -525,16 +606,11 @@ bool ResolveIngressHookTargets() noexcept
 
     s_sendEvent = reinterpret_cast<TSendEvent*>(pVtable[0x24]);
     s_sendEventAll = reinterpret_cast<TSendEventAll*>(pVtable[0x25]);
-    s_dispatchStaticCall =
-        reinterpret_cast<TDispatchStaticCall*>(pVtable[0x26]);
-    s_dispatchMethodCall1 =
-        reinterpret_cast<TDispatchMethodCall1*>(pVtable[0x27]);
-    s_dispatchMethodCall2 =
-        reinterpret_cast<TDispatchMethodCall2*>(pVtable[0x28]);
-    s_dispatchUnboundMethodCall =
-        reinterpret_cast<TDispatchUnboundMethodCall*>(pVtable[0x29]);
     s_returnFromLatent =
         reinterpret_cast<TReturnFromLatent*>(pVtable[0x2B]);
+    s_update = reinterpret_cast<TUpdate*>(pVtable[0x04]);
+    s_updateTasklets = reinterpret_cast<TUpdateTasklets*>(pVtable[0x05]);
+    s_tasksToJobs = reinterpret_cast<TTasksToJobs*>(pVtable[0x12]);
     return true;
 }
 
@@ -546,11 +622,15 @@ static TiltedPhoques::Initializer s_partyQuestPapyrusObserverHooks(
 
         TP_HOOK(&s_sendEvent, HookSendEvent);
         TP_HOOK(&s_sendEventAll, HookSendEventAll);
-        TP_HOOK(&s_dispatchStaticCall, HookDispatchStaticCall);
-        TP_HOOK(&s_dispatchMethodCall1, HookDispatchMethodCall1);
-        TP_HOOK(&s_dispatchMethodCall2, HookDispatchMethodCall2);
-        TP_HOOK(&s_dispatchUnboundMethodCall, HookDispatchUnboundMethodCall);
         TP_HOOK(&s_returnFromLatent, HookReturnFromLatent);
+        TP_HOOK(&s_update, HookUpdate);
+        TP_HOOK(&s_updateTasklets, HookUpdateTasklets);
+        TP_HOOK(&s_tasksToJobs, HookTasksToJobs);
+        // DispatchStaticCall/DispatchMethodCall*/DispatchUnboundMethodCall are
+        // intentionally absent. Live A/B evidence showed that detouring those
+        // producer-side methods breaks ordinary follower, guard and courier
+        // Papyrus behavior. Consumer-side execution tracking observes the VM
+        // without touching call arguments, callbacks or return values.
         s_ingressHooksRegistered = true;
     });
 } // namespace
@@ -572,12 +652,20 @@ PartyQuestSkyrimPapyrusDiagnosticSample
 PartyQuestSkyrimPapyrusRuntimeObserver::SampleDiagnostics() noexcept
 {
     PartyQuestSkyrimPapyrusDiagnosticSample result;
+    auto& processFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t processGenerationBefore = processFence.GetGeneration();
+    result.ProcessGeneration = processGenerationBefore;
+    if (processFence.IsLifecycleTransitionPending())
+    {
+        result.DiagnosticStatus =
+            PartyQuestSkyrimPapyrusDiagnosticStatus::GenerationChanged;
+        return result;
+    }
     result.IngressHookInvocationCount = GetIngressHookInvocationCount();
     result.IngressHooksRegistered = s_ingressHooksRegistered;
 
     const auto identity = PartyQuestSkyrimRuntimeIdentityResolver::Resolve();
-    result.ExactRuntimeIdentity = identity.IsVerified() &&
-        identity.GetRuntimeVersion().Matches(kSupportedRuntime);
+    result.ExactRuntimeIdentity = IsSupportedRuntimeIdentity(identity);
     if (!result.ExactRuntimeIdentity)
     {
         result.DiagnosticStatus =
@@ -655,46 +743,69 @@ PartyQuestSkyrimPapyrusRuntimeObserver::SampleDiagnostics() noexcept
     uint32_t suspend2 = 0;
     uint32_t overflowSuspend1 = 0;
     uint32_t overflowSuspend2 = 0;
-    if (!TryLinkedFunctionMessageCount(pVm, linkedFunctions) ||
-        !TryArrayCount(
-            pVm,
-            kOverflowFunctionMessagesOffset,
-            kFunctionMessageSize,
-            overflowFunctions) ||
-        !TryArrayCount(pVm, kVmTasksOffset, sizeof(void*), vmTasks) ||
-        !TryStaticQueueCount(pVm, kSuspendQueue1Offset, suspend1) ||
-        !TryStaticQueueCount(pVm, kSuspendQueue2Offset, suspend2) ||
-        !TryArrayCount(
-            pVm,
-            kOverflowSuspendArray1Offset,
-            0x10,
-            overflowSuspend1) ||
-        !TryArrayCount(
-            pVm,
-            kOverflowSuspendArray2Offset,
-            0x10,
-            overflowSuspend2) ||
-        !TryHashCount(pVm, kAllRunningStacksOffset, result.Counts.RunningStacks) ||
-        !TryHashCount(
-            pVm,
-            kWaitingLatentReturnsOffset,
-            result.Counts.LatentReturnQueue) ||
-        !TryAdd(
-            linkedFunctions,
-            overflowFunctions,
-            result.Counts.FunctionMessageQueues) ||
-        !TryAdd(suspend1, suspend2, result.Counts.SuspendResumeQueues) ||
-        !TryAdd(
-            result.Counts.SuspendResumeQueues,
-            overflowSuspend1,
-            result.Counts.SuspendResumeQueues) ||
-        !TryAdd(
-            result.Counts.SuspendResumeQueues,
-            overflowSuspend2,
-            result.Counts.SuspendResumeQueues))
+    const auto rejectLayout = [&result](
+                                  PartyQuestSkyrimPapyrusLayoutFailure aFailure)
     {
+        result.LayoutFailure = aFailure;
         result.DiagnosticStatus =
             PartyQuestSkyrimPapyrusDiagnosticStatus::LayoutValidationFailed;
+    };
+    if (!TryLinkedFunctionMessageCount(pVm, linkedFunctions))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::LinkedFunctionMessages);
+    else if (!TryArrayCount(
+                 pVm,
+                 kOverflowFunctionMessagesOffset,
+                 kFunctionMessageSize,
+                 overflowFunctions))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::OverflowFunctionMessages);
+    else if (!TryArrayCount(pVm, kVmTasksOffset, sizeof(void*), vmTasks))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::VmTasks);
+    else if (!TryStaticQueueCount(pVm, kSuspendQueue1Offset, suspend1))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::SuspendQueue1);
+    else if (!TryStaticQueueCount(pVm, kSuspendQueue2Offset, suspend2))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::SuspendQueue2);
+    else if (!TryArrayCount(
+                 pVm,
+                 kOverflowSuspendArray1Offset,
+                 0x10,
+                 overflowSuspend1))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::OverflowSuspendArray1);
+    else if (!TryArrayCount(
+                 pVm,
+                 kOverflowSuspendArray2Offset,
+                 0x10,
+                 overflowSuspend2))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::OverflowSuspendArray2);
+    else if (!TryHashCount(
+                 pVm,
+                 kAllRunningStacksOffset,
+                 result.Counts.RunningStacks,
+                 &result.FailedHashMap))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::RunningStacks);
+    else if (!TryHashCount(
+                 pVm,
+                 kWaitingLatentReturnsOffset,
+                 result.Counts.LatentReturnQueue,
+                 &result.FailedHashMap))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::WaitingLatentReturns);
+    else if (!TryAdd(
+                 linkedFunctions,
+                 overflowFunctions,
+                 result.Counts.FunctionMessageQueues))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::FunctionMessageTotal);
+    else if (!TryAdd(suspend1, suspend2, result.Counts.SuspendResumeQueues) ||
+             !TryAdd(
+                 result.Counts.SuspendResumeQueues,
+                 overflowSuspend1,
+                 result.Counts.SuspendResumeQueues) ||
+             !TryAdd(
+                 result.Counts.SuspendResumeQueues,
+                 overflowSuspend2,
+                 result.Counts.SuspendResumeQueues))
+        rejectLayout(PartyQuestSkyrimPapyrusLayoutFailure::SuspendResumeTotal);
+
+    if (result.LayoutFailure != PartyQuestSkyrimPapyrusLayoutFailure::None)
+    {
         return result;
     }
 
@@ -704,15 +815,20 @@ PartyQuestSkyrimPapyrusRuntimeObserver::SampleDiagnostics() noexcept
         kUiWaitingFunctionMessagesOffset);
     if (result.Counts.UiWaitingQueue > kMaximumPlausibleDomainCount)
     {
+        result.LayoutFailure = PartyQuestSkyrimPapyrusLayoutFailure::UiWaiting;
         result.DiagnosticStatus =
             PartyQuestSkyrimPapyrusDiagnosticStatus::LayoutValidationFailed;
         return result;
     }
 
     const auto after = m_ingressEpoch.Capture();
+    const uint64_t processGenerationAfter = processFence.GetGeneration();
+    result.ProcessGeneration = processGenerationAfter;
     result.Observation.QuestEventGeneration = after.Generation;
     result.IngressHookInvocationCount = GetIngressHookInvocationCount();
-    if (!PartyQuestPapyrusIngressEpoch::IsStable(before, after))
+    if (!PartyQuestPapyrusIngressEpoch::IsStable(before, after) ||
+        processGenerationBefore != processGenerationAfter ||
+        processFence.IsLifecycleTransitionPending())
     {
         result.DiagnosticStatus =
             PartyQuestSkyrimPapyrusDiagnosticStatus::GenerationChanged;
@@ -731,6 +847,8 @@ PartyQuestSkyrimPapyrusRuntimeObserver::SampleDiagnostics() noexcept
     {
         if (!TryAdd(pending, count, pending))
         {
+            result.LayoutFailure =
+                PartyQuestSkyrimPapyrusLayoutFailure::PendingWorkTotal;
             result.DiagnosticStatus =
                 PartyQuestSkyrimPapyrusDiagnosticStatus::LayoutValidationFailed;
             return result;
@@ -746,6 +864,20 @@ PartyQuestSkyrimPapyrusRuntimeObserver::SampleDiagnostics() noexcept
     result.DiagnosticStatus =
         PartyQuestSkyrimPapyrusDiagnosticStatus::Sampled;
     return result;
+}
+
+PartyQuestPapyrusRuntimeObserverAuthorization
+PartyQuestSkyrimPapyrusRuntimeObserver::Authorize() noexcept
+{
+    const auto identity = PartyQuestSkyrimRuntimeIdentityResolver::Resolve();
+    const auto generation =
+        PartyQuestSkyrimPapyrusGenerationSourceResolver::Resolve(identity);
+    const auto snapshot =
+        PartyQuestSkyrimPapyrusSnapshotResolver::Resolve(identity);
+    const auto profile =
+        PartyQuestSkyrimPapyrusRuntimeProfileResolver::Resolve(
+            identity, generation, snapshot);
+    return PartyQuestPapyrusRuntimeObserverAuthorization(*this, profile);
 }
 
 const char* PartyQuestSkyrimPapyrusRuntimeObserver::DiagnosticStatusName(
@@ -771,6 +903,43 @@ const char* PartyQuestSkyrimPapyrusRuntimeObserver::DiagnosticStatusName(
         return "layout-validation-failed";
     case PartyQuestSkyrimPapyrusDiagnosticStatus::GenerationChanged:
         return "generation-changed-during-snapshot";
+    }
+    return "unknown";
+}
+
+const char* PartyQuestSkyrimPapyrusRuntimeObserver::LayoutFailureName(
+    PartyQuestSkyrimPapyrusLayoutFailure aFailure) noexcept
+{
+    switch (aFailure)
+    {
+    case PartyQuestSkyrimPapyrusLayoutFailure::None:
+        return "none";
+    case PartyQuestSkyrimPapyrusLayoutFailure::LinkedFunctionMessages:
+        return "linked-function-messages";
+    case PartyQuestSkyrimPapyrusLayoutFailure::OverflowFunctionMessages:
+        return "overflow-function-messages";
+    case PartyQuestSkyrimPapyrusLayoutFailure::VmTasks:
+        return "vm-tasks";
+    case PartyQuestSkyrimPapyrusLayoutFailure::SuspendQueue1:
+        return "suspend-queue-1";
+    case PartyQuestSkyrimPapyrusLayoutFailure::SuspendQueue2:
+        return "suspend-queue-2";
+    case PartyQuestSkyrimPapyrusLayoutFailure::OverflowSuspendArray1:
+        return "overflow-suspend-array-1";
+    case PartyQuestSkyrimPapyrusLayoutFailure::OverflowSuspendArray2:
+        return "overflow-suspend-array-2";
+    case PartyQuestSkyrimPapyrusLayoutFailure::RunningStacks:
+        return "running-stacks";
+    case PartyQuestSkyrimPapyrusLayoutFailure::WaitingLatentReturns:
+        return "waiting-latent-returns";
+    case PartyQuestSkyrimPapyrusLayoutFailure::FunctionMessageTotal:
+        return "function-message-total";
+    case PartyQuestSkyrimPapyrusLayoutFailure::SuspendResumeTotal:
+        return "suspend-resume-total";
+    case PartyQuestSkyrimPapyrusLayoutFailure::UiWaiting:
+        return "ui-waiting";
+    case PartyQuestSkyrimPapyrusLayoutFailure::PendingWorkTotal:
+        return "pending-work-total";
     }
     return "unknown";
 }

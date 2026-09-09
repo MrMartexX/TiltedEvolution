@@ -9,6 +9,14 @@
 class PartyQuestPapyrusRuntimeObserverTestAccess final
 {
 public:
+    [[nodiscard]] static constexpr PartyQuestSkyrimExecutableIdentity
+    VerifiedTestExecutableIdentity() noexcept
+    {
+        PartyQuestSkyrimExecutableIdentity identity{};
+        identity.Sha256[0] = 0xA5u;
+        return identity;
+    }
+
     static constexpr uint64_t kVerifiedTestRuntimeProfileFingerprint =
         0x5051525450524F46ull;
     static constexpr uint64_t kVerifiedTestGenerationSourceFingerprint =
@@ -27,12 +35,30 @@ public:
         uint32_t aPatch,
         uint32_t aBuild,
         bool aExactSkyrimSeExecutable = true,
-        bool aVersionDbSupported = true) noexcept
+        bool aVersionDbSupported = true,
+        uint8_t aExecutableIdentityTag = 0xA5u) noexcept
     {
+        auto executableIdentity = VerifiedTestExecutableIdentity();
+        executableIdentity.Sha256[0] = aExecutableIdentityTag;
         return PartyQuestSkyrimRuntimeIdentityAuthorization(
             {aMajor, aMinor, aPatch, aBuild},
             aExactSkyrimSeExecutable,
-            aVersionDbSupported);
+            aVersionDbSupported,
+            executableIdentity);
+    }
+
+    [[nodiscard]] static PartyQuestSkyrimRuntimeIdentityAuthorization
+    AuthorizeInstalledRuntime161170Identity() noexcept
+    {
+        return PartyQuestSkyrimRuntimeIdentityAuthorization(
+            {1, 6, 1170, 0},
+            true,
+            true,
+            {{
+                0xC4, 0x34, 0x20, 0x88, 0x94, 0xF0, 0x7F, 0x60,
+                0x4B, 0x85, 0x2F, 0x29, 0xB8, 0xED, 0xC3, 0xA5,
+                0x8C, 0x4D, 0xE6, 0x3D, 0xE7, 0x83, 0x37, 0x37,
+                0x33, 0xE7, 0x2B, 0x2B, 0x73, 0xF3, 0x3B, 0xE9}});
     }
 
     [[nodiscard]] static PartyQuestSkyrimRuntimeIdentityAuthorization
@@ -52,7 +78,8 @@ public:
             {aMappedMajor, aMappedMinor, aMappedPatch, aMappedBuild},
             aMappedExecutableLoaded,
             {aVersionDbMajor, aVersionDbMinor, aVersionDbPatch, aVersionDbBuild},
-            aVersionDbLoaded);
+            aVersionDbLoaded,
+            VerifiedTestExecutableIdentity());
     }
 
     [[nodiscard]] static PartyQuestPapyrusRuntimeGenerationAuthorization
@@ -193,6 +220,7 @@ public:
     {
         const PartyQuestSkyrimPapyrusRuntimeProfileResolver::ProfileDescriptor profile{
             {aProfileMajor, aProfileMinor, aProfilePatch, aProfileBuild},
+            VerifiedTestExecutableIdentity(),
             aRuntimeProfileFingerprint,
             aExpectedGenerationSourceFingerprint,
             aExpectedSnapshotFingerprint,

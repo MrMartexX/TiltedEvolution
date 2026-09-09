@@ -2,6 +2,7 @@
 
 #include <Structs/Skyrim/PartyQuestPapyrusRuntimeMonitor.h>
 
+#include <array>
 #include <cstdint>
 #include <limits>
 #include <string_view>
@@ -89,6 +90,28 @@ struct PartyQuestSkyrimRuntimeVersion final
     }
 };
 
+/** Stable identity of the exact SkyrimSE image selected by the launcher. */
+struct PartyQuestSkyrimExecutableIdentity final
+{
+    std::array<uint8_t, 32> Sha256{};
+
+    [[nodiscard]] bool IsValid() const noexcept
+    {
+        for (const uint8_t byte : Sha256)
+        {
+            if (byte != 0)
+                return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool Matches(
+        const PartyQuestSkyrimExecutableIdentity& acOther) const noexcept
+    {
+        return IsValid() && acOther.IsValid() && Sha256 == acOther.Sha256;
+    }
+};
+
 /**
  * Process-local proof that an exact SkyrimSE executable identity was obtained
  * through the trusted startup/runtime-version boundary and independently
@@ -114,6 +137,12 @@ public:
         return m_runtimeVersion;
     }
 
+    [[nodiscard]] const PartyQuestSkyrimExecutableIdentity&
+    GetExecutableIdentity() const noexcept
+    {
+        return m_executableIdentity;
+    }
+
 private:
     friend class PartyQuestSkyrimRuntimeIdentityResolver;
     friend class PartyQuestSkyrimPapyrusRuntimeProfileResolver;
@@ -122,16 +151,19 @@ private:
     explicit PartyQuestSkyrimRuntimeIdentityAuthorization(
         PartyQuestSkyrimRuntimeVersion aRuntimeVersion,
         bool aExactSkyrimSeExecutable,
-        bool aVersionDbSupported) noexcept
+        bool aVersionDbSupported,
+        PartyQuestSkyrimExecutableIdentity aExecutableIdentity = {}) noexcept
         : m_runtimeVersion(aRuntimeVersion)
         , m_exactSkyrimSeExecutable(aExactSkyrimSeExecutable)
         , m_versionDbSupported(aVersionDbSupported)
+        , m_executableIdentity(aExecutableIdentity)
     {
     }
 
     PartyQuestSkyrimRuntimeVersion m_runtimeVersion{};
     bool m_exactSkyrimSeExecutable{};
     bool m_versionDbSupported{};
+    PartyQuestSkyrimExecutableIdentity m_executableIdentity{};
 };
 
 /**
@@ -145,8 +177,8 @@ private:
  * successfully loaded before client initialization. Any absent state, malformed
  * version, failed VersionDb load or tuple mismatch fails closed.
  *
- * This proves an exact executable-version contract at the existing startup
- * trust boundary; it is not a cryptographic executable authenticity proof.
+ * The production resolver also hashes the exact mapped source image. The hash
+ * is stable binary identity, not publisher/authenticode trust.
  */
 class PartyQuestSkyrimRuntimeIdentityResolver final
 {
@@ -160,7 +192,8 @@ private:
         const PartyQuestSkyrimRuntimeVersion& acMappedExecutableVersion,
         bool aMappedExecutableLoaded,
         const PartyQuestSkyrimRuntimeVersion& acVersionDbVersion,
-        bool aVersionDbLoaded) noexcept
+        bool aVersionDbLoaded,
+        PartyQuestSkyrimExecutableIdentity aExecutableIdentity = {}) noexcept
     {
         if (!aMappedExecutableLoaded ||
             !aVersionDbLoaded ||
@@ -173,7 +206,8 @@ private:
         return PartyQuestSkyrimRuntimeIdentityAuthorization(
             acMappedExecutableVersion,
             true,
-            true);
+            true,
+            aExecutableIdentity);
     }
 };
 
@@ -340,14 +374,22 @@ private:
  * work-generation source. Both evidence capabilities must themselves be bound
  * to the same exact runtime identity.
  *
- * No production Skyrim runtime profile is approved yet. Resolve() therefore
- * returns an invalid capability for every runtime until the ABI/layout,
- * snapshot and generation contracts are supported by separate evidence. This
- * preserves the invariant that an unknown or merely VersionDb-supported
- * executable causes zero authoritative VM sampling.
+ * The registry contains only source-reviewed, exact-image profiles. An unknown
+ * or merely VersionDb-supported executable receives no capability.
  */
 class PartyQuestSkyrimPapyrusRuntimeProfileResolver final
 {
+private:
+    struct ProfileDescriptor final
+    {
+        PartyQuestSkyrimRuntimeVersion RuntimeVersion{};
+        PartyQuestSkyrimExecutableIdentity ExecutableIdentity{};
+        uint64_t RuntimeProfileFingerprint{};
+        uint64_t GenerationSourceFingerprint{};
+        uint64_t SnapshotFingerprint{};
+        uint32_t ObservedWorkDomains{};
+    };
+
 public:
     [[nodiscard]] static PartyQuestPapyrusRuntimeProfileAuthorization Resolve(
         const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
@@ -365,25 +407,23 @@ public:
             return {};
         }
 
-        // Intentionally empty production registry. Do not add an entry from a
-        // version string, Address Library support, guessed VM offsets, unlocked
-        // container reads or an unproven generation hook alone. Any future
-        // entry must bind exact runtime, generation-source and snapshot contract
-        // identities; fingerprints identify audited contracts, not trust them.
-        return {};
+        constexpr ProfileDescriptor profile{
+            {1, 6, 1170, 0},
+            {{
+                0xC4, 0x34, 0x20, 0x88, 0x94, 0xF0, 0x7F, 0x60,
+                0x4B, 0x85, 0x2F, 0x29, 0xB8, 0xED, 0xC3, 0xA5,
+                0x8C, 0x4D, 0xE6, 0x3D, 0xE7, 0x83, 0x37, 0x37,
+                0x33, 0xE7, 0x2B, 0x2B, 0x73, 0xF3, 0x3B, 0xE9}},
+            0x5051525431363137ull, // "PQRT1617"
+            0x505147454E313631ull, // "PQGEN161"
+            0x5051534E50313631ull, // "PQSNP161"
+            kPartyQuestPapyrusRuntimeRequiredWorkDomains};
+        return ResolveExactProfile(
+            acRuntimeIdentity, acGeneration, acSnapshot, profile);
     }
 
 private:
     friend class PartyQuestPapyrusRuntimeObserverTestAccess;
-
-    struct ProfileDescriptor final
-    {
-        PartyQuestSkyrimRuntimeVersion RuntimeVersion{};
-        uint64_t RuntimeProfileFingerprint{};
-        uint64_t GenerationSourceFingerprint{};
-        uint64_t SnapshotFingerprint{};
-        uint32_t ObservedWorkDomains{};
-    };
 
     /**
      * Shared exact-match primitive for future audited registry entries. Kept
@@ -402,6 +442,8 @@ private:
             !acGeneration.IsVerified() ||
             !acSnapshot.IsVerified() ||
             !acRuntimeIdentity.GetRuntimeVersion().Matches(acProfile.RuntimeVersion) ||
+            !acRuntimeIdentity.GetExecutableIdentity().Matches(
+                acProfile.ExecutableIdentity) ||
             !acGeneration.GetRuntimeVersion().Matches(acProfile.RuntimeVersion) ||
             !acSnapshot.GetRuntimeVersion().Matches(acProfile.RuntimeVersion) ||
             acGeneration.GetSourceFingerprint() != acProfile.GenerationSourceFingerprint ||

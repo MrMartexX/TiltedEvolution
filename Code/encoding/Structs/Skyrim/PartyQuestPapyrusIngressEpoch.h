@@ -38,8 +38,10 @@ public:
 
         Scope(Scope&& aOther) noexcept
             : m_pOwner(aOther.m_pOwner)
+            , m_advanceGeneration(aOther.m_advanceGeneration)
         {
             aOther.m_pOwner = nullptr;
+            aOther.m_advanceGeneration = false;
         }
 
         Scope& operator=(Scope&& aOther) noexcept
@@ -48,7 +50,9 @@ public:
             {
                 Release();
                 m_pOwner = aOther.m_pOwner;
+                m_advanceGeneration = aOther.m_advanceGeneration;
                 aOther.m_pOwner = nullptr;
+                aOther.m_advanceGeneration = false;
             }
             return *this;
         }
@@ -67,19 +71,24 @@ public:
         {
             if (!m_pOwner)
                 return;
-            m_pOwner->EndIngress();
+            m_pOwner->EndActivity(m_advanceGeneration);
             m_pOwner = nullptr;
+            m_advanceGeneration = false;
         }
 
     private:
         friend class PartyQuestPapyrusIngressEpoch;
 
-        explicit Scope(PartyQuestPapyrusIngressEpoch& aOwner) noexcept
+        explicit Scope(
+            PartyQuestPapyrusIngressEpoch& aOwner,
+            bool aAdvanceGeneration) noexcept
             : m_pOwner(&aOwner)
+            , m_advanceGeneration(aAdvanceGeneration)
         {
         }
 
         PartyQuestPapyrusIngressEpoch* m_pOwner{};
+        bool m_advanceGeneration{};
     };
 
     PartyQuestPapyrusIngressEpoch() noexcept = default;
@@ -107,7 +116,27 @@ public:
         }
 
         m_ingressCount.fetch_add(1, std::memory_order_relaxed);
-        return Scope(*this);
+        return Scope(*this, true);
+    }
+
+    /**
+     * Marks an internal VM execution/transfer interval. It prevents a sampler
+     * from observing work while it is temporarily held between containers,
+     * but does not manufacture a work-arrival generation on every idle frame.
+     */
+    [[nodiscard]] Scope BeginExecution() noexcept
+    {
+        if (!m_healthy.load(std::memory_order_acquire))
+            return {};
+
+        const uint32_t priorActive =
+            m_activeIngress.fetch_add(1, std::memory_order_acq_rel);
+        if (priorActive == std::numeric_limits<uint32_t>::max())
+        {
+            m_healthy.store(false, std::memory_order_release);
+            return {};
+        }
+        return Scope(*this, false);
     }
 
     [[nodiscard]] Stamp Capture() const noexcept
@@ -148,9 +177,10 @@ private:
         return true;
     }
 
-    void EndIngress() noexcept
+    void EndActivity(bool aAdvanceGeneration) noexcept
     {
-        (void)AdvanceGeneration();
+        if (aAdvanceGeneration)
+            (void)AdvanceGeneration();
         const uint32_t prior =
             m_activeIngress.fetch_sub(1, std::memory_order_acq_rel);
         if (prior == 0)
