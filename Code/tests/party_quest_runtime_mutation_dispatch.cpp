@@ -6,6 +6,7 @@
 #include <catch2/catch.hpp>
 
 #include <type_traits>
+#include <stdexcept>
 
 namespace
 {
@@ -480,4 +481,36 @@ TEST_CASE("Runtime generation fence rejects stale execution lease acquisition",
     auto currentLease = generationFence.TryAcquire(nextGeneration);
     REQUIRE(currentLease.has_value());
     REQUIRE(currentLease->IsValid());
+}
+
+TEST_CASE("Runtime executor exception is contained behind the recovery barrier",
+    "[quest.party-state.runtime-dispatch][verification-envelope][exception]")
+{
+    const auto requirement = BuildRequirement(GameId(95, 0x8900));
+    const auto facts = BuildFacts(requirement);
+    const auto request = BuildRequest(26009, requirement);
+    PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGenerationFence generationFence;
+    auto session = BuildSession();
+    PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
+    PrepareCheckpoint(guarded, session, request);
+
+    const auto result = PartyQuestRuntimeMutationDispatchGate::Dispatch(
+        guarded, request, requirement, generationFence,
+        [&](const GameId&) -> std::optional<PartyQuestRuntimeCompatibilityFacts>
+        {
+            return facts;
+        },
+        [&](const PartyQuestRuntimeApplyRequest&) -> bool
+        {
+            throw std::runtime_error("synthetic native failure");
+        });
+
+    REQUIRE(result.Status == PartyQuestRuntimeMutationDispatchStatus::ExecutorRejected);
+    REQUIRE(result.MutationBarrierArmed);
+    REQUIRE(result.MutationInvoked);
+    REQUIRE_FALSE(result.WasDispatched());
+    REQUIRE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
+    REQUIRE(guarded.AbortBeforeMutation(request.TransactionId).Status ==
+        PartyQuestRuntimeGuardStatus::CheckpointRestoreRequired);
 }

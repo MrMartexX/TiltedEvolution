@@ -4,8 +4,46 @@
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 #include <Structs/Skyrim/PartyQuestSaveGuard.h>
 
+#include <atomic>
+
 namespace
 {
+PartyQuestRuntimeEnvelopeResult EnvelopeResult(
+    PartyQuestRuntimeEnvelopeOutcome aOutcome,
+    PartyQuestRuntimeEnvelopeDisposition aDisposition =
+        PartyQuestRuntimeEnvelopeDisposition::NoOp) noexcept
+{
+    PartyQuestRuntimeEnvelopeResult result;
+    result.Outcome = aOutcome;
+    result.Disposition = aDisposition;
+    return result;
+}
+
+bool IsCanonicalSource(const QuestSnapshot& acSnapshot,
+    const PartyQuestTransitionIdentity& acTransition) noexcept
+{
+    return acSnapshot.QuestId == acTransition.QuestId &&
+        acSnapshot.CurrentStage == acTransition.SourceStage;
+}
+
+bool HasForbiddenSurface(const PartyQuestTransitionEvidence& acEvidence) noexcept
+{
+    return acEvidence.SceneCount != 0 || acEvidence.AliasCount != 0 ||
+        acEvidence.CreatedReferenceCount != 0 || acEvidence.HasPlayerAlias ||
+        acEvidence.HasInventoryMutation || acEvidence.HasQuestObjectMutation ||
+        acEvidence.HasWorldMutation || acEvidence.HasAliasMutation ||
+        acEvidence.HasUnboundedScriptEffects;
+}
+
+bool IsExactPostcondition(const QuestSnapshot& acExpected,
+    QuestSnapshot aObserved) noexcept
+{
+    QuestSnapshot expected = acExpected;
+    expected.Canonicalize();
+    aObserved.Canonicalize();
+    return expected == aObserved;
+}
+
 PartyQuestRuntimeGuardedVerificationResult BuildResult(PartyQuestRuntimeGuardedSession& aGuarded,
     PartyQuestRuntimeVerificationMonitor& aMonitor, uint64_t aTransactionId,
     PartyQuestRuntimeVerificationEvidenceStatus aEvidence) noexcept
@@ -43,6 +81,134 @@ PartyQuestRuntimeGuardedVerificationResult SubmitMismatch(
     return result;
 }
 } // namespace
+
+PartyQuestRuntimeEnvelopeResult PartyQuestRuntimeVerificationGate::AuthorizeEnvelope(
+    const PartyQuestReviewedTransition& acReviewed,
+    const PartyQuestTransitionEvidence& acAdmissionEvidence,
+    const PartyQuestRuntimeEnvelopeIdentity& acExpectedIdentity,
+    const QuestSnapshot& acExpectedTarget,
+    const PartyQuestRuntimeEnvelopePreconditions& acObserved) noexcept
+{
+    try
+    {
+        const auto admission = PartyQuestCompatibilityAdmissionPolicy::Evaluate(
+            acReviewed, acAdmissionEvidence);
+        if (!admission.IsEligible() || HasForbiddenSurface(acAdmissionEvidence) ||
+            admission.TransitionFingerprint != acExpectedIdentity.CompatibilityFingerprint ||
+            acExpectedIdentity.Transition != acReviewed.Identity ||
+            acExpectedIdentity.CampaignId.IsValid() == false ||
+            acExpectedIdentity.PlayerProfileId.IsValid() == false ||
+            acExpectedIdentity.SessionId == 0 || acExpectedIdentity.PartyId == 0 ||
+            acExpectedIdentity.RuntimeGeneration == 0 ||
+            acExpectedIdentity.TransactionId == 0 ||
+            acExpectedIdentity.AuthoritativeRevision == 0 ||
+            acExpectedIdentity.OperationId == 0 ||
+            acExpectedIdentity.ExpectedCurrentSnapshotDigest == 0 ||
+            acExpectedIdentity.ExpectedTargetSnapshotDigest == 0 ||
+            acAdmissionEvidence.AuthoritativeRevision != acExpectedIdentity.AuthoritativeRevision ||
+            acAdmissionEvidence.OperationId != acExpectedIdentity.OperationId ||
+            acExpectedTarget.QuestId != acReviewed.Identity.QuestId ||
+            acExpectedTarget.CurrentStage != acReviewed.Identity.TargetStage ||
+            acExpectedTarget.ComputeDigest() != acExpectedIdentity.ExpectedTargetSnapshotDigest)
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::Unsupported);
+
+        if (acObserved.CurrentIdentity != acExpectedIdentity ||
+            !acObserved.ProcessOwnerCurrent || !acObserved.SessionCurrent ||
+            !acObserved.PartyCurrent || !acObserved.TransactionActive ||
+            !acObserved.RevisionCurrent || !acObserved.CompatibilityCacheCurrent)
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::RejectedStale);
+
+        if (!IsCanonicalSource(acObserved.CurrentSnapshot, acReviewed.Identity) ||
+            acObserved.CurrentSnapshot.ComputeDigest() !=
+                acExpectedIdentity.ExpectedCurrentSnapshotDigest)
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::RejectedStale);
+        if (acReviewed.RequiresReadiness &&
+            (!acObserved.ReferenceEvidenceAvailable || !acObserved.ReferenceReady ||
+             acObserved.ReferenceGeneration != acExpectedIdentity.RuntimeGeneration))
+            return EnvelopeResult(acObserved.ReferenceEvidenceAvailable
+                    ? PartyQuestRuntimeEnvelopeOutcome::BusyRetryable
+                    : PartyQuestRuntimeEnvelopeOutcome::ObserverUnavailable);
+        if (acReviewed.RequiresQuiescence && !acObserved.PapyrusObserverAvailable)
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::ObserverUnavailable);
+        if (acReviewed.RequiresQuiescence && !acObserved.PapyrusQuiescent)
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::BusyRetryable);
+        if (acReviewed.RecoveryClass == PartyQuestRecoveryClass::DurableCheckpointRequired &&
+            (!acObserved.CheckpointAuthorized ||
+             acObserved.CheckpointTransactionId != acExpectedIdentity.TransactionId ||
+             acObserved.CheckpointRevision != acExpectedIdentity.AuthoritativeRevision))
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::RejectedStale);
+
+        static std::atomic<uint64_t> nextNonce{1};
+        uint64_t nonce = nextNonce.fetch_add(1, std::memory_order_relaxed);
+        if (nonce == 0)
+            nonce = nextNonce.fetch_add(1, std::memory_order_relaxed);
+        if (nonce == 0)
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::Unsupported);
+
+        PartyQuestRuntimeEnvelopeResult result =
+            EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::Authorized);
+        PartyQuestRuntimeEnvelopeAuthorization authorization;
+        authorization.m_identity = acExpectedIdentity;
+        authorization.m_expectedTarget = acExpectedTarget;
+        authorization.m_expectedTarget.Canonicalize();
+        authorization.m_nonce = nonce;
+        result.Authorization.emplace(std::move(authorization));
+        return result;
+    }
+    catch (...)
+    {
+        return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::ObserverUnavailable);
+    }
+}
+
+PartyQuestRuntimeEnvelopeResult PartyQuestRuntimeVerificationGate::CompleteEnvelope(
+    PartyQuestRuntimeEnvelopeAuthorization&& aAuthorization,
+    const PartyQuestRuntimeEnvelopeIdentity& acCurrentIdentity,
+    const PartyQuestRuntimeEnvelopePostconditions& acObserved,
+    bool aMutationAttempted, bool aMutationReturnedSuccess,
+    bool aTimedOut) noexcept
+{
+    try
+    {
+        if (!aAuthorization.IsValid())
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::RejectedStale);
+
+        const auto identity = aAuthorization.m_identity;
+        const auto expected = aAuthorization.m_expectedTarget;
+        aAuthorization.m_nonce = 0; // consume before any fallible observation work
+
+        if (identity != acCurrentIdentity)
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::RejectedStale,
+                aMutationAttempted ? PartyQuestRuntimeEnvelopeDisposition::RecoveryRequired
+                                   : PartyQuestRuntimeEnvelopeDisposition::NoOp);
+        if (aTimedOut)
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::Timeout,
+                aMutationAttempted ? PartyQuestRuntimeEnvelopeDisposition::RecoveryRequired
+                                   : PartyQuestRuntimeEnvelopeDisposition::NoOp);
+        if (!aMutationAttempted || !aMutationReturnedSuccess)
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::MutationFailed,
+                aMutationAttempted ? PartyQuestRuntimeEnvelopeDisposition::RecoveryRequired
+                                   : PartyQuestRuntimeEnvelopeDisposition::NoOp);
+        if (!acObserved.Snapshot)
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::ObserverUnavailable,
+                PartyQuestRuntimeEnvelopeDisposition::RecoveryRequired);
+        if (acObserved.AliasDelta || acObserved.SceneDelta || acObserved.InventoryDelta ||
+            acObserved.QuestObjectDelta || acObserved.WorldDelta ||
+            acObserved.StableSamples < 2 ||
+            !IsExactPostcondition(expected, *acObserved.Snapshot))
+            return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::PostconditionMismatch,
+                PartyQuestRuntimeEnvelopeDisposition::RecoveryRequired);
+        return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::Verified,
+            PartyQuestRuntimeEnvelopeDisposition::Commit);
+    }
+    catch (...)
+    {
+        aAuthorization.m_nonce = 0;
+        return EnvelopeResult(PartyQuestRuntimeEnvelopeOutcome::ObserverUnavailable,
+            aMutationAttempted ? PartyQuestRuntimeEnvelopeDisposition::RecoveryRequired
+                               : PartyQuestRuntimeEnvelopeDisposition::NoOp);
+    }
+}
 
 PartyQuestRuntimeVerificationAttemptResult PartyQuestRuntimeVerificationGate::BeginAttempt(
     PartyQuestRuntimeGuardedSession& aGuarded, PartyQuestRuntimeApplySession& aSession,

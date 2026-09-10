@@ -2,9 +2,120 @@
 
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
+#include <Structs/Skyrim/PartyQuestCompatibilityAdmission.h>
 
 #include <functional>
 #include <optional>
+
+enum class PartyQuestRuntimeEnvelopeOutcome : uint8_t
+{
+    Authorized,
+    Verified,
+    BusyRetryable,
+    RejectedStale,
+    Unsupported,
+    Timeout,
+    MutationFailed,
+    PostconditionMismatch,
+    ObserverUnavailable
+};
+
+enum class PartyQuestRuntimeEnvelopeDisposition : uint8_t
+{
+    Commit,
+    RecoveryRequired,
+    NoOp
+};
+
+struct PartyQuestRuntimeEnvelopeIdentity
+{
+    PartyQuestCampaignId CampaignId;
+    PartyQuestPlayerProfileId PlayerProfileId;
+    uint64_t SessionId{};
+    uint64_t PartyId{};
+    uint64_t RuntimeGeneration{};
+    uint64_t TransactionId{};
+    uint64_t AuthoritativeRevision{};
+    uint64_t OperationId{};
+    PartyQuestTransitionIdentity Transition;
+    uint64_t CompatibilityFingerprint{};
+    uint64_t ExpectedCurrentSnapshotDigest{};
+    uint64_t ExpectedTargetSnapshotDigest{};
+
+    bool operator==(const PartyQuestRuntimeEnvelopeIdentity&) const noexcept = default;
+};
+
+/** Fresh point-of-use observations. Booleans are evidence, never authority. */
+struct PartyQuestRuntimeEnvelopePreconditions
+{
+    PartyQuestRuntimeEnvelopeIdentity CurrentIdentity;
+    QuestSnapshot CurrentSnapshot;
+    bool ProcessOwnerCurrent{};
+    bool SessionCurrent{};
+    bool PartyCurrent{};
+    bool TransactionActive{};
+    bool RevisionCurrent{};
+    bool CompatibilityCacheCurrent{};
+    bool ReferenceEvidenceAvailable{};
+    bool ReferenceReady{};
+    uint64_t ReferenceGeneration{};
+    bool PapyrusObserverAvailable{};
+    bool PapyrusQuiescent{};
+    bool CheckpointAuthorized{};
+    uint64_t CheckpointTransactionId{};
+    uint64_t CheckpointRevision{};
+};
+
+struct PartyQuestRuntimeEnvelopePostconditions
+{
+    std::optional<QuestSnapshot> Snapshot;
+    uint32_t StableSamples{};
+    bool AliasDelta{};
+    bool SceneDelta{};
+    bool InventoryDelta{};
+    bool QuestObjectDelta{};
+    bool WorldDelta{};
+};
+
+class PartyQuestRuntimeEnvelopeAuthorization final
+{
+public:
+    PartyQuestRuntimeEnvelopeAuthorization() noexcept = default;
+    PartyQuestRuntimeEnvelopeAuthorization(PartyQuestRuntimeEnvelopeAuthorization&& aOther) noexcept
+        : m_identity(std::move(aOther.m_identity))
+        , m_expectedTarget(std::move(aOther.m_expectedTarget))
+        , m_nonce(aOther.m_nonce)
+    {
+        aOther.m_nonce = 0;
+    }
+    PartyQuestRuntimeEnvelopeAuthorization& operator=(PartyQuestRuntimeEnvelopeAuthorization&& aOther) noexcept
+    {
+        if (this != &aOther)
+        {
+            m_identity = std::move(aOther.m_identity);
+            m_expectedTarget = std::move(aOther.m_expectedTarget);
+            m_nonce = aOther.m_nonce;
+            aOther.m_nonce = 0;
+        }
+        return *this;
+    }
+    PartyQuestRuntimeEnvelopeAuthorization(const PartyQuestRuntimeEnvelopeAuthorization&) = delete;
+    PartyQuestRuntimeEnvelopeAuthorization& operator=(const PartyQuestRuntimeEnvelopeAuthorization&) = delete;
+    [[nodiscard]] bool IsValid() const noexcept { return m_nonce != 0; }
+
+private:
+    friend class PartyQuestRuntimeVerificationGate;
+    PartyQuestRuntimeEnvelopeIdentity m_identity;
+    QuestSnapshot m_expectedTarget;
+    uint64_t m_nonce{};
+};
+
+struct PartyQuestRuntimeEnvelopeResult
+{
+    PartyQuestRuntimeEnvelopeOutcome Outcome{PartyQuestRuntimeEnvelopeOutcome::Unsupported};
+    PartyQuestRuntimeEnvelopeDisposition Disposition{PartyQuestRuntimeEnvelopeDisposition::NoOp};
+    std::optional<PartyQuestRuntimeEnvelopeAuthorization> Authorization;
+};
 
 /**
  * Point-of-use post-mutation verification gate.
@@ -113,6 +224,29 @@ public:
         const GameId&)>;
     using CompatibilityObserver = std::function<std::optional<PartyQuestRuntimeCompatibilityFacts>(
         const GameId&)>;
+
+    /**
+     * Builds a single-use postcondition-verification authorization for one
+     * exact reviewed transition. The supplied observations are validated data,
+     * not process authority: callers still have to cross the existing owned
+     * generation/dispatch gates. This token cannot dispatch native mutation or
+     * bypass the global mutation-disable policy.
+     */
+    [[nodiscard]] static PartyQuestRuntimeEnvelopeResult AuthorizeEnvelope(
+        const PartyQuestReviewedTransition& acReviewed,
+        const PartyQuestTransitionEvidence& acAdmissionEvidence,
+        const PartyQuestRuntimeEnvelopeIdentity& acExpectedIdentity,
+        const QuestSnapshot& acExpectedTarget,
+        const PartyQuestRuntimeEnvelopePreconditions& acObserved) noexcept;
+
+    /** Classifies bounded post-mutation evidence and consumes authorization. */
+    [[nodiscard]] static PartyQuestRuntimeEnvelopeResult CompleteEnvelope(
+        PartyQuestRuntimeEnvelopeAuthorization&& aAuthorization,
+        const PartyQuestRuntimeEnvelopeIdentity& acCurrentIdentity,
+        const PartyQuestRuntimeEnvelopePostconditions& acObserved,
+        bool aMutationAttempted,
+        bool aMutationReturnedSuccess,
+        bool aTimedOut = false) noexcept;
 
     [[nodiscard]] static PartyQuestRuntimeVerificationAttemptResult BeginAttempt(
         PartyQuestRuntimeGuardedSession& aGuardedSession,
