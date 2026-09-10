@@ -1,0 +1,216 @@
+name: Equal party PoC diagnostics
+
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - "Code/encoding/Opcodes.h"
+      - "Code/encoding/Messages/ClientMessageFactory.h"
+      - "Code/encoding/Messages/ServerMessageFactory.h"
+      - "Code/encoding/Messages/PartyQuestMessages.*"
+      - "Code/encoding/Structs/GameId.h"
+      - "Code/encoding/Structs/Skyrim/QuestSnapshot.*"
+      - "Code/encoding/Structs/Skyrim/PartyQuest*.*"
+      - "Code/tests/quest_snapshot.cpp"
+      - "Code/tests/party_quest_*.cpp"
+      - "Code/client/Services/QuestSnapshotCollector.h"
+      - "Code/client/Services/QuestService.h"
+      - "Code/client/Services/Generic/QuestSnapshotCollector.cpp"
+      - "Code/client/Services/Generic/QuestService.cpp"
+      - "Code/client/Games/Skyrim/SaveLoad.cpp"
+      - "Code/client/Games/Skyrim/SaveLoad.h"
+      - "Code/client/Games/Skyrim/PartyQuest*.*"
+      - "Code/client/Games/Skyrim/Forms/BGSBaseAlias.h"
+      - "Code/client/Games/Skyrim/Forms/TESQuest.h"
+      - "Code/server/Services/QuestService.h"
+      - "Code/server/Services/QuestService.cpp"
+      - ".github/workflows/equal-party-poc-diagnostics.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-poc-tests:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Checkout submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive --depth=1
+
+      - name: Cache xmake dependencies
+        uses: actions/cache@v6
+        with:
+          path: ~/.xmake/packages
+          # Do not race the full-build dependency cache namespace.
+          key: ${{ runner.os }}-xmake-poc-x64-debug-3.0.9-${{ hashFiles('**/xmake.lua') }}
+
+      - name: Setup xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: "3.0.9"
+
+      - name: Configure and install dependencies
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+          xmake repo --update 2>&1 | tee poc-config.log
+          timeout 25m xmake config --arch=x64 --mode=debug --yes 2>&1 | tee -a poc-config.log
+          exit 0
+
+      - name: Build quest state tests
+        id: build
+        shell: bash
+        run: |
+          set +e
+          set -o pipefail
+
+          timeout 25m xmake -y -vD TPTests 2>&1 | tee poc-build.log
+          tests_status=${PIPESTATUS[0]}
+
+          grep -Ei "error:|fatal error:|undefined reference|collect2:|error C[0-9]+|LNK[0-9]+" poc-build.log | tail -n 250 > poc-errors.txt || true
+          if [ ! -s poc-errors.txt ]; then
+            tail -n 300 poc-build.log > poc-errors.txt
+          fi
+
+          exit "$tests_status"
+
+      - name: Run quest state tests
+        shell: bash
+        run: |
+          set -o pipefail
+          timeout 5m xmake run TPTests 2>&1 | tee poc-test.log
+
+      - name: Upload Linux diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: equal-party-poc-linux-diagnostics
+          path: |
+            poc-config.log
+            poc-errors.txt
+            poc-build.log
+            poc-test.log
+          retention-days: 7
+
+  build-poc-windows:
+    runs-on: windows-2022
+    timeout-minutes: 50
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Classify validation scope
+        id: scope
+        shell: pwsh
+        run: |
+          $needsFull = ("${{ github.event_name }}" -ne "pull_request") -or ("${{ github.event.action }}" -ne "synchronize") -or [string]::IsNullOrWhiteSpace("${{ github.event.before }}") -or [string]::IsNullOrWhiteSpace("${{ github.event.after }}")
+          if ($needsFull) {
+            "full=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Full validation: non-synchronize event or missing push range."
+            exit 0
+          }
+
+          $before = "${{ github.event.before }}"
+          $after = "${{ github.event.after }}"
+          $files = @(git diff --name-only $before $after)
+          $isolated = $files.Count -gt 0
+
+          foreach ($file in $files) {
+            $isPartyQuest = ($file -match '^Code/encoding/Structs/Skyrim/PartyQuest') -or ($file -match '^Code/tests/party_quest_')
+            if (-not $isPartyQuest) {
+              $isolated = $false
+            }
+          }
+
+          $full = (-not $isolated).ToString().ToLowerInvariant()
+          "full=$full" >> $env:GITHUB_OUTPUT
+          Write-Host "PartyQuest-only pushed range: $isolated"
+          Write-Host "Windows TPTests are unconditional for every diagnostics run."
+
+      - name: Checkout submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --force --recursive --depth=1
+
+      - name: Cache xmake dependencies
+        uses: actions/cache@v6
+        with:
+          path: ~/AppData/Local/.xmake/packages
+          # Do not let restored precompiled packages poison full source builds.
+          key: ${{ runner.os }}-xmake-poc-x64-debug-3.0.9-${{ hashFiles('**/xmake.lua') }}
+
+      - name: Setup xmake
+        uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: "3.0.9"
+
+      - name: Configure
+        run: xmake config --arch=x64 --mode=debug --yes -vD
+
+      - name: Build Windows validation target and capture diagnostics
+        shell: pwsh
+        run: |
+          # TPTests are intentionally unconditional. A sequence of synchronized
+          # pushes may cancel the run that contained a test-file change; using
+          # only the latest push range to decide whether to run tests could then
+          # produce a false validation signal for the current PR HEAD.
+          $targets = if ("${{ steps.scope.outputs.full }}" -eq "true") {
+            @("SkyrimTogetherClient", "TPTests")
+          } else {
+            @("TPTests")
+          }
+
+          Set-Content poc-windows-build.log ""
+          $status = 0
+          foreach ($target in $targets) {
+            Write-Host "Building validation target: $target"
+            xmake -y -vD $target *>> poc-windows-build.log
+            $status = $LASTEXITCODE
+            if ($status -ne 0) {
+              break
+            }
+          }
+
+          if ($status -eq 0) {
+            Write-Host "Running Windows TPTests"
+            $testTemp = Join-Path $env:RUNNER_TEMP "tpq"
+            New-Item -ItemType Directory -Force -Path $testTemp | Out-Null
+            $env:TEMP = $testTemp
+            $env:TMP = $testTemp
+            xmake run TPTests *> poc-windows-test.log
+            $status = $LASTEXITCODE
+          }
+
+          $logs = @("poc-windows-build.log", "poc-windows-test.log") |
+            Where-Object { Test-Path $_ }
+          $matches = Select-String -Path $logs -Pattern 'error C[0-9]+|fatal error|LNK[0-9]+|error:|FAILED|assertion' |
+            Select-Object -Last 250
+          if ($matches) {
+            $matches | ForEach-Object { $_.Line } | Set-Content poc-windows-errors.txt
+          } else {
+            Get-Content $logs | Select-Object -Last 300 | Set-Content poc-windows-errors.txt
+          }
+
+          exit $status
+
+      - name: Upload Windows diagnostic log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: equal-party-poc-windows-diagnostics
+          path: |
+            poc-windows-errors.txt
+            poc-windows-build.log
+            poc-windows-test.log
+          retention-days: 7

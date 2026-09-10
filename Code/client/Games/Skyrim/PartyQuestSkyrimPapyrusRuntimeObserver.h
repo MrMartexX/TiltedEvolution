@@ -1,0 +1,127 @@
+#pragma once
+
+#include <Structs/Skyrim/PartyQuestPapyrusIngressEpoch.h>
+#include <Structs/Skyrim/PartyQuestPapyrusRuntimeMonitor.h>
+
+#include <cstdint>
+
+enum class PartyQuestSkyrimPapyrusDiagnosticStatus : uint8_t
+{
+    Sampled,
+    UnsupportedRuntime,
+    HooksUnavailable,
+    VirtualMachineUnavailable,
+    VirtualTableMismatch,
+    MemoryValidationFailed,
+    LockContended,
+    LayoutValidationFailed,
+    GenerationChanged
+};
+
+enum class PartyQuestSkyrimPapyrusLayoutFailure : uint8_t
+{
+    None,
+    LinkedFunctionMessages,
+    OverflowFunctionMessages,
+    VmTasks,
+    SuspendQueue1,
+    SuspendQueue2,
+    OverflowSuspendArray1,
+    OverflowSuspendArray2,
+    RunningStacks,
+    WaitingLatentReturns,
+    FunctionMessageTotal,
+    SuspendResumeTotal,
+    UiWaiting,
+    PendingWorkTotal
+};
+
+struct PartyQuestSkyrimPapyrusDomainCounts final
+{
+    uint32_t FunctionMessageQueues{};
+    uint32_t VmTaskQueue{};
+    uint32_t UiWaitingQueue{};
+    uint32_t SuspendResumeQueues{};
+    uint32_t RunningStacks{};
+    uint32_t LatentReturnQueue{};
+};
+
+struct PartyQuestSkyrimPapyrusHashMapDiagnostic final
+{
+    uint32_t Capacity{};
+    uint32_t Free{};
+    uint32_t FreeSearchStart{};
+    bool EntriesPresent{};
+    bool EntriesRangeReadable{};
+};
+
+struct PartyQuestSkyrimPapyrusDiagnosticSample final
+{
+    PartyQuestPapyrusRuntimeObservation Observation;
+    PartyQuestSkyrimPapyrusDomainCounts Counts;
+    PartyQuestSkyrimPapyrusDiagnosticStatus DiagnosticStatus{
+        PartyQuestSkyrimPapyrusDiagnosticStatus::VirtualMachineUnavailable};
+    PartyQuestSkyrimPapyrusLayoutFailure LayoutFailure{
+        PartyQuestSkyrimPapyrusLayoutFailure::None};
+    PartyQuestSkyrimPapyrusHashMapDiagnostic FailedHashMap;
+    uint64_t IngressHookInvocationCount{};
+    uint64_t ProcessGeneration{};
+    bool ExactRuntimeIdentity{};
+    bool IngressHooksRegistered{};
+    bool VirtualTableMatched{};
+};
+
+/**
+ * Read-only, fail-closed Papyrus VM observer for exact registered images.
+ *
+ * The layout and vtable contract is intentionally exact-version bound. Every
+ * sampled pointer/range and container invariant is checked, all relevant VM
+ * locks are acquired with non-blocking try-locks, and a poll-independent ingress
+ * epoch is sampled around the locked read. Any mismatch returns Unknown (or
+ * Unsupported for another runtime) and never falls back to unlocked/partial
+ * counts.
+ *
+ * Authorize() issues a capability only when exact executable identity,
+ * Address Library selection, hook coverage and snapshot contracts all match a
+ * registered profile. Sampling alone never grants mutation authority.
+ */
+class PartyQuestSkyrimPapyrusRuntimeObserver final
+    : public PartyQuestPapyrusRuntimeObserver
+{
+public:
+    [[nodiscard]] static PartyQuestSkyrimPapyrusRuntimeObserver&
+    GetProcessObserver() noexcept;
+
+    [[nodiscard]] PartyQuestPapyrusRuntimeObservation Observe(
+        uint64_t aTransactionId) noexcept override;
+
+    [[nodiscard]] PartyQuestSkyrimPapyrusDiagnosticSample
+    SampleDiagnostics() noexcept;
+
+    /** Exact-profile capability; invalid for unsupported/unproven images. */
+    [[nodiscard]] PartyQuestPapyrusRuntimeObserverAuthorization
+    Authorize() noexcept;
+
+    [[nodiscard]] static const char* DiagnosticStatusName(
+        PartyQuestSkyrimPapyrusDiagnosticStatus aStatus) noexcept;
+
+    [[nodiscard]] static const char* LayoutFailureName(
+        PartyQuestSkyrimPapyrusLayoutFailure aFailure) noexcept;
+
+    [[nodiscard]] uint64_t GetIngressHookInvocationCount() const noexcept
+    {
+        return m_ingressEpoch.GetIngressCount();
+    }
+
+private:
+    friend class PartyQuestSkyrimPapyrusHookBridge;
+
+    PartyQuestSkyrimPapyrusRuntimeObserver() noexcept = default;
+
+    [[nodiscard]] PartyQuestPapyrusIngressEpoch::Scope BeginIngress() noexcept
+    {
+        return m_ingressEpoch.BeginIngress();
+    }
+
+    PartyQuestPapyrusIngressEpoch m_ingressEpoch;
+};

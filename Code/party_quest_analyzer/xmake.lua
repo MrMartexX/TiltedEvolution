@@ -1,0 +1,7 @@
+target("PartyQuestCompatibilityAnalyzer")
+    set_kind("binary")
+    set_group("Tools")
+    add_files("Main.cpp")
+    add_includedirs("../encoding")
+    add_deps("SkyrimEncoding")
+    add_packages("tiltedcore")

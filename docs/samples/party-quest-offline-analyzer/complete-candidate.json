@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "analyzer_version": 7,
+  "status": "Complete",
+  "authorizes_runtime": false,
+  "authorizes_mutation": false,
+  "runtime": {"version": "1.6.1170.0", "executable_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "environment": {"plugin_fingerprint": "0x7acc3ca7855c8d11", "script_fingerprint": "0xaa5709f94cc00612"},
+  "input_provenance": {"plugins": [{"path":"base.esm","is_lite":false},{"path":"override.esp","is_lite":false}],"archives":[{"path":"scripts.bsa","priority":1}],"loose_pex":["scripts/foo.pex"]},
+  "input_provenance_fingerprint": "0xb7f5fc12fbee2ef6",
+  "quests": [
+    {"game_id": {"source_plugin":"Base.esm","local_form_id":291}, "source_plugin": "Base.esm", "winning_plugin": "Override.esp", "local_form_id": 291, "source_is_lite": false, "editor_id": "WinningQuest", "resolved_topology_fingerprint": "0xc176c97e1ef42bfb", "winning_override_fingerprint": "0x369aa10ce1d4f33e", "script_dependency_fingerprint": "0x5483a6ff51b2845a", "stages": [10,20,30], "objectives": [20], "aliases": 1, "scenes": 0, "has_fragments": true, "has_conditions": false, "has_aliases": true, "has_scenes": false, "has_side_effect_indicators": true, "script_dependencies": ["scripts/foo.pex@loose:scripts/foo.pex"], "transitions": [{"from":10,"to":20,"disposition":"NeedsReview","reason":"quest contains fragments, conditions, aliases or scenes"},{"from":20,"to":30,"disposition":"NeedsReview","reason":"quest contains fragments, conditions, aliases or scenes"}]}
+  ],
+  "errors": []
+}

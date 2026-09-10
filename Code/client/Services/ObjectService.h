@@ -23,6 +23,7 @@ class ObjectService final : public BSTEventSink<TESActivateEvent>
 {
 public:
     ObjectService(World&, entt::dispatcher&, TransportService&);
+    ~ObjectService() noexcept;
 
 private:
     void OnDisconnected(const DisconnectedEvent&) noexcept;
@@ -41,6 +42,7 @@ private:
 
     World& m_world;
     TransportService& m_transport;
+    EventDispatcher<TESActivateEvent>* m_pActivateDispatcher{};
 
     entt::scoped_connection m_disconnectedConnection;
     entt::scoped_connection m_cellChangeConnection;

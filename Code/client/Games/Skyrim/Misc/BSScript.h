@@ -294,7 +294,12 @@ struct BSScript
     {
         using FunctionType = bool(Actor* pBase);
 
-        IsRemotePlayerFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType);
+        IsRemotePlayerFunc(
+            IVirtualMachine* apVm,
+            const char* apFunctionName,
+            const char* apClassName,
+            FunctionType aFunction,
+            Variable::Type aType);
 
         bool MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame) override;
     };
@@ -303,7 +308,12 @@ struct BSScript
     {
         using FunctionType = bool(Actor* pBase);
 
-        IsPlayerFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType);
+        IsPlayerFunc(
+            IVirtualMachine* apVm,
+            const char* apFunctionName,
+            const char* apClassName,
+            FunctionType aFunction,
+            Variable::Type aType);
 
         bool MarshallAndDispatch(Variable* apBaseVar, IVirtualMachine* apVm, uint32_t aStackID, Variable* apResult, StackFrame* apStackFrame) override;
     };

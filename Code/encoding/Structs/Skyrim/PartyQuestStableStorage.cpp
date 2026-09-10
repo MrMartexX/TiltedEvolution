@@ -1,0 +1,536 @@
+#include <Structs/Skyrim/PartyQuestStableStorage.h>
+
+#include <algorithm>
+#include <cerrno>
+#include <cstddef>
+#include <cstring>
+#include <limits>
+#include <system_error>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#else
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
+namespace
+{
+#ifndef _WIN32
+PartyQuestStableStorageStatus FlushPosixPath(
+    const std::filesystem::path& acPath,
+    bool aDirectory) noexcept
+{
+    if (acPath.empty())
+        return PartyQuestStableStorageStatus::InvalidPath;
+
+    int flags = O_RDONLY | O_CLOEXEC | O_NOFOLLOW;
+    if (aDirectory)
+        flags |= O_DIRECTORY;
+
+    const int descriptor = ::open(acPath.c_str(), flags);
+    if (descriptor < 0)
+        return PartyQuestStableStorageStatus::OpenFailed;
+
+    struct stat status{};
+    if (::fstat(descriptor, &status) != 0 ||
+        (aDirectory ? !S_ISDIR(status.st_mode) : !S_ISREG(status.st_mode)))
+    {
+        ::close(descriptor);
+        return PartyQuestStableStorageStatus::NodeValidationFailed;
+    }
+
+    if (::fsync(descriptor) != 0)
+    {
+        ::close(descriptor);
+        return PartyQuestStableStorageStatus::FlushFailed;
+    }
+
+    if (::close(descriptor) != 0)
+        return PartyQuestStableStorageStatus::CloseFailed;
+
+    return PartyQuestStableStorageStatus::Success;
+}
+#else
+PartyQuestStableStorageStatus ValidateWindowsRegularHandle(HANDLE aFile) noexcept
+{
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!::GetFileInformationByHandle(aFile, &information) ||
+        (information.dwFileAttributes &
+            (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) != 0)
+    {
+        return PartyQuestStableStorageStatus::NodeValidationFailed;
+    }
+
+    return PartyQuestStableStorageStatus::Success;
+}
+
+PartyQuestStableStorageStatus ValidateWindowsDirectoryHandle(HANDLE aDirectory) noexcept
+{
+    BY_HANDLE_FILE_INFORMATION information{};
+    if (!::GetFileInformationByHandle(aDirectory, &information) ||
+        (information.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+        (information.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+    {
+        return PartyQuestStableStorageStatus::NodeValidationFailed;
+    }
+
+    return PartyQuestStableStorageStatus::Success;
+}
+
+bool IsWindowsNtfsHandle(HANDLE aFile) noexcept
+{
+    wchar_t fileSystemName[MAX_PATH + 1]{};
+    if (!::GetVolumeInformationByHandleW(
+            aFile,
+            nullptr,
+            0,
+            nullptr,
+            nullptr,
+            nullptr,
+            fileSystemName,
+            MAX_PATH + 1))
+    {
+        return false;
+    }
+
+    return ::CompareStringOrdinal(
+               fileSystemName,
+               -1,
+               L"NTFS",
+               -1,
+               TRUE) == CSTR_EQUAL;
+}
+
+bool IsMissingWindowsPathError(DWORD aError) noexcept
+{
+    return aError == ERROR_FILE_NOT_FOUND ||
+        aError == ERROR_PATH_NOT_FOUND;
+}
+#endif
+} // namespace
+
+PartyQuestStableStorageStatus PartyQuestStableStorage::FlushFile(
+    const std::filesystem::path& acPath) noexcept
+{
+    if (acPath.empty())
+        return PartyQuestStableStorageStatus::InvalidPath;
+
+#ifdef _WIN32
+    const HANDLE file = ::CreateFileW(
+        acPath.c_str(),
+        GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+        nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+        return PartyQuestStableStorageStatus::OpenFailed;
+
+    const auto validation = ValidateWindowsRegularHandle(file);
+    if (validation != PartyQuestStableStorageStatus::Success)
+    {
+        ::CloseHandle(file);
+        return validation;
+    }
+
+    if (!::FlushFileBuffers(file))
+    {
+        ::CloseHandle(file);
+        return PartyQuestStableStorageStatus::FlushFailed;
+    }
+
+    if (!::CloseHandle(file))
+        return PartyQuestStableStorageStatus::CloseFailed;
+
+    return PartyQuestStableStorageStatus::Success;
+#else
+    return FlushPosixPath(acPath, false);
+#endif
+}
+
+PartyQuestStableStorageStatus PartyQuestStableStorage::FlushDirectory(
+    const std::filesystem::path& acDirectory) noexcept
+{
+    if (acDirectory.empty())
+        return PartyQuestStableStorageStatus::InvalidPath;
+#ifdef _WIN32
+    return PartyQuestStableStorageStatus::Unsupported;
+#else
+    return FlushPosixPath(acDirectory, true);
+#endif
+}
+
+PartyQuestStableStorageStatus PartyQuestStableStorage::FlushParentDirectory(
+    const std::filesystem::path& acPath) noexcept
+{
+    if (acPath.empty())
+        return PartyQuestStableStorageStatus::InvalidPath;
+    try
+    {
+        std::error_code ec;
+        const auto absolute = std::filesystem::absolute(acPath, ec);
+        if (ec || absolute.empty() || absolute.parent_path().empty())
+            return PartyQuestStableStorageStatus::InvalidPath;
+        return FlushDirectory(absolute.parent_path());
+    }
+    catch (...)
+    {
+        return PartyQuestStableStorageStatus::InvalidPath;
+    }
+}
+
+PartyQuestStableStorageStatus PartyQuestStableStorage::WriteFileDurably(
+    const std::filesystem::path& acPath,
+    const void* apData,
+    size_t aSize) noexcept
+{
+    if (acPath.empty() || (aSize != 0 && apData == nullptr))
+        return PartyQuestStableStorageStatus::InvalidPath;
+    try
+    {
+        std::error_code ec;
+        const auto path = std::filesystem::absolute(acPath, ec).lexically_normal();
+        if (ec || path.empty() || path.parent_path().empty())
+            return PartyQuestStableStorageStatus::InvalidPath;
+#ifdef _WIN32
+        const HANDLE parent = ::CreateFileW(
+            path.parent_path().c_str(),
+            FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr);
+        if (parent == INVALID_HANDLE_VALUE)
+            return PartyQuestStableStorageStatus::OpenFailed;
+        const auto parentValidation = ValidateWindowsDirectoryHandle(parent);
+        if (parentValidation != PartyQuestStableStorageStatus::Success)
+        {
+            ::CloseHandle(parent);
+            return parentValidation;
+        }
+        if (!IsWindowsNtfsHandle(parent))
+        {
+            ::CloseHandle(parent);
+            return PartyQuestStableStorageStatus::Unsupported;
+        }
+        if (!::CloseHandle(parent))
+            return PartyQuestStableStorageStatus::CloseFailed;
+
+        const HANDLE file = ::CreateFileW(
+            path.c_str(),
+            GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_ALWAYS,
+            FILE_ATTRIBUTE_NORMAL |
+                FILE_FLAG_OPEN_REPARSE_POINT |
+                FILE_FLAG_WRITE_THROUGH,
+            nullptr);
+        if (file == INVALID_HANDLE_VALUE)
+            return PartyQuestStableStorageStatus::OpenFailed;
+        const auto validation = ValidateWindowsRegularHandle(file);
+        if (validation != PartyQuestStableStorageStatus::Success)
+        {
+            ::CloseHandle(file);
+            return validation;
+        }
+        LARGE_INTEGER beginning{};
+        if (!::SetFilePointerEx(file, beginning, nullptr, FILE_BEGIN) ||
+            !::SetEndOfFile(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::WriteFailed;
+        }
+        const auto* pBytes = static_cast<const uint8_t*>(apData);
+        size_t offset = 0;
+        while (offset < aSize)
+        {
+            const DWORD chunk = static_cast<DWORD>(std::min<size_t>(
+                aSize - offset,
+                static_cast<size_t>(std::numeric_limits<DWORD>::max())));
+            DWORD written = 0;
+            if (!::WriteFile(file, pBytes + offset, chunk, &written, nullptr) ||
+                written != chunk)
+            {
+                ::CloseHandle(file);
+                return PartyQuestStableStorageStatus::WriteFailed;
+            }
+            offset += written;
+        }
+        if (!::FlushFileBuffers(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::FlushFailed;
+        }
+        if (!::CloseHandle(file))
+            return PartyQuestStableStorageStatus::CloseFailed;
+        return PartyQuestStableStorageStatus::Success;
+#else
+        const int descriptor = ::open(
+            path.c_str(),
+            O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW,
+            S_IRUSR | S_IWUSR);
+        if (descriptor < 0)
+            return PartyQuestStableStorageStatus::OpenFailed;
+        struct stat status{};
+        if (::fstat(descriptor, &status) != 0 || !S_ISREG(status.st_mode))
+        {
+            ::close(descriptor);
+            return PartyQuestStableStorageStatus::NodeValidationFailed;
+        }
+        const auto* pBytes = static_cast<const uint8_t*>(apData);
+        size_t offset = 0;
+        while (offset < aSize)
+        {
+            const ssize_t written = ::write(descriptor, pBytes + offset, aSize - offset);
+            if (written < 0 && errno == EINTR)
+                continue;
+            if (written <= 0)
+            {
+                ::close(descriptor);
+                return PartyQuestStableStorageStatus::WriteFailed;
+            }
+            offset += static_cast<size_t>(written);
+        }
+        if (::fsync(descriptor) != 0)
+        {
+            ::close(descriptor);
+            return PartyQuestStableStorageStatus::FlushFailed;
+        }
+        if (::close(descriptor) != 0)
+            return PartyQuestStableStorageStatus::CloseFailed;
+        return FlushDirectory(path.parent_path());
+#endif
+    }
+    catch (...)
+    {
+        return PartyQuestStableStorageStatus::InvalidPath;
+    }
+}
+
+PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
+    const std::filesystem::path& acSource,
+    const std::filesystem::path& acDestination,
+    bool aReplaceExisting) noexcept
+{
+    if (acSource.empty() || acDestination.empty())
+        return PartyQuestStableStorageStatus::InvalidPath;
+    try
+    {
+        std::error_code ec;
+        const auto source = std::filesystem::absolute(acSource, ec).lexically_normal();
+        if (ec || source.empty() || source.parent_path().empty())
+            return PartyQuestStableStorageStatus::InvalidPath;
+        ec.clear();
+        const auto destination = std::filesystem::absolute(acDestination, ec).lexically_normal();
+        if (ec || destination.empty() || destination.parent_path().empty())
+            return PartyQuestStableStorageStatus::InvalidPath;
+        if (source == destination || source.parent_path() != destination.parent_path())
+            return PartyQuestStableStorageStatus::CrossDirectoryRename;
+#ifdef _WIN32
+        const HANDLE file = ::CreateFileW(
+            source.c_str(),
+            GENERIC_WRITE | DELETE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL |
+                FILE_FLAG_OPEN_REPARSE_POINT |
+                FILE_FLAG_WRITE_THROUGH,
+            nullptr);
+        if (file == INVALID_HANDLE_VALUE)
+            return PartyQuestStableStorageStatus::OpenFailed;
+        const auto validation = ValidateWindowsRegularHandle(file);
+        if (validation != PartyQuestStableStorageStatus::Success)
+        {
+            ::CloseHandle(file);
+            return validation;
+        }
+        if (!IsWindowsNtfsHandle(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::Unsupported;
+        }
+        if (!::FlushFileBuffers(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::FlushFailed;
+        }
+
+        // FILE_RENAME_INFO documents an absolute drive/directory/file path for
+        // the Win32 SetFileInformationByHandle API. Own the path string, include
+        // a trailing NUL in the backing buffer, and keep FileNameLength equal to
+        // the path bytes excluding that terminator.
+        const auto destinationName = destination.native();
+        const size_t destinationBytes =
+            destinationName.size() * sizeof(std::filesystem::path::value_type);
+        if (destinationName.empty() ||
+            destinationBytes > static_cast<size_t>(std::numeric_limits<DWORD>::max()))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::InvalidPath;
+        }
+        const size_t renameInfoSize = sizeof(FILE_RENAME_INFO) +
+            destinationBytes + sizeof(std::filesystem::path::value_type);
+        if (renameInfoSize > static_cast<size_t>(std::numeric_limits<DWORD>::max()))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::InvalidPath;
+        }
+        const size_t alignedUnits =
+            (renameInfoSize + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t);
+        std::vector<std::max_align_t> renameStorage(alignedUnits);
+        std::memset(renameStorage.data(), 0, alignedUnits * sizeof(std::max_align_t));
+        auto* pRename = reinterpret_cast<FILE_RENAME_INFO*>(renameStorage.data());
+        pRename->ReplaceIfExists = aReplaceExisting ? TRUE : FALSE;
+        pRename->RootDirectory = nullptr;
+        pRename->FileNameLength = static_cast<DWORD>(destinationBytes);
+        std::memcpy(pRename->FileName, destinationName.data(), destinationBytes);
+        if (!::SetFileInformationByHandle(
+                file,
+                FileRenameInfo,
+                pRename,
+                static_cast<DWORD>(renameInfoSize)))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::RenameFailed;
+        }
+        if (!::FlushFileBuffers(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::FlushFailed;
+        }
+        if (!::CloseHandle(file))
+            return PartyQuestStableStorageStatus::CloseFailed;
+        return PartyQuestStableStorageStatus::Success;
+#else
+        ec.clear();
+        const auto destinationStatus = std::filesystem::symlink_status(destination, ec);
+        if (ec && ec != std::errc::no_such_file_or_directory)
+            return PartyQuestStableStorageStatus::InvalidPath;
+        ec.clear();
+        if (!aReplaceExisting && std::filesystem::exists(destinationStatus))
+            return PartyQuestStableStorageStatus::RenameFailed;
+        const auto fileFlush = FlushFile(source);
+        if (fileFlush != PartyQuestStableStorageStatus::Success)
+            return fileFlush;
+        std::filesystem::rename(source, destination, ec);
+        if (ec)
+            return PartyQuestStableStorageStatus::RenameFailed;
+        return FlushDirectory(destination.parent_path());
+#endif
+    }
+    catch (...)
+    {
+        return PartyQuestStableStorageStatus::InvalidPath;
+    }
+}
+
+PartyQuestStableStorageStatus PartyQuestStableStorage::RemoveFileDurably(
+    const std::filesystem::path& acPath) noexcept
+{
+    if (acPath.empty())
+        return PartyQuestStableStorageStatus::InvalidPath;
+    try
+    {
+        std::error_code ec;
+        const auto path = std::filesystem::absolute(acPath, ec).lexically_normal();
+        if (ec || path.empty() || path.parent_path().empty())
+            return PartyQuestStableStorageStatus::InvalidPath;
+#ifdef _WIN32
+        // Deletion has no namespace-creation authority. Promote the already
+        // existing parent first so NTFS + exact directory flush support are
+        // established before the destructive operation begins.
+        const DWORD parentAttributes = ::GetFileAttributesW(path.parent_path().c_str());
+        if (parentAttributes == INVALID_FILE_ATTRIBUTES)
+            return PartyQuestStableStorageStatus::OpenFailed;
+        if ((parentAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0 ||
+            (parentAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0)
+        {
+            return PartyQuestStableStorageStatus::NodeValidationFailed;
+        }
+        const auto parentPromotion = EnsureDirectoryTreeDurably(path.parent_path());
+        if (parentPromotion != PartyQuestStableStorageStatus::Success)
+            return parentPromotion;
+
+        const HANDLE file = ::CreateFileW(
+            path.c_str(),
+            DELETE | FILE_READ_ATTRIBUTES,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            nullptr,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT,
+            nullptr);
+        if (file == INVALID_HANDLE_VALUE)
+            return PartyQuestStableStorageStatus::OpenFailed;
+
+        const auto validation = ValidateWindowsRegularHandle(file);
+        if (validation != PartyQuestStableStorageStatus::Success)
+        {
+            ::CloseHandle(file);
+            return validation;
+        }
+
+        BY_HANDLE_FILE_INFORMATION information{};
+        if (!::GetFileInformationByHandle(file, &information) ||
+            information.nNumberOfLinks != 1)
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::NodeValidationFailed;
+        }
+        if (!IsWindowsNtfsHandle(file))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::Unsupported;
+        }
+
+        FILE_DISPOSITION_INFO disposition{};
+        disposition.DeleteFile = TRUE;
+        if (!::SetFileInformationByHandle(
+                file,
+                FileDispositionInfo,
+                &disposition,
+                sizeof(disposition)))
+        {
+            ::CloseHandle(file);
+            return PartyQuestStableStorageStatus::RemoveFailed;
+        }
+        if (!::CloseHandle(file))
+            return PartyQuestStableStorageStatus::CloseFailed;
+
+        // FileDispositionInfo marks deletion for close. Do not claim success if
+        // another sharing handle delayed namespace removal: recovery must see a
+        // failure rather than a false durable-absence assertion.
+        if (::GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES)
+            return PartyQuestStableStorageStatus::RemoveFailed;
+        const DWORD removeError = ::GetLastError();
+        if (!IsMissingWindowsPathError(removeError))
+            return PartyQuestStableStorageStatus::RemoveFailed;
+
+        // The exact name is now absent. Cross the reviewed NTFS directory
+        // metadata barrier so successful return means that absence is stable.
+        return EnsureDirectoryTreeDurably(path.parent_path());
+#else
+        struct stat status{};
+        if (::lstat(path.c_str(), &status) != 0)
+            return PartyQuestStableStorageStatus::OpenFailed;
+        if (!S_ISREG(status.st_mode))
+            return PartyQuestStableStorageStatus::NodeValidationFailed;
+        if (::unlink(path.c_str()) != 0)
+            return PartyQuestStableStorageStatus::RemoveFailed;
+        return FlushDirectory(path.parent_path());
+#endif
+    }
+    catch (...)
+    {
+        return PartyQuestStableStorageStatus::InvalidPath;
+    }
+}
