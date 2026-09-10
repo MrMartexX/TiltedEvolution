@@ -248,6 +248,39 @@ uint64_t HashScripts(
 }
 }
 
+std::optional<PartyQuestCompatibilityEnvironmentFingerprints>
+ComputePartyQuestCompatibilityEnvironmentFingerprints(
+    const PartyQuestCompatibilityEnvironmentSnapshot& acSnapshot,
+    std::stop_token aStopToken) noexcept
+{
+    try
+    {
+        if (acSnapshot.DataDirectory.empty() ||
+            !acSnapshot.DataDirectory.is_absolute() ||
+            acSnapshot.OrderedPlugins.empty() || aStopToken.stop_requested())
+        {
+            return std::nullopt;
+        }
+
+        PartyQuestCompatibilityEnvironmentFingerprints fingerprints;
+        fingerprints.PluginEnvironment =
+            HashOrderedPlugins(acSnapshot, aStopToken);
+        if (!aStopToken.stop_requested() &&
+            fingerprints.PluginEnvironment != 0)
+        {
+            fingerprints.ScriptEnvironment =
+                HashScripts(acSnapshot.DataDirectory, aStopToken);
+        }
+        if (aStopToken.stop_requested() || !fingerprints.IsValid())
+            return std::nullopt;
+        return fingerprints;
+    }
+    catch (...)
+    {
+        return std::nullopt;
+    }
+}
+
 PartyQuestCompatibilityEnvironmentCache::~PartyQuestCompatibilityEnvironmentCache() noexcept
 {
     Stop();
@@ -283,15 +316,9 @@ bool PartyQuestCompatibilityEnvironmentCache::Start(
             [this, snapshot = std::move(aSnapshot)](std::stop_token aStopToken)
             {
                 m_computationCount.fetch_add(1, std::memory_order_relaxed);
-                PartyQuestCompatibilityEnvironmentFingerprints fingerprints;
-                fingerprints.PluginEnvironment =
-                    HashOrderedPlugins(snapshot, aStopToken);
-                if (!aStopToken.stop_requested() &&
-                    fingerprints.PluginEnvironment != 0)
-                {
-                    fingerprints.ScriptEnvironment =
-                        HashScripts(snapshot.DataDirectory, aStopToken);
-                }
+                const auto fingerprints =
+                    ComputePartyQuestCompatibilityEnvironmentFingerprints(
+                        snapshot, aStopToken);
 
                 if (aStopToken.stop_requested())
                 {
@@ -300,7 +327,7 @@ bool PartyQuestCompatibilityEnvironmentCache::Start(
                         std::memory_order_release);
                     return;
                 }
-                if (!fingerprints.IsValid())
+                if (!fingerprints)
                 {
                     m_status.store(
                         PartyQuestCompatibilityEnvironmentCacheStatus::Failed,
@@ -310,7 +337,7 @@ bool PartyQuestCompatibilityEnvironmentCache::Start(
 
                 {
                     std::scoped_lock lock(m_mutex);
-                    m_ready = fingerprints;
+                    m_ready = *fingerprints;
                 }
                 m_status.store(
                     PartyQuestCompatibilityEnvironmentCacheStatus::Ready,

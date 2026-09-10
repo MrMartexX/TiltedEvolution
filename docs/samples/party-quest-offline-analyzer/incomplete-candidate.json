@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "analyzer_version": 1,
+  "status": "Incomplete",
+  "authorizes_runtime": false,
+  "authorizes_mutation": false,
+  "runtime": {"version": "1.6.1170.0", "executable_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+  "environment": {"plugin_fingerprint": "0x0000000000000000", "script_fingerprint": "0x0000000000000000"},
+  "input_provenance": {"plugins": [{"path":"missing.esm","is_lite":false}],"archives":[],"loose_pex":[]},
+  "input_provenance_fingerprint": "0x0000000000000000",
+  "quests": [
+  ],
+  "errors": ["environment snapshot is unreadable or incomplete"]
+}
