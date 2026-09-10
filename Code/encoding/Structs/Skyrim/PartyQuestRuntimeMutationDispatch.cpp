@@ -302,7 +302,19 @@ PartyQuestRuntimeMutationDispatchResult PartyQuestRuntimeMutationDispatchGate::D
     }
 
     result.MutationInvoked = true;
-    if (!acExecutor(acCurrentRequest))
+    bool accepted = false;
+    try
+    {
+        accepted = acExecutor(acCurrentRequest);
+    }
+    catch (...)
+    {
+        // Native/runtime callbacks must never unwind across the integration
+        // boundary. The already armed durable marker intentionally remains set
+        // so recovery is required rather than reporting a clean failure.
+        accepted = false;
+    }
+    if (!accepted)
     {
         result.Status = PartyQuestRuntimeMutationDispatchStatus::ExecutorRejected;
         return result;
