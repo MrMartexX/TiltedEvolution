@@ -7,6 +7,7 @@
 #include <optional>
 #include <thread>
 #include <vector>
+#include <stop_token>
 
 enum class PartyQuestCompatibilityEnvironmentCacheStatus : uint8_t
 {
@@ -39,6 +40,16 @@ struct PartyQuestCompatibilityEnvironmentFingerprints
         return PluginEnvironment != 0 && ScriptEnvironment != 0;
     }
 };
+
+/**
+ * Canonical deterministic environment fingerprint implementation shared by
+ * the runtime cache and offline review tooling. A zero/empty result means the
+ * snapshot was incomplete, invalid, unreadable or cancelled.
+ */
+[[nodiscard]] std::optional<PartyQuestCompatibilityEnvironmentFingerprints>
+ComputePartyQuestCompatibilityEnvironmentFingerprints(
+    const PartyQuestCompatibilityEnvironmentSnapshot& acSnapshot,
+    std::stop_token aStopToken = {}) noexcept;
 
 /**
  * Owner-bound, one-shot cache for expensive file compatibility fingerprints.
