@@ -11,11 +11,13 @@ This audit targets the isolated Steam runtime `SkyrimSE.exe 1.6.1170.0` at
 - Address Library file: `versionlib-1-6-1170-0.bin`
 - public request entry: `BGSSaveLoadManager::Save_Impl`, Address Library IDs `34818 / 35727`
 - CommonLibSSE-NG evidence checkout: `b93280e832f263dbef44e44cbe2936622a02f91a`
-- locally available SKSE source checkout: `4cd2e34face74d5247fa38888c7542ad45d4a1d2`
+- exact upstream SKSE tag: `v2.2.6`, commit
+  `9398d04592a7eb9d754f2997701116df1022f1b4`
+- later comparison checkout: `4cd2e34face74d5247fa38888c7542ad45d4a1d2`
 
-The available SKSE checkout is newer than installed SKSE 2.2.6. Its save hook
-is useful corroborating source evidence, but is not treated as exact binary
-identity proof for 2.2.6.
+The exact upstream 2.2.6 source is now available locally. The installed DLL
+hash above remains the deployment identity; source-tag agreement is not used
+as a substitute for checking the deployed binary.
 
 ## Proven source-level pipeline
 
@@ -68,6 +70,34 @@ The Bethesda request layout and completion event payloads exposed by
 CommonLibSSE-NG remain partly unknown. `BSSaveDataEvent` is forward-declared and
 the `bgs::saveload::Request` layout/completion contract is not defined. Hooking
 an assumed worker return or unknown event would be speculative ABI work.
+
+The exact SKSE 2.2.6 source also confirms that its public `kMessage_SaveGame`
+message is dispatched *before* the original worker save call. It therefore
+cannot be promoted into a completion event. `SaveGame_Hook` clears SKSE's
+process-global save name only after the original worker target returns, but
+that hook and its target are private SKSE implementation details rather than a
+public plugin ABI.
+
+## Selected production solution
+
+The production solution must be an explicit completion extension supplied by
+SKSE (or by an independently maintained, exact-binary-gated SKSE integration),
+not a timer, file-size poll, guessed `BSSaveDataEvent`, or an unversioned detour
+of SKSE private code. The extension must:
+
+1. accept an owned immutable request identity and isolated relative directory;
+2. bind that identity before the worker resolves either artifact path;
+3. keep the override scoped to the matching worker request only;
+4. report terminal `.ess` and `.skse` close results separately;
+5. propagate create/write/flush/close and serialization-callback failures;
+6. provide cancellation/retirement for LoadGame, MainMenu and shutdown;
+7. expose a versioned capability descriptor that the client verifies against
+   the loaded Skyrim, SKSE and Address Library identities.
+
+Until such a provider exists and passes live fault injection, the safe and
+reliable implementation is the current fail-closed policy. Shipping a private
+call-site hook merely to enable capture would trade a visible blocker for
+silent save corruption after a runtime or SKSE update and is rejected.
 
 ## Required contract before enabling engine PreRepair capture
 
