@@ -107,18 +107,37 @@ state; it cannot certify that an `.ess` is globally healthy.
 
 ### Supporting slice B. Remove the proven naked-NPC item duplication source
 
-Status: root cause proven; fix planned.
+Status: root cause proven; superseded implementation direction identified.
 
-- Remove automatic item-creating `ResetInventory` repair.
-- Permit only re-equip of an item already present in canonical inventory.
-- If actor/server identity or ledger is missing, quarantine/resync and fail
-  closed.
-- Diagnose and fix invalid server-entity routing separately if it has a distinct
-  root cause.
-- Test conservation of item quantities under repeated steal/equip/resync events.
+- Port and harden official upstream's server-granted ownership epoch model and
+  former-owner rejection as a dedicated slice.
+- Remove automatic item-creating `ResetInventory` repair; do not retain a timer
+  as the authority model.
+- If actor/server identity, current ownership grant or ledger is missing,
+  quarantine/resync and fail closed.
+- Test conservation of item quantities and stale-epoch rejection under repeated
+  steal/equip/resync, cell-transition and reconnect events.
 
 Full transactional pickpocket belongs to the later inventory/interaction
 platform, but the known creation loop must not survive into live P0 testing.
+
+See the dated [upstream ecosystem review](../research/UPSTREAM_ECOSYSTEM_REVIEW_2026-09-13.md)
+for the exact source range and gaps that require local tests.
+
+### Supporting slice C. Reconcile upstream safely
+
+Status: research complete; implementation planned.
+
+- Never wholesale-merge official `dev` into the P0 branch.
+- Compare and selectively port the exact-runtime/SKSE delta first.
+- Port the merged actor ownership epoch stack and follow-up fixes before broad
+  live gameplay acceptance.
+- Evaluate object lifecycle, jail-container, leveled-NPC and non-owner dialogue
+  changes one at a time; preserve session/generation fencing and fail closed.
+- Treat the old quest/scene PRs as test evidence, not permission to bypass the
+  server-authoritative revision, checkpoint, verification or recovery model.
+- Record exact external SHA, license, wire/ABI impact and missing live proof for
+  every intake slice.
 
 ### 9. Complete deterministic crash and restart recovery
 
@@ -276,6 +295,23 @@ Status: planned improvement of existing STR behavior.
 - Backpressure, queue limits and rate limiting.
 - Correct cell/world/teleport transitions and better interpolation.
 - Prevent duplicate player entities and old packet authority after reconnect.
+
+### 17A. Publish a stable first-party add-on interface
+
+Status: planned after the core capability/session model is stable.
+
+- Named, versioned client/server channels with authenticated sender identity.
+- Explicit capability negotiation, payload quotas, backpressure and permissions.
+- Public mapping from stable STR player identity to a local proxy FormID; never
+  expose cached raw actor pointers.
+- Transport callbacks may only enqueue bounded data; Skyrim lookup and mutation
+  are scheduled on the game thread under lifecycle/generation validation.
+- Disconnect, reconnect, LoadGame and proxy replacement emit deterministic
+  mapping invalidation.
+- Presentation-only consumers remain separated from canonical gameplay state.
+
+This replaces the ecosystem's need to tunnel add-on payloads through chat and
+hook private receive internals.
 
 ### 18. Make inventory, equipment and transfers transactional
 
@@ -445,6 +481,8 @@ Status: planned recurring gate.
 - Long multi-client sessions, mixed cells, host migration, save/load and
   upgrade/downgrade matrices.
 - Release only the explicitly supported runtime/mod/profile matrix.
+- Re-run the external upstream/issues/PR/add-on review and resolve every adopted
+  candidate to an exact source SHA and local acceptance result.
 
 ## Immediate execution order
 
@@ -453,7 +491,9 @@ follower rewrite. The near-term order is:
 
 1. Task 07 acceptance.
 2. Task 08 acceptance, including Windows durability.
-3. Observational diagnostics re-slice.
-4. Narrow `ResetInventory` item-duplication fix.
-5. Tasks 09–15 in order.
-6. Shared multiplayer foundation and gameplay phases 16–31.
+3. Narrow upstream runtime compatibility reconciliation.
+4. Actor ownership epoch/stale-owner intake, replacing `ResetInventory` repair.
+5. Observational diagnostics re-slice.
+6. Tasks 09–15 in order.
+7. Shared multiplayer foundation, first-party add-on API and gameplay phases
+   16–31.
