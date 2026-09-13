@@ -195,6 +195,20 @@ interactions, ownership transfer, scene end, disconnect and stale subtitles.
 
 ## Quest and scene work — evidence, not a shortcut around P0
 
+The accepted v1.8.0 baseline already contains [PR
+#805](https://github.com/tiltedphoques/TiltedEvolution/pull/805), commit
+`9e57f4b7f229468c17d2bab2ad7a10fe00e6adf4`. It adds a useful local guard:
+`ScriptSetStage` returns when the requested stage equals `currentStage` or is
+already done. This prevents one common duplicate, but supplies no operation
+identity, authoritative revision, generation fence, serialization or protection
+against two different targets arriving out of order. Preserve the guard and
+test it as defense in depth; never treat it as transaction authority.
+
+v1.8.0 also resolved [issue
+#209](https://github.com/tiltedphoques/TiltedEvolution/issues/209), allowing a
+party member to begin a quest. That feature is already an ancestor of this fork
+and is not a missing intake candidate.
+
 Open [PR #848](https://github.com/tiltedphoques/TiltedEvolution/pull/848)
 contains an important finding: a scoped client override cannot suppress all
 quest echo because Skyrim may execute the resulting quest event asynchronously
@@ -212,6 +226,8 @@ Use these as requirements for Tasks 11–14:
 
 - asynchronous echo after an override scope ends;
 - repeated start/stage/stop events;
+- equal-stage duplicate, competing target stages and out-of-order delivery;
+- replay after reconnect and late Papyrus echo after a local guard expires;
 - member-generated stop after leader success;
 - legitimate repeatable stages and rewind behavior;
 - scene master changes and dialogue without a stage transition;
@@ -246,7 +262,17 @@ The highest-value additions to our test matrix are:
 - personal inventory custody and quest items: #700 and quest-item pickup/transfer
   reports require explicit personal-versus-canonical storage classification;
 - UI/input capture: menu, dialogue, controller and overlay reports require an
-  explicit menu/input-session stack and a safe release watchdog.
+  explicit menu/input-session stack and a safe release watchdog. Closed [issue
+  #446](https://github.com/tiltedphoques/TiltedEvolution/issues/446) is a 2022
+  controller report with Steam Input/DS4Windows workarounds, not current proof;
+  reproduce Xbox, PlayStation and Steam Input on the release candidate;
+- remote presentation lifetime: [#835](https://github.com/tiltedphoques/TiltedEvolution/issues/835)
+  reports a poison/imagespace effect remaining as a black screen for a remote
+  player. Effects need source identity, bounded lifetime and lifecycle cleanup;
+- reverse-engineered runtime maintenance: major [#817](https://github.com/tiltedphoques/TiltedEvolution/issues/817)
+  proposes migration to CommonLibSSE. This can reduce custom ABI drift, but a
+  wholesale migration is too broad for P0; use it as exact-ABI evidence now and
+  plan a separately validated migration later.
 
 Never use issue workarounds such as `recycleactor`, `removeallitems`, broad
 `ResetInventory`, arbitrary actor-value correction or forced quest stages as
@@ -278,6 +304,15 @@ the current acceptance matrix. Other sampled forks were old, narrow deployment
 variants or had no independently reviewed advantage over official `dev`.
 
 ## Add-ons and reusable design ideas
+
+### Legacy Skyrim Together Plus
+
+Skyrim Together Plus predates Reborn. Community references associate it with
+friendly-fire control and teammate glow, but also report damage filtering that
+could affect enemies. No current official Reborn recommendation or suitable
+maintained source was established in this review. Do not ship or depend on it.
+Carry only the product requirements forward: a native server policy for
+friendly fire and a stable-identity-backed teammate indicator.
 
 ### Skyrim Together Tweaks
 
@@ -355,6 +390,10 @@ current compatibility proof.
 | PR #892 leveled NPCs | Redesign using research | Server validation and P0-D-quality deferred identity envelope |
 | PR #896 dialogue | Adapt into interaction sessions | Concurrent/stale dialogue and ownership-transfer tests |
 | PRs #839/#846/#848/#854 | Test/design evidence only | Tasks 11–14 authority and recovery gates |
+| v1.8 PR #805 | Already inherited defense in depth | Competing-stage, replay and late-echo tests |
+| Issue #817 CommonLibSSE migration | Plan separately after P0 | Migration inventory, exact ABI tests and incremental cutover |
+| Issue #835 remote screen effects | Add lifecycle-bound presentation work | Bounded effect identity and disconnect/load cleanup |
+| Legacy Skyrim Together Plus | Reject dependency; retain UX requirements | Native friendly-fire policy and teammate indicator |
 | Skyrim Together Tweaks | Reuse UX ideas; do not depend for correctness | Native implementation or exact-build compatibility gate |
 | STRPM/TradeTogether | Design evidence only | First-party transport/API; license and security review |
 | AnimSync/IEDSync | Later opt-in presentation work | Stable extension API and cross-mod two-client tests |

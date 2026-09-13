@@ -197,6 +197,9 @@ recovery-required.
   incompatible script/plugin evidence.
 - Test campaign/FormID ABA, same-stage/different-fragment state, revision gaps,
   LoadGame during reconciliation and repeated canonical snapshots.
+- Preserve the inherited equal-current-stage guard as defense in depth, while
+  testing two different target stages, out-of-order delivery, replay after
+  reconnect, legitimate repeatable edges and late Papyrus echo independently.
 
 ### 12. Publish the first reviewed quest profiles
 
@@ -292,6 +295,8 @@ Status: planned improvement of existing STR behavior.
 - Capability/protocol handshake and incompatible-version rejection.
 - Stable resume identity and canonical snapshot on reconnect.
 - Ordered acknowledgements, bounded replay windows and stale-session rejection.
+- Specify ordering per domain. A bounded animation or spell replay queue is not
+  proof of end-to-end ordering for canonical operations.
 - Backpressure, queue limits and rate limiting.
 - Correct cell/world/teleport transitions and better interpolation.
 - Prevent duplicate player entities and old packet authority after reconnect.
@@ -373,11 +378,26 @@ Status: planned.
 
 - `Alive -> Downed -> Reviving/Dead -> Respawned` with server revisions.
 - Validate damage source, authority, timing and transition legality.
+- Provide a server-configurable friendly-fire and aggro policy; do not implement
+  it by globally suppressing damage effects on clients.
 - Bound bleedout timers and prevent permanent knocked-down state.
 - Define disconnect, LoadGame and host-migration behavior.
 - Make death, revive, rewards and respawn idempotent.
 - Keep full server-side Skyrim physics/hit simulation out of scope; validate
   outcomes and impossible input instead.
+
+### 22A. Bound remote presentation effects
+
+Status: planned after stable actor/session identities.
+
+- Bind screen, imagespace, spell and transient actor effects to source actor,
+  operation, session/generation and an explicit terminal condition.
+- Cancel or reconcile them on disconnect, LoadGame, campaign switch, ownership
+  transfer and source retirement.
+- Never persist an opaque remote visual effect into the player's save as a
+  substitute for canonical gameplay state.
+- Regress poison/cutscene effects, duplicate delivery, missing terminal events
+  and reconnect while an effect is active.
 
 ### 23. Implement followers and horses on shared ownership primitives
 
@@ -391,6 +411,9 @@ Status: concept only.
 6. Per-player and party-wide limits.
 7. Separately gated party-owned quest followers.
 8. Horse mount/dismount ownership using the same lease model.
+9. Only after single-rider authority is proven, evaluate a two-rider mount as an
+   optional experiment with explicit passenger seat, animation, detach and
+   recovery semantics.
 
 ### 24. Persist doors, locks, mechanisms, homes and selected world state
 
@@ -441,6 +464,10 @@ Status: planned.
 - Votes for sleep/time/shared decisions.
 - Party roster, chat, nameplates and map/teammate indicators backed by stable
   player/session identity.
+- Native configurable teammate highlighting without a legacy Skyrim Together
+  Plus dependency.
+- Release-candidate input matrix for keyboard/mouse, Xbox, PlayStation and Steam
+  Input; record workarounds separately from native support.
 - Safe diagnostic-bundle export with advanced technical detail kept optional.
 
 ### 29. Harden server configuration and administration
@@ -465,6 +492,9 @@ Status: planned continuous work.
    maintainable.
 5. Bind SKSE, Address Library, bridge ABI, plugin mapping and scripts to the
    advertised capability set.
+6. Inventory custom reverse-engineered Skyrim types against CommonLibSSE-NG and
+   plan an incremental post-P0 migration; do not combine a wholesale type/ABI
+   migration with quest mutation activation.
 
 An update may disable an unsupported capability with an actionable message; it
 must not silently call an old address.

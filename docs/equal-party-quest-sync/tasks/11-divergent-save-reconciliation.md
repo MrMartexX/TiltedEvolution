@@ -30,7 +30,7 @@ Given server canonical quest state and a client's independent local save, determ
 
 ## Tests
 
-Cover exact match; one-edge behind; multiple-stage gap; ahead compatible/incompatible; alternate branch with same stage; stopped/failed/not-started; objective mismatch; active scene/player alias; created reference; different plugin/script fingerprint; missing mod; stale revision; N then N+1; duplicate/replay; recovery pending; observer unavailable; snapshot changes during plan; campaign/profile/generation ABA; deterministic repeated planning.
+Cover exact match; one-edge behind; multiple-stage gap; ahead compatible/incompatible; alternate branch with same stage; stopped/failed/not-started; objective mismatch; active scene/player alias; created reference; different plugin/script fingerprint; missing mod; stale revision; equal-current-stage duplicate; two different target stages delivered in both orders; legitimate repeatable edge; N then N+1; replay after reconnect; late Papyrus echo; recovery pending; observer unavailable; snapshot changes during plan; campaign/profile/generation ABA; deterministic repeated planning.
 
 Include table-driven cases where identical quest/Form IDs in two campaigns must not compare as the same operation.
 
