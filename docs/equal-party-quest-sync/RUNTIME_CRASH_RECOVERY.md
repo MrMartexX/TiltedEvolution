@@ -1,5 +1,9 @@
 # Runtime crash recovery orchestration
 
+Document status: active subsystem design. Acceptance of the complete production
+recovery path is tracked in [CURRENT_STATUS.md](../project/CURRENT_STATUS.md),
+not inferred from the existence of the coordinator described here.
+
 `PartyQuestRuntimeRecoveryCoordinator` bridges the durable runtime-apply barrier and the **legacy process-crash-resilient** co-op replica restore executor without calling Skyrim, Papyrus, save or load APIs. The stronger power-loss-durable restore executor exists as a separate Linux proof surface and is intentionally not routed through this coordinator yet.
 
 ## Exact checkpoint rule

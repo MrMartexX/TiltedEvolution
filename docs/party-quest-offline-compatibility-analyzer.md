@@ -1,5 +1,9 @@
 # Party Quest offline compatibility analyzer
 
+Document status: accepted Task 04 tool documentation. See
+[CURRENT_STATUS.md](project/CURRENT_STATUS.md) for the accepted integration
+baseline and subsequent tasks.
+
 `PartyQuestCompatibilityAnalyzer` creates deterministic evidence for a human
 compatibility review. It does not edit the reviewed-profile registry, authorize
 a quest, or enable runtime mutation.

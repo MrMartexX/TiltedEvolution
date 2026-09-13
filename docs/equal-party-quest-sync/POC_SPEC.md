@@ -1,5 +1,10 @@
 # Equal-party quest synchronization PoC
 
+Document status: historical scope and gameplay model. Milestone/status text in
+this file records the original PoC sequence and is not the current project
+status. Use [CURRENT_STATUS.md](../project/CURRENT_STATUS.md) and the
+[implementation roadmap](../project/IMPLEMENTATION_ROADMAP.md) for active work.
+
 ## Goal
 
 Extend Skyrim Together Reborn so a party has one canonical quest journal while any member may initiate the next valid quest action. The party leader remains an administrator, not the exclusive quest authority.
@@ -82,7 +87,11 @@ Still required:
 - A reconnecting stale client is repaired from server state.
 - Manual administrator selection is reserved for failed automatic repair.
 
-## Current implementation safety boundary
+## Historical implementation safety boundary
+
+The following boundary describes the collector milestone at the time this PoC
+document was written. The current project retains the non-mutation rules but has
+additional accepted control-plane components; see the current-status document.
 
 The runtime collector is observational only. It does not:
 

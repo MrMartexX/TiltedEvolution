@@ -1,5 +1,9 @@
 # Crash-safe co-op replica restore journal
 
+Document status: active subsystem design and historical validation inventory.
+Current task acceptance and platform blockers are tracked in
+[CURRENT_STATUS.md](../project/CURRENT_STATUS.md).
+
 This milestone remains game-independent: restore code can replace files only inside the isolated co-op replica when explicitly invoked, but the strong power-loss-durable executor is **not** connected to Skyrim save/load hooks or canonical live quest mutation.
 
 Two filesystem restore surfaces intentionally coexist:
@@ -163,6 +167,8 @@ Before strong restore can become a production requirement, the project still nee
 - prove production directory namespace establishment for every strong metadata/checkpoint owner;
 - retain Windows fail-closed behavior until its directory/delete durability contract is accepted;
 - complete real filesystem/device power-loss validation under documented assumptions;
-- close the remaining P0-C/D/E/F lifecycle, provenance, Papyrus-quiescence and verification work.
+- regression-test the accepted lifecycle, provenance, deferred-work,
+  Papyrus-quiescence and verification guards after strong recovery routing is
+  connected; current remaining gates are listed in the project status.
 
 Only after the full P0 matrix is actually closed may canonical quest mutation be reconsidered.

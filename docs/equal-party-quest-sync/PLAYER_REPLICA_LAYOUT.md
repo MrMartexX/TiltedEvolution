@@ -1,5 +1,9 @@
 # Player-scoped co-op replica foundation
 
+Document status: active technical design with historical implementation-status
+paragraphs. Project-wide status and next work are maintained in
+[CURRENT_STATUS.md](../project/CURRENT_STATUS.md).
+
 The co-op campaign now has a filesystem-safe replica stack in addition to the earlier identity/path model. It is still not wired to Skyrim save/load hooks, so the game itself is not redirected to these files yet.
 
 ## Stable identities
@@ -130,4 +134,9 @@ Filesystem copy execution exists now, but it operates only when explicitly invok
 - intercept manual/auto/quick saves;
 - apply canonical quest state to Skyrim.
 
-The next filesystem-critical step is a crash-resumable destructive restore journal/executor, followed by concrete client save interception/checkpoint hooks. Canonical quest mutation remains disabled until those protections and the Papyrus/world-target gates are live and validated.
+This document originally identified a crash-resumable destructive restore
+journal/executor and concrete save/checkpoint integration as its next boundary.
+Several related primitives now exist, but strong Windows durability and the
+accepted end-to-end runtime path remain open. Follow the ordered roadmap rather
+than treating this historical paragraph as the active task list. Canonical
+quest mutation remains disabled until all required gates are accepted.

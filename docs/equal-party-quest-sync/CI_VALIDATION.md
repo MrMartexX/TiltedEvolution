@@ -1,5 +1,9 @@
 # Equal-party quest PoC validation
 
+Document status: accumulated validation design and historical evidence. It does
+not identify the current integration HEAD or current remaining tasks. See
+[CURRENT_STATUS.md](../project/CURRENT_STATUS.md).
+
 The canonical equal-party repair path remains non-mutating inside Skyrim. The branch now also contains a game-independent, explicitly invoked filesystem stack for isolated co-op save replicas and immutable revision checkpoints; that stack is not connected to Skyrim save/load entry points yet.
 
 ## Automated validation
@@ -159,7 +163,11 @@ This branch head triggers the full validation set for immutable revision checkpo
 
 The newest tests verify that revision checkpoints publish under distinct paths, preserve older revisions, round-trip their manifests, restore from the exact recorded revision, reject revision zero, and isolate corruption of one checkpoint revision from another.
 
-## Next live validation
+## Historical next live validation
+
+This section records the next boundary at the time of this validation snapshot.
+It is retained for traceability and is superseded as a project schedule by the
+current-status document and ordered task package.
 
 No user-side run is required for the filesystem types alone because they are not connected to Skyrim yet. The next useful live test remains one combined diagnostic session after client wiring can observe the new guardrails without enabling canonical mutation.
 
