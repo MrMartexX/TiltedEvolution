@@ -33,7 +33,7 @@ If any item is false, do not add/enable SetStage; return the exact blocker.
 
 ## Tests
 
-Mock/adapter tests: exact success; equal-stage no-op; every missing authorization; wrong quest/edge/profile; stale generation/campaign/session/party/revision; duplicate/replay; invalid FormID round trip; nonexistent/backward target; changed pre-snapshot; lifecycle invalidation race; SetStage false/exception; postcondition mismatch; recovery transition; no double call; no forbidden mutation API reachable.
+Mock/adapter tests: exact success; equal-stage no-op; competing N/N+1 targets delivered in both orders; legitimate repeatable profile edge; every missing authorization; wrong quest/edge/profile; stale generation/campaign/session/party/revision; duplicate/replay after reconnect; late local Papyrus echo after the adapter returns; invalid FormID round trip; nonexistent/backward target; changed pre-snapshot; lifecycle invalidation race; SetStage false/exception; postcondition mismatch; recovery transition; no double call; no forbidden mutation API reachable.
 
 ## Two-client live matrix
 
