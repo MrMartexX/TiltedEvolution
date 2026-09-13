@@ -35,7 +35,7 @@ end
 add_requires(
     "entt v3.10.0", 
     "recastnavigation v1.6.0", 
-    "tiltedcore 0.2.8", 
+    "tiltedcore 0.2.9",
     "cryptopp 8.9.0", 
     "spdlog v1.13.0", 
     "cpp-httplib 0.14.0",
@@ -56,6 +56,15 @@ add_requireconfs("*.mimalloc", { version = "2.2.4", override = true })
 add_requireconfs("*.cmake", { version = "3.30.2", override = true })
 add_requireconfs("*.openssl", { version = "1.1.1-w", override = true })
 add_requireconfs("*.zlib", { version = "v1.3.1", override = true })
+-- Ubuntu 22.04 supplies protoc 3.12.x. Keep the transitive GameNetworkingSockets
+-- headers on the same protobuf release line as the generator used by Linux CI.
+add_requireconfs("**.protobuf-cpp", { version = "3.12.3", override = true })
+if is_plat("windows") then
+    -- The upstream precompiled archive can be built against a newer protobuf ABI
+    -- than the dependency graph selected above. Build this transitive library with
+    -- the pinned graph so its generated objects and linked protobuf stay identical.
+    add_requireconfs("**.gamenetworkingsockets", { build = true })
+end
 if is_plat("linux") then
     add_requireconfs("*.libcurl", { version = "8.7.1", override = true })
 end

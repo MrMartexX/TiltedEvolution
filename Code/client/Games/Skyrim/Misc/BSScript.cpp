@@ -232,7 +232,12 @@ void BSScript::NativeFunctionBase::SetCallableFromTasklets(bool aCallable)
     isCallableFromTask = aCallable;
 }
 
-BSScript::IsRemotePlayerFunc::IsRemotePlayerFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType)
+BSScript::IsRemotePlayerFunc::IsRemotePlayerFunc(
+    IVirtualMachine* apVm,
+    const char* apFunctionName,
+    const char* apClassName,
+    FunctionType aFunction,
+    Variable::Type aType)
     : NativeFunction(apFunctionName, apClassName, true, 1)
 {
     pFunction = reinterpret_cast<void*>(aFunction);
@@ -241,7 +246,7 @@ BSScript::IsRemotePlayerFunc::IsRemotePlayerFunc(const char* apFunctionName, con
 
     BSFixedString arg1Name("Actor");
     void* ptr = nullptr;
-    GameVM::Get()->virtualMachine->GetScriptObjectType1(&arg1Name, &ptr);
+    apVm->GetScriptObjectType1(&arg1Name, &ptr);
     parameters.data[0].pType = ptr;
 }
 
@@ -261,7 +266,12 @@ bool BSScript::IsRemotePlayerFunc::MarshallAndDispatch(Variable* apBaseVar, IVir
     return true;
 }
 
-BSScript::IsPlayerFunc::IsPlayerFunc(const char* apFunctionName, const char* apClassName, FunctionType aFunction, Variable::Type aType)
+BSScript::IsPlayerFunc::IsPlayerFunc(
+    IVirtualMachine* apVm,
+    const char* apFunctionName,
+    const char* apClassName,
+    FunctionType aFunction,
+    Variable::Type aType)
     : NativeFunction(apFunctionName, apClassName, true, 1)
 {
     pFunction = reinterpret_cast<void*>(aFunction);
@@ -270,7 +280,7 @@ BSScript::IsPlayerFunc::IsPlayerFunc(const char* apFunctionName, const char* apC
 
     BSFixedString arg1Name("Actor");
     void* ptr = nullptr;
-    GameVM::Get()->virtualMachine->GetScriptObjectType1(&arg1Name, &ptr);
+    apVm->GetScriptObjectType1(&arg1Name, &ptr);
     parameters.data[0].pType = ptr;
 }
 

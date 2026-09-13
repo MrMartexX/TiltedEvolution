@@ -58,11 +58,14 @@ std::string GetSKSEStyleExeVersion()
     auto exeBuild = VersionDb::Get().GetLoadedVersionString();
     std::replace(exeBuild.begin(), exeBuild.end(), '.', '_');
 
-    // chop off empty patch numbers for instance "1.6.323.0 becomes "1_6_323"
-    auto patchPos = exeBuild.find_last_of("_0");
-    if (patchPos != std::string::npos)
+    // SKSE DLL names omit only an exact trailing zero build component, e.g.
+    // 1.6.1170.0 -> 1_6_1170. Do not use find_last_of("_0"): that would also
+    // truncate legitimate non-zero build values ending in zero.
+    if (exeBuild.size() >= 2 &&
+        exeBuild[exeBuild.size() - 2] == '_' &&
+        exeBuild.back() == '0')
     {
-        exeBuild.erase(exeBuild.begin() + (patchPos - 1), exeBuild.end());
+        exeBuild.resize(exeBuild.size() - 2);
     }
 
     return exeBuild;
@@ -71,84 +74,135 @@ std::string GetSKSEStyleExeVersion()
 
 bool IsScriptExtenderLoaded()
 {
-    return g_SKSEModuleHandle;
+    return g_SKSEModuleHandle != nullptr;
 }
 
 void LoadScriptExender()
 {
-    const auto exeVerson{GetSKSEStyleExeVersion()};
-
-    // Get the path of the game, where the Script Extender dll resides
-    const auto gameDir = std::filesystem::current_path();
-
-    std::list<std::filesystem::path> dllMatches;
-    for (const auto& dirEntry : std::filesystem::directory_iterator(gameDir))
-    {
-        const auto& path = dirEntry.path();
-        if (path.extension() != L".dll")
-            continue;
-
-        auto fileName = path.filename().wstring();
-        if (fileName.length() < kScriptExtenderNameLength)
-            continue;
-
-        if (fileName.substr(0, kScriptExtenderNameLength) == kScriptExtenderName)
-        {
-            dllMatches.push_back(path);
-        }
-    }
-
-    // and before you ask, no, they dont expose it via file version info
-    std::filesystem::path* needle = nullptr;
-    for (auto& match : dllMatches)
-    {
-        auto fname = match.filename().string();
-        auto ptr = &fname[kScriptExtenderNameLength + 1];
-        // make extra sure!
-        if (std::strncmp(ptr, exeVerson.c_str(), exeVerson.length()) == 0)
-        {
-            needle = &match;
-            break;
-        }
-    }
-
-    if (!needle)
+    // RunTiltedInit is expected to call this once. Keep repeated calls
+    // idempotent rather than taking an additional loader reference or invoking
+    // StartSKSE twice.
+    if (g_SKSEModuleHandle)
         return;
 
-    FileVersion fileVersion;
-    if (GetFileVersion(*needle, fileVersion) != 0)
+    try
     {
-        spdlog::error("Unable to verify Script Extender version");
-        return;
-    }
-
-    auto skseVersion = fmt::format("v{}.{}.{}.{}", fileVersion.versions[0], fileVersion.versions[1], fileVersion.versions[2], fileVersion.versions[3]);
-
-    // nice try.
-    int SkseVCum = fileVersion.versions[0] * 1000000 + fileVersion.versions[1] * 10000 + fileVersion.versions[2] * 100 + fileVersion.versions[3];
-    if (SkseVCum < kSKSEMinBuild)
-    {
-        spdlog::error("Pre anniversary Script Extender is unsupported");
-        return;
-    }
-
-    if (g_SKSEModuleHandle = LoadLibraryW(needle->c_str()))
-    {
-        if (auto* pStartSKSE = reinterpret_cast<void (*)()>(GetProcAddress(g_SKSEModuleHandle, kScriptExtenderEntrypoint)))
+        const auto exeVersion{GetSKSEStyleExeVersion()};
+        if (exeVersion.empty())
         {
-            spdlog::info(
-                "Starting SKSE {}... be aware that messages that start without a colored [timestamp] prefix are "
-                "logs from the "
-                "Script Extender and its loaded mods.",
-                skseVersion);
-            pStartSKSE();
-            spdlog::info("SKSE is active");
+            spdlog::error("Unable to derive Script Extender runtime filename");
+            return;
         }
-        else
-            spdlog::warn("SKSE dll doesn't expose StartSKSE(), it may be outdated.");
+
+        const std::string expectedFileName =
+            fmt::format("skse64_{}.dll", exeVersion);
+
+        // Get the path of the game, where the Script Extender dll resides.
+        std::error_code ec;
+        const auto gameDir = std::filesystem::current_path(ec);
+        if (ec || gameDir.empty())
+        {
+            spdlog::error(
+                "Unable to inspect game directory for Script Extender: {}",
+                ec.message());
+            return;
+        }
+
+        std::filesystem::path needle;
+        std::filesystem::directory_iterator it(gameDir, ec);
+        const std::filesystem::directory_iterator end;
+        for (; !ec && it != end; it.increment(ec))
+        {
+            const auto& path = it->path();
+            if (path.extension() != L".dll")
+                continue;
+
+            const auto fileName = path.filename().string();
+            if (_stricmp(fileName.c_str(), expectedFileName.c_str()) == 0)
+            {
+                needle = path;
+                break;
+            }
+        }
+
+        if (ec)
+        {
+            spdlog::error(
+                "Unable to enumerate game directory for Script Extender: {}",
+                ec.message());
+            return;
+        }
+
+        if (needle.empty())
+            return;
+
+        FileVersion fileVersion{};
+        if (GetFileVersion(needle, fileVersion) != 0)
+        {
+            spdlog::error("Unable to verify Script Extender version");
+            return;
+        }
+
+        auto skseVersion = fmt::format(
+            "v{}.{}.{}.{}",
+            fileVersion.versions[0],
+            fileVersion.versions[1],
+            fileVersion.versions[2],
+            fileVersion.versions[3]);
+
+        // nice try.
+        const int skseVCum =
+            fileVersion.versions[0] * 1000000 +
+            fileVersion.versions[1] * 10000 +
+            fileVersion.versions[2] * 100 +
+            fileVersion.versions[3];
+        if (skseVCum < kSKSEMinBuild)
+        {
+            spdlog::error("Pre anniversary Script Extender is unsupported");
+            return;
+        }
+
+        HMODULE module = LoadLibraryW(needle.c_str());
+        if (!module)
+        {
+            spdlog::error(
+                "Failed to load {}! Check your privileges or re-download the Script Extender files.",
+                needle.string());
+            return;
+        }
+
+        auto* pStartSKSE = reinterpret_cast<void (*)()>(
+            GetProcAddress(module, kScriptExtenderEntrypoint));
+        if (!pStartSKSE)
+        {
+            spdlog::warn(
+                "SKSE dll doesn't expose StartSKSE(), it may be outdated.");
+            // A successfully loaded DLL without the required bootstrap export is
+            // not an active Script Extender. Drop the loader reference and keep
+            // IsScriptExtenderLoaded() false rather than publishing stale state.
+            FreeLibrary(module);
+            return;
+        }
+
+        // Publish the module only once the required bootstrap contract is
+        // present. StartSKSE itself installs SKSE's pre/post CRT hooks.
+        g_SKSEModuleHandle = module;
+        spdlog::info(
+            "Starting SKSE {}... be aware that messages that start without a colored [timestamp] prefix are "
+            "logs from the Script Extender and its loaded mods.",
+            skseVersion);
+        pStartSKSE();
+        spdlog::info("SKSE is active");
     }
-    else
+    catch (const std::exception& acException)
     {
-        spdlog::error("Failed to load {}! Check your privileges or re-download the Script Extender files.", needle->string());
+        spdlog::error(
+            "Script Extender pre-entry discovery failed closed: {}",
+            acException.what());
+    }
+    catch (...)
+    {
+        spdlog::error(
+            "Script Extender pre-entry discovery failed closed with an unknown error");
     }
 }

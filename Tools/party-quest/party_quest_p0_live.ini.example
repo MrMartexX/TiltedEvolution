@@ -1,0 +1,11 @@
+; Copy this file next to the Skyrim Together runtime as
+; party_quest_p0_live.ini before a controlled P0 live-validation run.
+;
+; This switch enables read-only JSONL evidence at:
+;   logs/party_quest_p0_live.jsonl
+;
+; It does NOT enable canonical SetStage, alias restoration, inventory mutation,
+; save replacement, or any other runtime mutation authority.
+
+[Gameplay]
+bEnablePartyQuestP0LiveDiagnostics=true
