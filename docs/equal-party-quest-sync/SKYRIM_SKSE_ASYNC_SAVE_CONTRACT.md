@@ -78,6 +78,14 @@ process-global save name only after the original worker target returns, but
 that hook and its target are private SKSE implementation details rather than a
 public plugin ABI.
 
+An experimental exact-2.2.6 worker extension was independently reviewed. It
+can correlate worker entry/return and co-save callback completion, but the
+wrapped Bethesda `SaveGame_HookTarget` has a `void` ABI. Consequently its
+`WorkerReturned` bit is not an authoritative `.ess` write/flush/close result.
+Checking that a new non-empty `.ess` exists afterwards does not close this
+gap. The experiment therefore remains evidence code and is not accepted as a
+production completion provider.
+
 ## Selected production solution
 
 The production solution must be an explicit completion extension supplied by
@@ -107,6 +115,12 @@ the exact campaign, player profile, runtime generation, transaction, world
 revision, capture epoch, attempt nonce and save name. Either order is accepted;
 duplicates are idempotent. Any mismatch, write failure, timeout, cancellation,
 generation transition or shutdown fails closed and requires confined cleanup.
+
+The save name is itself bound to the transaction, revision and attempt nonce
+using the canonical fixed-width format. Unknown artifact or outcome enum
+values are protocol failures; they cannot alias the co-save or success. A
+failure notification after an earlier success observation fails the pending
+request rather than being discarded as a duplicate.
 
 The completion capability is move-only and is issued once, only after both
 artifacts close successfully. It performs no I/O and grants no save or mutation
