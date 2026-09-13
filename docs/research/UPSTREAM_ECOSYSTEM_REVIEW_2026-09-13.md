@@ -33,8 +33,9 @@ Primary sources:
 ### Reviewed mutable tips
 
 These are evidence pins, not accepted implementation SHAs. The official
-repository carries a mixed GPL-3.0-or-later/LGPL-2.1 component notice; license
-and attribution must be rechecked for each extracted file.
+repository carries a [mixed GPL-3.0-or-later/LGPL-2.1 component
+notice](https://github.com/tiltedphoques/TiltedEvolution/blob/dev/LICENSE);
+license and attribution must be rechecked for each extracted file.
 
 | Source | Reviewed head | State/disposition |
 |---|---|---|
