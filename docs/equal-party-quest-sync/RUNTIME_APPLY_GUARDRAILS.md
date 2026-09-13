@@ -1,5 +1,9 @@
 # Equal-party runtime apply guardrails
 
+Document status: active subsystem safety boundary. Embedded "remaining work"
+lists are component-level inventories; use
+[CURRENT_STATUS.md](../project/CURRENT_STATUS.md) for ordered project status.
+
 This document tracks the protection/control-plane work required before the new server-authoritative quest protocol is allowed to mutate Skyrim runtime state.
 
 ## Current safety boundary

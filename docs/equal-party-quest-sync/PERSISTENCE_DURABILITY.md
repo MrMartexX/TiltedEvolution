@@ -1,5 +1,9 @@
 # Equal-Party Persistence Durability Boundary
 
+Document role: active durability closure checklist. This file owns detailed
+filesystem guarantees, while project/task status belongs to
+[CURRENT_STATUS.md](../project/CURRENT_STATUS.md).
+
 ## Status
 
 The production native-mutation durability requirement is `PowerLossDurable`.
