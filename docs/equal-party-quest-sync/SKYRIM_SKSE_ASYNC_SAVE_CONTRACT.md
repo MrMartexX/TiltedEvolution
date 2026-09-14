@@ -79,12 +79,22 @@ that hook and its target are private SKSE implementation details rather than a
 public plugin ABI.
 
 An experimental exact-2.2.6 worker extension was independently reviewed. It
-can correlate worker entry/return and co-save callback completion, but the
-wrapped Bethesda `SaveGame_HookTarget` has a `void` ABI. Consequently its
-`WorkerReturned` bit is not an authoritative `.ess` write/flush/close result.
-Checking that a new non-empty `.ess` exists afterwards does not close this
-gap. The experiment therefore remains evidence code and is not accepted as a
-production completion provider.
+can correlate worker entry/return and the absence of a caught co-save callback
+exception, but neither bit proves artifact completion:
+
+- The wrapped Bethesda `SaveGame_HookTarget` has a `void` ABI. Its
+  `WorkerReturned` bit is set from routing being armed, not from an `.ess`
+  write/flush/close result. A new non-empty `.ess` afterwards does not close
+  this gap.
+- The extension's `DidLastSaveSucceed()` sets its result to
+  `!callbackFailed` after calling `Close()`. The `WriteBuf()` results for
+  co-save chunks/headers are ignored, and no close result is observed. It does
+  not prove a successful `.skse` write/flush/close, especially on disk-full or
+  short-write paths.
+
+The experiment therefore remains evidence code and is not accepted as a
+production completion provider. Its boolean field names must not be promoted
+into stronger authority than their implementation supplies.
 
 ## Selected production solution
 
