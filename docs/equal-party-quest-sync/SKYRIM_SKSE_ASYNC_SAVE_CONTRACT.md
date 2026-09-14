@@ -87,10 +87,14 @@ exception, but neither bit proves artifact completion:
   write/flush/close result. A new non-empty `.ess` afterwards does not close
   this gap.
 - The extension's `DidLastSaveSucceed()` sets its result to
-  `!callbackFailed` after calling `Close()`. The `WriteBuf()` results for
-  co-save chunks/headers are ignored, and no close result is observed. It does
-  not prove a successful `.skse` write/flush/close, especially on disk-full or
-  short-write paths.
+  `!callbackFailed` after calling `Close()`. In the inspected `ianpatt/common`
+  checkout (`64e233c096735551f6ac9a773726a8a3960e46cd`), which provides
+  the included `common/IFileStream.h`,
+  `IFileStream::WriteBuf()` returns `void`, ignores the `WriteFile` result and
+  does not reject a short write; `Close()` returns `void` and ignores the
+  `CloseHandle` result. There is no observed flush result. Therefore this bit
+  does not prove successful `.skse` write/flush/close, especially on disk-full
+  or short-write paths.
 
 The experiment therefore remains evidence code and is not accepted as a
 production completion provider. Its boolean field names must not be promoted
