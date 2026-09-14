@@ -172,6 +172,15 @@ remains disabled.
 
 ## Future read-only live proof
 
+CommonLibSSE-NG exposes `BSSaveDataSystemUtility::PrepareFileSavePath`
+(virtual slot 02, returning `errno_t`, with a 0x104-byte destination buffer),
+overridden by `BSWin32SaveDataSystemUtility`. This is a concrete candidate
+for observing when the engine resolves an `.ess` path. Its presence in the
+headers does **not** establish that every save request uses it, that its
+result is bound to the intended worker request, or that a successful path
+preparation implies any `.ess` write or close. Exact-runtime observation must
+establish the call sequence and request correlation before relying on it.
+
 Before any enabling patch, exact-binary instrumentation must record monotonic
 timestamps and the full request identity for enqueue, worker start, path
 capture, `.ess` close/replace, SKSE path capture, `.skse` close, and terminal
