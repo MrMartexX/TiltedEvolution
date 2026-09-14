@@ -92,9 +92,10 @@ exception, but neither bit proves artifact completion:
   the included `common/IFileStream.h`,
   `IFileStream::WriteBuf()` returns `void`, ignores the `WriteFile` result and
   does not reject a short write; `Close()` returns `void` and ignores the
-  `CloseHandle` result. There is no observed flush result. Therefore this bit
-  does not prove successful `.skse` write/flush/close, especially on disk-full
-  or short-write paths.
+  `CloseHandle` result. `SetOffset()` ignores `SetFilePointerEx` failure and
+  `SetLength()` ignores `SetEndOfFile` failure. There is no observed flush
+  result. Therefore this bit does not prove successful `.skse`
+  seek/write/flush/close, especially on disk-full or short-write paths.
 
 The experiment therefore remains evidence code and is not accepted as a
 production completion provider. Its boolean field names must not be promoted
@@ -112,6 +113,7 @@ of SKSE private code. The extension must:
 3. keep the override scoped to the matching worker request only;
 4. report terminal `.ess` and `.skse` close results separately;
 5. propagate create/write/flush/close and serialization-callback failures;
+   co-save header rewrites must also propagate seek and truncate failures;
 6. provide cancellation/retirement for LoadGame, MainMenu and shutdown;
 7. expose a versioned capability descriptor that the client verifies against
    the loaded Skyrim, SKSE and Address Library identities.
