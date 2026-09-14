@@ -153,13 +153,21 @@ PartyQuestAsyncSaveContractResult PartyQuestAsyncSaveContract::Observe(
     if (!m_mainClosed || !m_cosaveClosed)
         return Result(PartyQuestAsyncSaveContractStatus::Pending);
 
-    m_status = PartyQuestAsyncSaveContractStatus::Complete;
-    PartyQuestAsyncSaveContractResult result = Result(m_status);
     PartyQuestAsyncSaveCompletion completion;
-    completion.m_identity = *m_identity;
-    completion.m_nonce = m_completionNonce++;
+    try
+    {
+        completion.m_identity = *m_identity;
+    }
+    catch (...)
+    {
+        return Fail(PartyQuestAsyncSaveContractStatus::Failed);
+    }
+    completion.m_nonce = m_completionNonce;
     if (completion.m_nonce == 0)
         return Fail(PartyQuestAsyncSaveContractStatus::Failed);
+    ++m_completionNonce;
+    m_status = PartyQuestAsyncSaveContractStatus::Complete;
+    PartyQuestAsyncSaveContractResult result = Result(m_status);
     result.Completion.emplace(std::move(completion));
     return result;
 }
