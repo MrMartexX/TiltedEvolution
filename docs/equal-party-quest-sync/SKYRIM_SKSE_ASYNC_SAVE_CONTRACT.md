@@ -107,9 +107,11 @@ A separate, undeployed local SKSE 2.2.6 research build now tests the co-save
 half of this contract:
 
 - `ianpatt/common` branch `codex/task07-checked-ifilestream`, commit
-  `20532c09b0d3bf35270f3896d225820c0d869e57`, accumulates create,
+  `a004970e43e9da0a4a2e2d4c7957882d142c0014` (building on
+  `20532c09b0d3bf35270f3896d225820c0d869e57`), accumulates create,
   seek, write/short-write, truncate, flush and close failures in a sticky
-  stream result. Its Windows test passed 6/6 normal/failure cases.
+  stream result. Its Windows test passed 6/6 normal/failure cases, including
+  readback after a header rewrite.
 - `ianpatt/skse64` branch `codex/task07-checked-cosave`, commit
   `872a4ea99d860d3ab4a2c889f086afc0f7962220`, makes
   `DidLastSaveSucceed()` require that result and a successful flush/close in
