@@ -172,6 +172,12 @@ remains disabled.
 
 ## Future read-only live proof
 
+The [2026-09-15 loaded-code inspection](TASK07_NATIVE_SAVE_EVIDENCE_2026-09-15.md)
+now identifies path resolution before the SKSE hook, a later native write/event
+path, and another path resolution for final rename. It also identifies unchecked
+write-count/close/rename outcomes. This strengthens the isolation/completion
+blocker; it is not a completed-save or fault-injection trace.
+
 CommonLibSSE-NG exposes `BSSaveDataSystemUtility::PrepareFileSavePath`
 (virtual slot 02, returning `errno_t`, with a 0x104-byte destination buffer),
 overridden by `BSWin32SaveDataSystemUtility`. This is a concrete candidate
