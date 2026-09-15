@@ -129,5 +129,29 @@ checked co-save outcome is not promoted to ESS success.
   STR TPTests were not rerun for this documentation update; the SKSE build is
   not a substitute for the four STR CI checks or live save validation.
 
+## Exact-runtime provider gate added after the inspection
+
+Research commit `c1c853d9d5d4ee1afdc704d34e936b918beb9cd3`
+adds a non-authorizing capability query. It verifies the reviewed 1.6.1170
+save-utility vtable slot and byte sequences for initial path preparation,
+utility save, native write and close, the late path call, and both rename call
+sites. Any mismatch returns false before isolated-save admission. It installs
+no new hook and leaves `kRequestWideIsolationProven` false.
+
+The verified BSWin32 save-utility vtable contains 18 slots. Its path method is
+slot 2 (`0x15302A0`); the Save_Impl branch invokes slot 7 (`0x152FD60`). Slots
+7 and 12 contain closely related write-and-event paths, while slots 5, 8 and 9
+perform other file/event operations. This broader map prevents treating one
+observed writer as the entire utility contract.
+
+- Full MSVC v143 x64 Release build passed.
+- Five native exact-byte matcher checks passed, including mismatch/null/empty
+  rejection and unavailable-runtime rejection.
+- Four hook safety regression checks passed.
+- Resulting research DLL SHA256:
+  `41CFEAC614EB1B9A3D8D6BAED4612F53D9F70F24260E24C5596C4D640534CB19`.
+- The DLL remains outside the game installation. The research branch is local
+  and was not pushed to the upstream SKSE repository.
+
 Task 7 still lacks a completed-save trace and the actual request-owned provider.
 P0 NOT CLOSED.
