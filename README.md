@@ -13,6 +13,9 @@ For general information, go to the [Tilted Online Wiki](https://wiki.tiltedphoqu
 
 Check out the [build guide](https://wiki.tiltedphoques.com/tilted-online/technical-documentation/build-guide) for setup and development info on the project. When writing code, check the CODE_GUIDELINES.md and make sure to run clang-format!
 
+Fork-specific architecture, current status and implementation planning start at
+[the repository documentation index](docs/README.md).
+
 ## Reporting bugs
 If you would like to report a bug please report them in the "Issues" tab on this page. Detailed and reproducible bug reports are of great importance for the development of the project.
 

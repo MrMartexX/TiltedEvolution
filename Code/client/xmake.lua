@@ -69,7 +69,8 @@ target(name)
     add_syslinks(
         "version",
         "dbghelp",
-        "kernel32")
+        "kernel32",
+        "shell32")
 end
 
 add_requires("tiltedcore")
