@@ -26,6 +26,11 @@ bool IsKnownOutcome(PartyQuestAsyncSaveArtifactOutcome aOutcome) noexcept
 {
     return aOutcome == PartyQuestAsyncSaveArtifactOutcome::ClosedSuccess || aOutcome == PartyQuestAsyncSaveArtifactOutcome::Failed;
 }
+
+bool IsKnownPublicationOutcome(PartyQuestAsyncSavePublicationOutcome aOutcome) noexcept
+{
+    return aOutcome == PartyQuestAsyncSavePublicationOutcome::PublishedSuccess || aOutcome == PartyQuestAsyncSavePublicationOutcome::Failed;
+}
 } // namespace
 
 bool PartyQuestAsyncSaveRequestIdentity::IsValid() const noexcept
@@ -70,6 +75,8 @@ PartyQuestAsyncSaveContractResult PartyQuestAsyncSaveContract::Result(PartyQuest
     result.Status = aStatus;
     result.SkyrimEssClosed = m_mainClosed;
     result.SkseCosaveClosed = m_cosaveClosed;
+    result.SkyrimEssPublished = m_mainPublished;
+    result.SkseCosavePublished = m_cosavePublished;
     result.CleanupRequired = m_identity.has_value() && (aStatus == PartyQuestAsyncSaveContractStatus::Failed || aStatus == PartyQuestAsyncSaveContractStatus::TimedOut ||
                                                         aStatus == PartyQuestAsyncSaveContractStatus::Cancelled || aStatus == PartyQuestAsyncSaveContractStatus::InvalidClock);
     return result;
@@ -114,6 +121,8 @@ PartyQuestAsyncSaveContract::Begin(PartyQuestAsyncSaveRequestIdentity aIdentity,
         m_lastNowMs = aNowMs;
         m_mainClosed = false;
         m_cosaveClosed = false;
+        m_mainPublished = false;
+        m_cosavePublished = false;
         m_status = PartyQuestAsyncSaveContractStatus::Pending;
         return Result(m_status);
     }
@@ -150,7 +159,36 @@ PartyQuestAsyncSaveContractResult PartyQuestAsyncSaveContract::Observe(
         return Result(PartyQuestAsyncSaveContractStatus::Duplicate);
 
     closed = true;
-    if (!m_mainClosed || !m_cosaveClosed)
+    return Result(PartyQuestAsyncSaveContractStatus::Pending);
+}
+
+PartyQuestAsyncSaveContractResult PartyQuestAsyncSaveContract::ObservePublication(
+    const PartyQuestAsyncSaveRequestIdentity& acIdentity, PartyQuestAsyncSaveArtifact aArtifact, PartyQuestAsyncSavePublicationOutcome aOutcome, uint64_t aNowMs) noexcept
+{
+    if (!m_identity || m_status == PartyQuestAsyncSaveContractStatus::Inactive)
+        return Result(PartyQuestAsyncSaveContractStatus::Stale);
+    if (*m_identity != acIdentity)
+        return Result(PartyQuestAsyncSaveContractStatus::Stale);
+    if (m_status != PartyQuestAsyncSaveContractStatus::Pending)
+        return Result(m_status == PartyQuestAsyncSaveContractStatus::Complete ? PartyQuestAsyncSaveContractStatus::Duplicate : m_status);
+    if (!CheckClock(aNowMs))
+        return Result(m_status);
+
+    if (!IsKnownArtifact(aArtifact) || !IsKnownPublicationOutcome(aOutcome))
+        return Fail(PartyQuestAsyncSaveContractStatus::Failed);
+    if (aOutcome == PartyQuestAsyncSavePublicationOutcome::Failed)
+        return Fail(PartyQuestAsyncSaveContractStatus::Failed);
+
+    const bool closed = aArtifact == PartyQuestAsyncSaveArtifact::SkyrimEss ? m_mainClosed : m_cosaveClosed;
+    if (!closed)
+        return Fail(PartyQuestAsyncSaveContractStatus::Failed);
+
+    bool& published = aArtifact == PartyQuestAsyncSaveArtifact::SkyrimEss ? m_mainPublished : m_cosavePublished;
+    if (published)
+        return Result(PartyQuestAsyncSaveContractStatus::Duplicate);
+
+    published = true;
+    if (!m_mainPublished || !m_cosavePublished)
         return Result(PartyQuestAsyncSaveContractStatus::Pending);
 
     PartyQuestAsyncSaveCompletion completion;
@@ -192,12 +230,20 @@ PartyQuestAsyncSaveContractResult PartyQuestAsyncSaveContract::Cancel(const Part
     return Fail(PartyQuestAsyncSaveContractStatus::Cancelled);
 }
 
-void PartyQuestAsyncSaveContract::Retire() noexcept
+PartyQuestAsyncSaveContractResult PartyQuestAsyncSaveContract::Retire(const PartyQuestAsyncSaveRequestIdentity& acIdentity) noexcept
 {
+    if (!m_identity || *m_identity != acIdentity)
+        return Result(PartyQuestAsyncSaveContractStatus::Stale);
+    if (m_status == PartyQuestAsyncSaveContractStatus::Pending)
+        return Result(m_status);
+
     m_identity.reset();
     m_startedAtMs = 0;
     m_lastNowMs = 0;
     m_mainClosed = false;
     m_cosaveClosed = false;
+    m_mainPublished = false;
+    m_cosavePublished = false;
     m_status = PartyQuestAsyncSaveContractStatus::Inactive;
+    return Result(m_status);
 }

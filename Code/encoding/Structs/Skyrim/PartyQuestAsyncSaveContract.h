@@ -19,6 +19,12 @@ enum class PartyQuestAsyncSaveArtifactOutcome : uint8_t
     Failed
 };
 
+enum class PartyQuestAsyncSavePublicationOutcome : uint8_t
+{
+    PublishedSuccess,
+    Failed
+};
+
 enum class PartyQuestAsyncSaveContractStatus : uint8_t
 {
     Inactive,
@@ -51,9 +57,9 @@ struct PartyQuestAsyncSaveRequestIdentity
 };
 
 /**
- * Move-only proof that both exact artifacts reached an authoritative closed
- * success notification for one request. It is not issued from file existence,
- * size, timestamps or Save_Impl's return value.
+ * Move-only proof that both exact artifacts reached authoritative checked
+ * close and final-name publication success for one request. It is not issued
+ * from file existence, size, timestamps or Save_Impl's return value.
  */
 class PartyQuestAsyncSaveCompletion final
 {
@@ -78,15 +84,19 @@ struct PartyQuestAsyncSaveContractResult
     PartyQuestAsyncSaveContractStatus Status{PartyQuestAsyncSaveContractStatus::Inactive};
     bool SkyrimEssClosed{};
     bool SkseCosaveClosed{};
+    bool SkyrimEssPublished{};
+    bool SkseCosavePublished{};
+    // Cleanup is required after physical retirement; this flag does not prove
+    // that it is safe to touch files while the native request may still write.
     bool CleanupRequired{};
     std::optional<PartyQuestAsyncSaveCompletion> Completion;
 };
 
 /**
- * Pure request-correlation state machine for a future read-only Skyrim/SKSE
- * completion observer. Only one request may own the engine save pipeline.
- * All lifecycle/failure terminals require cleanup when either artifact may
- * have been created. This class performs no I/O and grants no engine authority.
+ * Pure request-correlation state machine for a future Skyrim/SKSE completion
+ * provider. Only one request may own the engine save pipeline. Logical
+ * terminals retain that ownership until matching physical I/O retirement.
+ * This class performs no I/O, owns no threads and grants no engine authority.
  */
 class PartyQuestAsyncSaveContract final
 {
@@ -105,10 +115,24 @@ public:
         PartyQuestAsyncSaveArtifactOutcome aOutcome,
         uint64_t aNowMs) noexcept;
 
+    [[nodiscard]] PartyQuestAsyncSaveContractResult ObservePublication(
+        const PartyQuestAsyncSaveRequestIdentity& acIdentity,
+        PartyQuestAsyncSaveArtifact aArtifact,
+        PartyQuestAsyncSavePublicationOutcome aOutcome,
+        uint64_t aNowMs) noexcept;
+
     [[nodiscard]] PartyQuestAsyncSaveContractResult Poll(uint64_t aNowMs) noexcept;
     [[nodiscard]] PartyQuestAsyncSaveContractResult Cancel(
         const PartyQuestAsyncSaveRequestIdentity& acIdentity) noexcept;
-    void Retire() noexcept;
+
+    /**
+     * Releases ownership only after the native provider has authoritatively
+     * established that the matching request can no longer perform I/O. A
+     * logical terminal status is not evidence that the external queue drained.
+     * Pending requests must first receive a failure/cancellation outcome.
+     */
+    [[nodiscard]] PartyQuestAsyncSaveContractResult Retire(
+        const PartyQuestAsyncSaveRequestIdentity& acIdentity) noexcept;
 
 private:
     [[nodiscard]] PartyQuestAsyncSaveContractResult Result(
@@ -123,5 +147,7 @@ private:
     uint64_t m_completionNonce{1};
     bool m_mainClosed{};
     bool m_cosaveClosed{};
+    bool m_mainPublished{};
+    bool m_cosavePublished{};
     PartyQuestAsyncSaveContractStatus m_status{PartyQuestAsyncSaveContractStatus::Inactive};
 };
