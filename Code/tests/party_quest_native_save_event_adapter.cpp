@@ -723,36 +723,36 @@ TEST_CASE("Request-wide retirement ABI v2 decoder is exact and identity owning")
     }
 }
 
-TEST_CASE("Only successful request-wide retirement releases contract ownership")
+TEST_CASE("Failed save outcome plus proven PQS4 drain releases terminal reservation")
 {
     const auto identity = Identity();
     auto next = identity;
     ++next.AttemptNonce;
     next.SaveName = SaveName(next.TransactionId, next.TargetWorldRevision, next.AttemptNonce);
 
-    SECTION("failed drain proof preserves a cancelled reservation")
-    {
-        PartyQuestAsyncSaveContract contract;
-        Begin(contract, identity);
-        REQUIRE(contract.Cancel(identity).Status == PartyQuestAsyncSaveContractStatus::Cancelled);
+    PartyQuestAsyncSaveContract contract;
+    Begin(contract, identity);
+    REQUIRE(contract.Cancel(identity).Status == PartyQuestAsyncSaveContractStatus::Cancelled);
 
-        const auto failed = ApplyRetired(contract, identity, RetiredEvent(identity, 2, 5));
-        REQUIRE(failed.Status == PartyQuestNativeSaveEventAdapterStatus::RetirementFailed);
-        REQUIRE_FALSE(failed.ContractResult);
-        REQUIRE(contract.Begin(next, 101, false, false).Status == PartyQuestAsyncSaveContractStatus::Busy);
+    const auto failed = ApplyRetired(contract, identity, RetiredEvent(identity, 2, 5));
+    REQUIRE(failed.Status == PartyQuestNativeSaveEventAdapterStatus::Retired);
+    REQUIRE(failed.ContractResult);
+    REQUIRE(failed.ContractResult->Status == PartyQuestAsyncSaveContractStatus::Inactive);
+    REQUIRE(contract.Begin(next, 101, false, false).Status == PartyQuestAsyncSaveContractStatus::Pending);
+}
 
-        const auto retired = ApplyRetired(contract, identity, RetiredEvent(identity));
-        REQUIRE(retired.Status == PartyQuestNativeSaveEventAdapterStatus::Retired);
-        REQUIRE(retired.ContractResult);
-        REQUIRE(retired.ContractResult->Status == PartyQuestAsyncSaveContractStatus::Inactive);
-        REQUIRE(contract.Begin(next, 102, false, false).Status == PartyQuestAsyncSaveContractStatus::Pending);
-    }
+TEST_CASE("Request-wide retirement drain releases terminal contract ownership")
+{
+    const auto identity = Identity();
+    auto next = identity;
+    ++next.AttemptNonce;
+    next.SaveName = SaveName(next.TransactionId, next.TargetWorldRevision, next.AttemptNonce);
 
     SECTION("request-wide retirement cannot silently discard pending work")
     {
         PartyQuestAsyncSaveContract contract;
         Begin(contract, identity);
-        const auto early = ApplyRetired(contract, identity, RetiredEvent(identity));
+        const auto early = ApplyRetired(contract, identity, RetiredEvent(identity, 2, 5));
         REQUIRE(early.Status == PartyQuestNativeSaveEventAdapterStatus::RetirementBeforeTerminal);
         REQUIRE(early.ContractResult);
         REQUIRE(early.ContractResult->Status == PartyQuestAsyncSaveContractStatus::Pending);
@@ -763,7 +763,7 @@ TEST_CASE("Only successful request-wide retirement releases contract ownership")
                 PartyQuestNativeSaveEventAdapterStatus::Retired);
     }
 
-    SECTION("timeout remains reserved until successful request-wide retirement")
+    SECTION("timeout remains reserved until request-wide retirement")
     {
         PartyQuestAsyncSaveContract contract;
         Begin(contract, identity);

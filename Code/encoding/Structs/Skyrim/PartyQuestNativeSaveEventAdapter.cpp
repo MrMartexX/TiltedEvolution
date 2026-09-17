@@ -430,14 +430,8 @@ PartyQuestNativeSaveEventAdapter::ApplyTrustedProviderRetirement(
         result.Status = PartyQuestNativeSaveEventAdapterStatus::IdentityMismatch;
         return result;
     }
-    if (decoded.Event->Outcome == PartyQuestNativeSaveEventOutcome::Failed)
-    {
-        // A provider reporting that retirement failed is not drain proof and
-        // cannot release the identity-bound reservation.
-        result.Status = PartyQuestNativeSaveEventAdapterStatus::RetirementFailed;
-        return result;
-    }
-
+    // PQS4 itself proves request-wide writer drain. Outcome describes the
+    // terminal save result, not whether retirement/drain succeeded.
     auto contractResult = aContract.Retire(decoded.Event->Identity);
     switch (contractResult.Status)
     {
