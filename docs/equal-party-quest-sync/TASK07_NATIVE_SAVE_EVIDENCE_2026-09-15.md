@@ -160,14 +160,19 @@ Local research commits on `codex/task07-checked-cosave` now bind the immutable
 reservation to the exact buffer returned by `CreateSaveBuffer`, retire normal
 work only after checked slot-7 return, and use the identity-bound request
 destructor as the no-writer/discard drain boundary. A destructor belonging to
-an ordinary or different save buffer cannot retire the reserved request.
-Hook installation also reserves the correct 52 trampoline bytes and verifies
+an ordinary or different save buffer cannot retire the reserved request. The
+enqueue hook additionally binds the exact `SaveOperationRequest` address, so a
+later allocation that reuses only the buffer address cannot pass retirement
+validation. If slot 7 returns before any checked write/close/rename hook (for
+example, because file creation failed), the provider emits a terminal ESS
+failure before request retirement instead of leaving the portable contract
+pending. Hook installation reserves the complete 66 trampoline bytes and verifies
 every patched pointer/call target before publishing provider readiness.
 
-Latest local native commit at the time of this note: `e8a3c2f`. Full MSVC v143
-x64 Release build succeeded; 15 structural safety tests and the native
+Latest local native commit at the time of this note: `e5dc7eb`. Full MSVC v143
+x64 Release build succeeded; 17 structural safety tests and the native
 state/target executable passed. DLL SHA256:
-`412B63C2CD07B521001569A3B2DB99E5BA7A44720A95DB0F585B872F20886A92`.
+`D54718A4B8CFB38FD60172882E059F3B2BC7AA338FBDE9526C88AD0A6F04088F`.
 
 This remains research evidence, not production authorization. The provider is
 still compile-time disabled. Fault-injection, overlapping-save, authenticated
