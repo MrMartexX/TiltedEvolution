@@ -137,7 +137,22 @@ PartyQuestAsyncSaveFinalizationGate::ObserveRetirement(
     if (m_state == State::Finalized || m_state == State::RetiredWithoutSuccess)
         return Result(PartyQuestAsyncSaveFinalizationStatus::Duplicate);
     if (m_state == State::Pending)
-        return Result(PartyQuestAsyncSaveFinalizationStatus::ProtocolViolation);
+    {
+        // PQS4 is authoritative request-wide drain evidence even when its
+        // matching terminal PQS3 was lost or arrived out of order. Never turn
+        // that protocol violation into success, but do consume the one-shot
+        // drain proof so this exact request cannot wedge ownership forever.
+        const auto cancelled = aContract.Cancel(acIdentity);
+        if (cancelled.Status != PartyQuestAsyncSaveContractStatus::Cancelled)
+            return Result(PartyQuestAsyncSaveFinalizationStatus::ContractMismatch);
+        const auto retired = aContract.Retire(acIdentity);
+        if (retired.Status != PartyQuestAsyncSaveContractStatus::Inactive)
+            return Result(PartyQuestAsyncSaveFinalizationStatus::ContractMismatch);
+        m_completion.reset();
+        m_state = State::RetiredWithoutSuccess;
+        return Result(
+            PartyQuestAsyncSaveFinalizationStatus::ProtocolViolationRetired, true);
+    }
 
     const bool logicalSuccess = m_state == State::LogicalSuccess;
     const bool logicalFailure = m_state == State::LogicalFailure;

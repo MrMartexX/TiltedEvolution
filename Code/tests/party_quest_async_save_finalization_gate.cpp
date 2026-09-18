@@ -144,21 +144,25 @@ TEST_CASE("Logical failure retires only on matching physical failure",
     REQUIRE_FALSE(retired.Completion.has_value());
 }
 
-TEST_CASE("Retirement cannot silently discard a pending request",
+TEST_CASE("Early retirement drains pending request without success",
     "[quest.party-state][async-save-finalization]")
 {
-    PartyQuestAsyncSaveContract contract;
-    PartyQuestAsyncSaveFinalizationGate gate;
-    const auto identity = Identity();
-    Begin(contract, gate, identity);
+    for (const auto outcome : {PartyQuestAsyncSaveFinalOutcome::Failed,
+             PartyQuestAsyncSaveFinalOutcome::Succeeded})
+    {
+        PartyQuestAsyncSaveContract contract;
+        PartyQuestAsyncSaveFinalizationGate gate;
+        const auto identity = Identity();
+        Begin(contract, gate, identity);
 
-    const auto result = gate.ObserveRetirement(
-        contract, identity, PartyQuestAsyncSaveFinalOutcome::Failed);
-    REQUIRE(result.Status ==
-            PartyQuestAsyncSaveFinalizationStatus::ProtocolViolation);
-    REQUIRE_FALSE(result.RetirementApplied);
-    REQUIRE(contract.Begin(Identity(51), 2, false, false).Status ==
-            PartyQuestAsyncSaveContractStatus::Busy);
+        const auto result = gate.ObserveRetirement(contract, identity, outcome);
+        REQUIRE(result.Status ==
+                PartyQuestAsyncSaveFinalizationStatus::ProtocolViolationRetired);
+        REQUIRE(result.RetirementApplied);
+        REQUIRE_FALSE(result.Completion.has_value());
+        REQUIRE(contract.Begin(Identity(51), 2, false, false).Status ==
+                PartyQuestAsyncSaveContractStatus::Pending);
+    }
 }
 
 TEST_CASE("Full identity rejects stale and ABA retirement",
@@ -220,4 +224,66 @@ TEST_CASE("Malformed outcome and identity do not mutate active request",
     REQUIRE_FALSE(rejected.RetirementApplied);
     REQUIRE(contract.Begin(Identity(51), 2, false, false).Status ==
             PartyQuestAsyncSaveContractStatus::Busy);
+}
+
+TEST_CASE("Cancellation and timeout require failed physical retirement",
+    "[quest.party-state][async-save-finalization]")
+{
+    SECTION("cancelled request")
+    {
+        PartyQuestAsyncSaveContract contract;
+        PartyQuestAsyncSaveFinalizationGate gate;
+        const auto identity = Identity();
+        Begin(contract, gate, identity);
+
+        auto cancelled = contract.Cancel(identity);
+        REQUIRE(cancelled.Status == PartyQuestAsyncSaveContractStatus::Cancelled);
+        REQUIRE(gate.ObserveContractResult(identity, std::move(cancelled)).Status ==
+                PartyQuestAsyncSaveFinalizationStatus::AwaitingRetirement);
+        const auto retired = gate.ObserveRetirement(
+            contract, identity, PartyQuestAsyncSaveFinalOutcome::Failed);
+        REQUIRE(retired.Status ==
+                PartyQuestAsyncSaveFinalizationStatus::RetiredWithoutSuccess);
+        REQUIRE(retired.RetirementApplied);
+        REQUIRE_FALSE(retired.Completion.has_value());
+    }
+
+    SECTION("timed out request")
+    {
+        PartyQuestAsyncSaveContract contract;
+        PartyQuestAsyncSaveFinalizationGate gate;
+        const auto identity = Identity();
+        Begin(contract, gate, identity);
+
+        auto timedOut = contract.Poll(PartyQuestAsyncSaveContract::kTimeoutMs + 2);
+        REQUIRE(timedOut.Status == PartyQuestAsyncSaveContractStatus::TimedOut);
+        REQUIRE(gate.ObserveContractResult(identity, std::move(timedOut)).Status ==
+                PartyQuestAsyncSaveFinalizationStatus::AwaitingRetirement);
+        REQUIRE(gate.ObserveRetirement(
+            contract, identity, PartyQuestAsyncSaveFinalOutcome::Failed).Status ==
+                PartyQuestAsyncSaveFinalizationStatus::RetiredWithoutSuccess);
+    }
+}
+
+TEST_CASE("Overlapping gate begin and post-completion failure fail closed",
+    "[quest.party-state][async-save-finalization]")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    const auto identity = Identity();
+    Begin(contract, gate, identity);
+    REQUIRE(gate.Begin(Identity(51)).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Busy);
+    REQUIRE(Complete(contract, gate, identity).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::AwaitingRetirement);
+
+    PartyQuestAsyncSaveContractResult contradictory;
+    contradictory.Status = PartyQuestAsyncSaveContractStatus::Failed;
+    REQUIRE(gate.ObserveContractResult(identity, std::move(contradictory)).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::ProtocolViolation);
+    const auto retired = gate.ObserveRetirement(
+        contract, identity, PartyQuestAsyncSaveFinalOutcome::Failed);
+    REQUIRE(retired.Status ==
+            PartyQuestAsyncSaveFinalizationStatus::RetiredWithoutSuccess);
+    REQUIRE_FALSE(retired.Completion.has_value());
 }
