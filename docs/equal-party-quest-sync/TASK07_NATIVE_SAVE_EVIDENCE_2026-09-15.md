@@ -131,3 +131,45 @@ checked co-save outcome is not promoted to ESS success.
 
 Task 7 still lacks a completed-save trace and the actual request-owned provider.
 P0 NOT CLOSED.
+
+## Offline exact-binary follow-up, 2026-09-18
+
+The exact `SkyrimSE.exe` above was inspected without launching Skyrim. The
+SteamStub 3.1 header was decoded with the reviewed launcher algorithm and its
+AES fields were used to decrypt a temporary in-memory copy of `.text`; the game
+file was not modified. Header signature `0xC0DEC0DF`, original entry point
+`0x153BC64`, code RVA `0x1000`, code size `0x174DA00`, and zero DRM flags were
+recovered from the exact binary.
+
+This closes the previously missing normal queued-control-flow proof for that
+binary:
+
+1. `Save_Impl` constructs a 0x150-byte `SaveOperationRequest`, gives it the
+   operation discriminator `0x40000001`, stores the save-buffer pointer at
+   `+0x148`, and submits it at `0x6102E7`.
+2. The queue worker at `0x617820` selects discriminator `0x40000001` and, at
+   `0x617905`, loads that exact `+0x148` buffer.
+3. The worker calls the save utility's slot 7 at `0x617962` and only after that
+   call returns invokes the request's virtual destructor at `0x617985`.
+4. Address Library AE ID 206598 resolves the request vtable to `0x188CFE0` for
+   the accepted `versionlib-1-6-1170-0.bin`; its first slot is the scalar
+   destructor at `0x61B740`. The destructor clears its retained operation state,
+   runs the base cleanup and conditionally frees the 0x150-byte request.
+
+Local research commits on `codex/task07-checked-cosave` now bind the immutable
+reservation to the exact buffer returned by `CreateSaveBuffer`, retire normal
+work only after checked slot-7 return, and use the identity-bound request
+destructor as the no-writer/discard drain boundary. A destructor belonging to
+an ordinary or different save buffer cannot retire the reserved request.
+Hook installation also reserves the correct 52 trampoline bytes and verifies
+every patched pointer/call target before publishing provider readiness.
+
+Latest local native commit at the time of this note: `e8a3c2f`. Full MSVC v143
+x64 Release build succeeded; 15 structural safety tests and the native
+state/target executable passed. DLL SHA256:
+`412B63C2CD07B521001569A3B2DB99E5BA7A44720A95DB0F585B872F20886A92`.
+
+This remains research evidence, not production authorization. The provider is
+still compile-time disabled. Fault-injection, overlapping-save, authenticated
+bridge/lifecycle ownership, isolated live `.ess`/`.skse` validation and the
+Task 8 durability proof remain required. P0 NOT CLOSED.
