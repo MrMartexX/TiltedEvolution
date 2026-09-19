@@ -228,3 +228,25 @@ The DLL was not loaded into a non-Skyrim process, installed or executed.
 Descriptor presence is compatibility evidence only. Trusted resolution of the
 already loaded module, callback registration ownership and unload/quiescence
 remain external blockers; the provider remains disabled.
+
+## Trusted loaded-module resolver follow-up
+
+The STR client now has an intentionally unwired Windows resolver boundary in
+`PartyQuestSkyrimNativeSaveProviderResolver`. The future bootstrap must pass its
+already-trusted Skyrim installation directory. The resolver never calls
+`LoadLibrary`: it acquires only the already-loaded `skse64_1_6_1170.dll`, resolves
+both the reported and expected file to their final handle paths, requires an
+exact case-insensitive match, requires the fixed descriptor export to point into
+the same committed executable PE image, checks the loaded VersionDb runtime,
+holds the current generation lease, SEH-contains the foreign descriptor call,
+applies the exact descriptor policy, registers the authority, and pins the
+accepted module. A failed registration does not pin the module; a pin failure
+revokes the newly issued registration.
+
+This closes descriptor-origin confusion at the client adapter boundary but does
+not register callbacks, enable capture, or prove unload/shutdown quiescence.
+Those remain production bootstrap/P0-C work. The check also deliberately does
+not claim that a pathname proves the historical on-disk bytes from which Windows
+mapped the image; source trust still begins at the SKSE loader, while export
+range, runtime, descriptor and generation checks constrain what that loaded
+module can authorize.
