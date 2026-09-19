@@ -2,6 +2,7 @@
 
 #include <catch2/catch.hpp>
 
+#include <limits>
 #include <type_traits>
 #include <utility>
 
@@ -35,18 +36,17 @@ TEST_CASE("Native save provider descriptor is exact and fail closed",
     const auto valid = Descriptor();
     REQUIRE(PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(valid));
 
-    SECTION("partial callback capability set")
+    SECTION("descriptor ABI mismatch")
     {
         auto invalid = valid;
-        invalid.Capabilities &= ~static_cast<uint64_t>(
-            PartyQuestNativeSaveProviderCapabilityBit::RequestRetirement);
+        ++invalid.AbiVersion;
         REQUIRE_FALSE(
             PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
     }
-    SECTION("unknown capability")
+    SECTION("descriptor size mismatch")
     {
         auto invalid = valid;
-        invalid.Capabilities |= 1ull << 63u;
+        --invalid.StructSize;
         REQUIRE_FALSE(
             PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
     }
@@ -57,10 +57,53 @@ TEST_CASE("Native save provider descriptor is exact and fail closed",
         REQUIRE_FALSE(
             PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
     }
-    SECTION("unproven runtime")
+    SECTION("different implementation version")
     {
         auto invalid = valid;
-        invalid.RuntimePatch = 1171;
+        ++invalid.ImplementationVersion;
+        REQUIRE_FALSE(
+            PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
+    }
+    SECTION("partial callback capability set")
+    {
+        auto invalid = valid;
+        invalid.Capabilities &= ~static_cast<uint64_t>(
+            PartyQuestNativeSaveProviderCapabilityBit::RequestRetirement);
+        REQUIRE_FALSE(
+            PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
+    }
+    SECTION("required capabilities plus unknown bit")
+    {
+        auto invalid = valid;
+        invalid.Capabilities |= 1ull << 63u;
+        REQUIRE_FALSE(
+            PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
+    }
+    SECTION("runtime major mismatch")
+    {
+        auto invalid = valid;
+        ++invalid.RuntimeMajor;
+        REQUIRE_FALSE(
+            PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
+    }
+    SECTION("runtime minor mismatch")
+    {
+        auto invalid = valid;
+        ++invalid.RuntimeMinor;
+        REQUIRE_FALSE(
+            PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
+    }
+    SECTION("runtime patch mismatch")
+    {
+        auto invalid = valid;
+        ++invalid.RuntimePatch;
+        REQUIRE_FALSE(
+            PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
+    }
+    SECTION("runtime build mismatch")
+    {
+        auto invalid = valid;
+        ++invalid.RuntimeBuild;
         REQUIRE_FALSE(
             PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
     }
@@ -71,7 +114,14 @@ TEST_CASE("Native save provider descriptor is exact and fail closed",
         REQUIRE_FALSE(
             PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
     }
-    SECTION("nonzero reserved field")
+    SECTION("nonzero reserved0")
+    {
+        auto invalid = valid;
+        invalid.Reserved0 = 1;
+        REQUIRE_FALSE(
+            PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
+    }
+    SECTION("nonzero reserved1")
     {
         auto invalid = valid;
         invalid.Reserved1 = 1;
@@ -97,6 +147,8 @@ TEST_CASE("Native save provider registration is generation and instance bound",
     REQUIRE(duplicate.Status ==
             PartyQuestNativeSaveProviderRegistrationStatus::Busy);
     REQUIRE_FALSE(duplicate.Token);
+    REQUIRE(registry.Validate(*registered.Token, 10) ==
+            PartyQuestNativeSaveProviderRegistrationStatus::Current);
 
     auto token = std::move(*registered.Token);
     REQUIRE_FALSE(registered.Token->IsValid());
@@ -116,6 +168,91 @@ TEST_CASE("Native save provider registration is generation and instance bound",
             PartyQuestNativeSaveProviderRegistrationStatus::Stale);
     REQUIRE(registry.Validate(*replacement.Token, 10) ==
             PartyQuestNativeSaveProviderRegistrationStatus::Current);
+}
+
+TEST_CASE("Native save provider rejected admission cannot mutate active authority",
+    "[quest.party-state][native-save-provider][admission]")
+{
+    PartyQuestNativeSaveProviderRegistration registry;
+    auto registered = registry.RegisterAuthenticated(Descriptor(), 42);
+    REQUIRE(registered.Status ==
+            PartyQuestNativeSaveProviderRegistrationStatus::Registered);
+    REQUIRE(registered.Token);
+
+    auto invalidDescriptor = Descriptor();
+    invalidDescriptor.ProviderFingerprint ^= 1ull;
+    const auto rejectedDescriptor =
+        registry.RegisterAuthenticated(invalidDescriptor, 42);
+    REQUIRE(rejectedDescriptor.Status ==
+            PartyQuestNativeSaveProviderRegistrationStatus::InvalidDescriptor);
+    REQUIRE_FALSE(rejectedDescriptor.Token);
+    REQUIRE(registry.Validate(*registered.Token, 42) ==
+            PartyQuestNativeSaveProviderRegistrationStatus::Current);
+
+    const auto rejectedGeneration =
+        registry.RegisterAuthenticated(Descriptor(), 0);
+    REQUIRE(rejectedGeneration.Status ==
+            PartyQuestNativeSaveProviderRegistrationStatus::InvalidGeneration);
+    REQUIRE_FALSE(rejectedGeneration.Token);
+    REQUIRE(registry.Validate(*registered.Token, 42) ==
+            PartyQuestNativeSaveProviderRegistrationStatus::Current);
+
+    const auto busy = registry.RegisterAuthenticated(Descriptor(), 42);
+    REQUIRE(busy.Status ==
+            PartyQuestNativeSaveProviderRegistrationStatus::Busy);
+    REQUIRE_FALSE(busy.Token);
+    REQUIRE(registry.Validate(*registered.Token, 42) ==
+            PartyQuestNativeSaveProviderRegistrationStatus::Current);
+}
+
+TEST_CASE("Native save provider accepts maximum nonzero runtime generation",
+    "[quest.party-state][native-save-provider][generation]")
+{
+    constexpr uint64_t generation = std::numeric_limits<uint64_t>::max();
+
+    PartyQuestNativeSaveProviderRegistration registry;
+    auto registered = registry.RegisterAuthenticated(Descriptor(), generation);
+    REQUIRE(registered.Status ==
+            PartyQuestNativeSaveProviderRegistrationStatus::Registered);
+    REQUIRE(registered.Token);
+    REQUIRE(registered.Token->GetRuntimeGeneration() == generation);
+    REQUIRE(registry.Validate(*registered.Token, generation) ==
+            PartyQuestNativeSaveProviderRegistrationStatus::Current);
+}
+
+TEST_CASE("Native save provider registration rejects ABA tokens across repeated replacement",
+    "[quest.party-state][native-save-provider][aba]")
+{
+    PartyQuestNativeSaveProviderRegistration registry;
+    constexpr uint64_t generation = 77;
+
+    auto first = registry.RegisterAuthenticated(Descriptor(), generation);
+    REQUIRE(first.Status ==
+            PartyQuestNativeSaveProviderRegistrationStatus::Registered);
+    REQUIRE(first.Token);
+    auto stale = std::move(*first.Token);
+
+    for (size_t cycle = 0; cycle < 4; ++cycle)
+    {
+        REQUIRE(registry.Invalidate(stale) ==
+                PartyQuestNativeSaveProviderRegistrationStatus::Invalidated);
+        REQUIRE(registry.Validate(stale, generation) ==
+                PartyQuestNativeSaveProviderRegistrationStatus::Invalidated);
+
+        auto replacement =
+            registry.RegisterAuthenticated(Descriptor(), generation);
+        REQUIRE(replacement.Status ==
+                PartyQuestNativeSaveProviderRegistrationStatus::Registered);
+        REQUIRE(replacement.Token);
+        REQUIRE(registry.Validate(stale, generation) ==
+                PartyQuestNativeSaveProviderRegistrationStatus::Stale);
+        REQUIRE(registry.Validate(*replacement.Token, generation) ==
+                PartyQuestNativeSaveProviderRegistrationStatus::Current);
+
+        stale = std::move(*replacement.Token);
+        REQUIRE_FALSE(replacement.Token->IsValid());
+        REQUIRE(stale.IsValid());
+    }
 }
 
 TEST_CASE("Native save provider registration rejects invalid admission",
