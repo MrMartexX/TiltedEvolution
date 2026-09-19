@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <utility>
 
 namespace
 {
@@ -31,13 +32,23 @@ PartyQuestNativeSaveEventTransport::Consume(
     uint64_t aNowMs) noexcept
 {
     PartyQuestNativeSaveEventTransportResult result;
-    if (!apEnvelope)
+    const auto reject = [&](PartyQuestNativeSaveEventTransportStatus aStatus) {
+        m_poisoned = true;
+        result.Status = aStatus;
+        return std::move(result);
+    };
+    if (m_poisoned)
+    {
+        result.Status = PartyQuestNativeSaveEventTransportStatus::Poisoned;
         return result;
+    }
+    if (!apEnvelope)
+        return reject(PartyQuestNativeSaveEventTransportStatus::NullEnvelope);
     if (aEnvelopeSize != sizeof(PartyQuestNativeSaveEventEnvelope))
     {
         result.Status =
             PartyQuestNativeSaveEventTransportStatus::InvalidEnvelopeSize;
-        return result;
+        return reject(result.Status);
     }
 
     PartyQuestNativeSaveEventEnvelope envelope{};
@@ -45,12 +56,12 @@ PartyQuestNativeSaveEventTransport::Consume(
     if (envelope.AbiVersion != kTransportAbiVersion)
     {
         result.Status = PartyQuestNativeSaveEventTransportStatus::UnsupportedAbi;
-        return result;
+        return reject(result.Status);
     }
     if (envelope.StructSize != sizeof(envelope))
     {
         result.Status = PartyQuestNativeSaveEventTransportStatus::InvalidStructSize;
-        return result;
+        return reject(result.Status);
     }
 
     size_t expectedPayloadSize = 0u;
@@ -70,43 +81,42 @@ PartyQuestNativeSaveEventTransport::Consume(
     {
         result.Status =
             PartyQuestNativeSaveEventTransportStatus::UnsupportedMessage;
-        return result;
+        return reject(result.Status);
     }
     if (envelope.PayloadSize != expectedPayloadSize)
     {
         result.Status =
             PartyQuestNativeSaveEventTransportStatus::InvalidPayloadSize;
-        return result;
+        return reject(result.Status);
     }
     if (!TailIsZero(envelope))
     {
         result.Status =
             PartyQuestNativeSaveEventTransportStatus::NonZeroPayloadTail;
-        return result;
+        return reject(result.Status);
     }
-    if (envelope.Sequence == 0u)
+    if (m_nextSequence == 0u && envelope.Sequence != 1u)
     {
         result.Status = PartyQuestNativeSaveEventTransportStatus::InvalidSequence;
-        return result;
+        return reject(result.Status);
     }
     if (m_exhausted)
     {
         result.Status =
             PartyQuestNativeSaveEventTransportStatus::SequenceExhausted;
-        return result;
+        return reject(result.Status);
     }
-    if (m_haveSequence && envelope.Sequence < m_nextSequence)
+    if (m_nextSequence != 0u && envelope.Sequence < m_nextSequence)
     {
         result.Status = PartyQuestNativeSaveEventTransportStatus::Replay;
-        return result;
+        return reject(result.Status);
     }
-    if (m_haveSequence && envelope.Sequence > m_nextSequence)
+    if (m_nextSequence != 0u && envelope.Sequence > m_nextSequence)
     {
         result.Status = PartyQuestNativeSaveEventTransportStatus::SequenceGap;
-        return result;
+        return reject(result.Status);
     }
 
-    m_haveSequence = true;
     if (envelope.Sequence == std::numeric_limits<uint64_t>::max())
         m_exhausted = true;
     else
@@ -154,5 +164,7 @@ PartyQuestNativeSaveEventTransport::Consume(
     {
         result.Status = PartyQuestNativeSaveEventTransportStatus::Applied;
     }
+    if (result.Status != PartyQuestNativeSaveEventTransportStatus::Applied)
+        m_poisoned = true;
     return result;
 }

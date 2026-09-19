@@ -283,6 +283,12 @@ PartyQuestSkyrimNativeSaveProviderPollCapability::PollAndRoute(
     uint64_t aNowMs) noexcept
 {
     PartyQuestSkyrimNativeSaveProviderPollResult result;
+    if (m_poisoned)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderPollStatus::NativeQueuePoisoned;
+        return result;
+    }
     if (!IsValid() || acRegistration.Validate(m_token, m_runtimeGeneration) !=
             PartyQuestNativeSaveProviderRegistrationStatus::Current)
     {
@@ -307,12 +313,14 @@ PartyQuestSkyrimNativeSaveProviderPollCapability::PollAndRoute(
     }
     if (nativeStatus == kNativePoisoned)
     {
+        m_poisoned = true;
         result.Status =
             PartyQuestSkyrimNativeSaveProviderPollStatus::NativeQueuePoisoned;
         return result;
     }
     if (nativeStatus != kNativeDequeued)
     {
+        m_poisoned = true;
         result.Status =
             PartyQuestSkyrimNativeSaveProviderPollStatus::NativeCallFailed;
         return result;
@@ -332,6 +340,11 @@ PartyQuestSkyrimNativeSaveProviderPollCapability::PollAndRoute(
             PartyQuestNativeSaveEventTransportStatus::Applied ?
         PartyQuestSkyrimNativeSaveProviderPollStatus::Applied :
         PartyQuestSkyrimNativeSaveProviderPollStatus::EventRejected;
+    if (result.Status ==
+        PartyQuestSkyrimNativeSaveProviderPollStatus::EventRejected)
+    {
+        m_poisoned = true;
+    }
     return result;
 }
 
@@ -345,7 +358,7 @@ PartyQuestSkyrimNativeSaveProviderPollCapability::Invalidate(
 PartyQuestSkyrimNativeSaveProviderResolveResult
 PartyQuestSkyrimNativeSaveProviderResolver::ResolveAndRegister(
     const std::filesystem::path& acTrustedGameDirectory,
-    PartyQuestNativeSaveProviderRegistration& aRegistration) noexcept
+    PartyQuestNativeSaveProviderRegistration& aRegistration) noexcept try
 {
     PartyQuestSkyrimNativeSaveProviderResolveResult result;
     if (acTrustedGameDirectory.empty() ||
@@ -493,7 +506,15 @@ PartyQuestSkyrimNativeSaveProviderResolver::ResolveAndRegister(
 
     result.Status =
         PartyQuestSkyrimNativeSaveProviderResolveStatus::Registered;
-    result.PollCapability = PartyQuestSkyrimNativeSaveProviderPollCapability(
+    auto capability = PartyQuestSkyrimNativeSaveProviderPollCapability(
         tryDequeue, std::move(*registered.Token));
+    result.PollCapability.emplace(std::move(capability));
+    return result;
+}
+catch (...)
+{
+    PartyQuestSkyrimNativeSaveProviderResolveResult result;
+    result.Status =
+        PartyQuestSkyrimNativeSaveProviderResolveStatus::UnexpectedFailure;
     return result;
 }

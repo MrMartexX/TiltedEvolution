@@ -319,6 +319,10 @@ one move-only opaque poll binding that privately owns the function pointer,
 provider token, registered generation and sequence state. Every poll acquires
 the matching runtime-generation execution lease across the contained foreign
 call and portable routing. No naked function pointer or callback is exposed.
+The registration-scoped stream must start at sequence 1 and remain contiguous.
+Any native fault, invalid/poisoned dequeue status, malformed already-dequeued
+envelope, replay, gap or rejected route permanently poisons that binding; it
+cannot resume from an unknowable queue position.
 
 This ingress remains intentionally unwired. A production lifecycle owner must
 serialize registration, polling and invalidation and define when polling stops;

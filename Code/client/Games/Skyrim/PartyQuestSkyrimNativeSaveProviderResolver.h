@@ -21,7 +21,8 @@ enum class PartyQuestSkyrimNativeSaveProviderResolveStatus : uint8_t
     ProviderReadFailed,
     ProviderRejected,
     ProviderPinFailed,
-    RegistrationRejected
+    RegistrationRejected,
+    UnexpectedFailure
 };
 
 enum class PartyQuestSkyrimNativeSaveProviderPollStatus : uint8_t
@@ -49,7 +50,7 @@ public:
     PartyQuestSkyrimNativeSaveProviderPollCapability(
         PartyQuestSkyrimNativeSaveProviderPollCapability&&) noexcept = default;
     PartyQuestSkyrimNativeSaveProviderPollCapability& operator=(
-        PartyQuestSkyrimNativeSaveProviderPollCapability&&) noexcept = default;
+        PartyQuestSkyrimNativeSaveProviderPollCapability&&) noexcept = delete;
     PartyQuestSkyrimNativeSaveProviderPollCapability(
         const PartyQuestSkyrimNativeSaveProviderPollCapability&) = delete;
     PartyQuestSkyrimNativeSaveProviderPollCapability& operator=(
@@ -91,6 +92,7 @@ private:
     PartyQuestNativeSaveProviderToken m_token;
     PartyQuestNativeSaveEventTransport m_transport;
     uint64_t m_runtimeGeneration{};
+    bool m_poisoned{};
 };
 
 struct PartyQuestSkyrimNativeSaveProviderResolveResult final

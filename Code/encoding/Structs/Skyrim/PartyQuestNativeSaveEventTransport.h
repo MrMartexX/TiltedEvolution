@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 struct PartyQuestNativeSaveEventEnvelope final
 {
@@ -17,6 +18,13 @@ struct PartyQuestNativeSaveEventEnvelope final
 };
 
 static_assert(sizeof(PartyQuestNativeSaveEventEnvelope) == 256u);
+static_assert(alignof(PartyQuestNativeSaveEventEnvelope) == 8u);
+static_assert(std::is_standard_layout_v<PartyQuestNativeSaveEventEnvelope>);
+static_assert(std::is_trivially_copyable_v<PartyQuestNativeSaveEventEnvelope>);
+static_assert(offsetof(PartyQuestNativeSaveEventEnvelope, AbiVersion) == 0u);
+static_assert(offsetof(PartyQuestNativeSaveEventEnvelope, StructSize) == 4u);
+static_assert(offsetof(PartyQuestNativeSaveEventEnvelope, MessageType) == 8u);
+static_assert(offsetof(PartyQuestNativeSaveEventEnvelope, PayloadSize) == 12u);
 static_assert(offsetof(PartyQuestNativeSaveEventEnvelope, Sequence) == 16u);
 static_assert(offsetof(PartyQuestNativeSaveEventEnvelope, Payload) == 24u);
 
@@ -34,6 +42,7 @@ enum class PartyQuestNativeSaveEventTransportStatus : uint8_t
     Replay,
     SequenceGap,
     SequenceExhausted,
+    Poisoned,
     ProviderRejected,
     RouteRejected
 };
@@ -47,7 +56,7 @@ struct PartyQuestNativeSaveEventTransportResult final
 
 /**
  * Pure, single-consumer transport state for one authenticated provider
- * registration. The first sequence must be nonzero; every later accepted
+ * registration. The first sequence must be one; every later accepted
  * envelope must be contiguous. Readiness and transport validity never grant mutation authority;
  * the router still revalidates provider generation and request identity.
  *
@@ -75,8 +84,10 @@ public:
         return m_nextSequence;
     }
 
+    [[nodiscard]] bool IsPoisoned() const noexcept { return m_poisoned; }
+
 private:
     uint64_t m_nextSequence{};
-    bool m_haveSequence{};
     bool m_exhausted{};
+    bool m_poisoned{};
 };
