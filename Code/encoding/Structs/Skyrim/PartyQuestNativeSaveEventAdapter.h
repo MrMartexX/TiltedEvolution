@@ -83,8 +83,6 @@ enum class PartyQuestNativeSaveEventAdapterStatus : uint8_t
     Cancelled,
     InvalidClock,
     RetirementUnproven,
-    RetirementBeforeTerminal,
-    Retired,
     ContractRejected
 };
 
@@ -107,8 +105,9 @@ struct PartyQuestNativeSaveEventAdapterResult
  * source authenticity, callback lifetime, or physical queue/writer drain.
  * ArtifactEvent::Retired therefore remains unproven. A valid PQS4
  * RequestRetiredEvent is request-wide drain proof regardless of whether its
- * Outcome reports save success or failure, and is translated to
- * PartyQuestAsyncSaveContract::Retire.
+ * Outcome reports save success or failure. This decoder never retires the
+ * contract directly; PartyQuestAsyncSaveEventRouter routes PQS4 through the
+ * finalization gate, which is the sole retirement owner.
  */
 class PartyQuestNativeSaveEventAdapter final
 {
@@ -136,9 +135,4 @@ public:
         PartyQuestAsyncSaveContract& aContract,
         uint64_t aNowMs) noexcept;
 
-    [[nodiscard]] static PartyQuestNativeSaveEventAdapterResult ApplyTrustedProviderRetirement(
-        const void* apPayload,
-        size_t aPayloadSize,
-        const PartyQuestAsyncSaveRequestIdentity& acReservedIdentity,
-        PartyQuestAsyncSaveContract& aContract) noexcept;
 };

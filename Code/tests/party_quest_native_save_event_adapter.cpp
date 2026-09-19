@@ -294,18 +294,6 @@ PartyQuestNativeSaveEventAdapterResult Apply(
         aNowMs);
 }
 
-PartyQuestNativeSaveEventAdapterResult ApplyRetired(
-    PartyQuestAsyncSaveContract& aContract,
-    const PartyQuestAsyncSaveRequestIdentity& acReservedIdentity,
-    const RetiredBuffer& acBuffer)
-{
-    return PartyQuestNativeSaveEventAdapter::ApplyTrustedProviderRetirement(
-        acBuffer.data(),
-        acBuffer.size(),
-        acReservedIdentity,
-        aContract);
-}
-
 void Begin(PartyQuestAsyncSaveContract& aContract, const PartyQuestAsyncSaveRequestIdentity& acIdentity)
 {
     REQUIRE(
@@ -859,87 +847,4 @@ TEST_CASE("Request-wide retirement ABI v2 decoder is exact and identity owning")
         std::memset(source.data(), 0, source.size());
         REQUIRE(owned.Event->Identity == identity);
     }
-}
-
-TEST_CASE("Failed save outcome plus proven PQS4 drain releases terminal reservation")
-{
-    const auto identity = Identity();
-    auto next = identity;
-    ++next.AttemptNonce;
-    next.SaveName = SaveName(next.TransactionId, next.TargetWorldRevision, next.AttemptNonce);
-
-    PartyQuestAsyncSaveContract contract;
-    Begin(contract, identity);
-    REQUIRE(contract.Cancel(identity).Status == PartyQuestAsyncSaveContractStatus::Cancelled);
-
-    const auto failed = ApplyRetired(contract, identity, RetiredEvent(identity, 2, 5));
-    REQUIRE(failed.Status == PartyQuestNativeSaveEventAdapterStatus::Retired);
-    REQUIRE(failed.ContractResult);
-    REQUIRE(failed.ContractResult->Status == PartyQuestAsyncSaveContractStatus::Inactive);
-    REQUIRE(contract.Begin(next, 101, false, false).Status == PartyQuestAsyncSaveContractStatus::Pending);
-}
-
-TEST_CASE("Request-wide retirement drain releases terminal contract ownership")
-{
-    const auto identity = Identity();
-    auto next = identity;
-    ++next.AttemptNonce;
-    next.SaveName = SaveName(next.TransactionId, next.TargetWorldRevision, next.AttemptNonce);
-
-    SECTION("request-wide retirement cannot silently discard pending work")
-    {
-        PartyQuestAsyncSaveContract contract;
-        Begin(contract, identity);
-        const auto early = ApplyRetired(contract, identity, RetiredEvent(identity, 2, 5));
-        REQUIRE(early.Status == PartyQuestNativeSaveEventAdapterStatus::RetirementBeforeTerminal);
-        REQUIRE(early.ContractResult);
-        REQUIRE(early.ContractResult->Status == PartyQuestAsyncSaveContractStatus::Pending);
-        REQUIRE(contract.Begin(next, 101, false, false).Status == PartyQuestAsyncSaveContractStatus::Busy);
-
-        REQUIRE(contract.Cancel(identity).Status == PartyQuestAsyncSaveContractStatus::Cancelled);
-        REQUIRE(ApplyRetired(contract, identity, RetiredEvent(identity)).Status ==
-                PartyQuestNativeSaveEventAdapterStatus::Retired);
-    }
-
-    SECTION("timeout remains reserved until request-wide retirement")
-    {
-        PartyQuestAsyncSaveContract contract;
-        Begin(contract, identity);
-        REQUIRE(
-            contract.Poll(100 + PartyQuestAsyncSaveContract::kTimeoutMs + 1).Status ==
-            PartyQuestAsyncSaveContractStatus::TimedOut);
-        REQUIRE(contract.Begin(next, 40000, false, false).Status == PartyQuestAsyncSaveContractStatus::Busy);
-        REQUIRE(ApplyRetired(contract, identity, RetiredEvent(identity)).Status ==
-                PartyQuestNativeSaveEventAdapterStatus::Retired);
-        REQUIRE(contract.Begin(next, 40001, false, false).Status == PartyQuestAsyncSaveContractStatus::Pending);
-    }
-}
-
-TEST_CASE("Stale or malformed request-wide retirement cannot release a newer request")
-{
-    PartyQuestAsyncSaveContract contract;
-    const auto old = Identity();
-    auto current = old;
-    ++current.RuntimeGeneration;
-    ++current.AttemptNonce;
-    current.SaveName = SaveName(current.TransactionId, current.TargetWorldRevision, current.AttemptNonce);
-
-    Begin(contract, old);
-    REQUIRE(contract.Cancel(old).Status == PartyQuestAsyncSaveContractStatus::Cancelled);
-    REQUIRE(ApplyRetired(contract, old, RetiredEvent(old)).Status ==
-            PartyQuestNativeSaveEventAdapterStatus::Retired);
-    REQUIRE(contract.Begin(current, 110, false, false).Status == PartyQuestAsyncSaveContractStatus::Pending);
-
-    const auto stale = ApplyRetired(contract, current, RetiredEvent(old));
-    REQUIRE(stale.Status == PartyQuestNativeSaveEventAdapterStatus::IdentityMismatch);
-    REQUIRE_FALSE(stale.ContractResult);
-
-    auto malformed = RetiredEvent(current);
-    malformed[217] = 1;
-    const auto rejected = ApplyRetired(contract, current, malformed);
-    REQUIRE(rejected.Status == PartyQuestNativeSaveEventAdapterStatus::Malformed);
-    REQUIRE_FALSE(rejected.ContractResult);
-
-    REQUIRE(contract.Poll(111).Status == PartyQuestAsyncSaveContractStatus::Pending);
-    REQUIRE(contract.Begin(old, 112, false, false).Status == PartyQuestAsyncSaveContractStatus::Busy);
 }
