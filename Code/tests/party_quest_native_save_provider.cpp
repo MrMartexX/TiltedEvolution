@@ -1,3 +1,4 @@
+#include <Games/Skyrim/PartyQuestSkyrimNativeSaveProviderOwner.h>
 #include <Games/Skyrim/PartyQuestSkyrimNativeSaveProviderResolver.h>
 #include <Structs/Skyrim/PartyQuestNativeSaveProvider.h>
 
@@ -36,6 +37,10 @@ static_assert(!std::is_copy_assignable_v<
     PartyQuestSkyrimNativeSaveProviderPollCapability>);
 static_assert(std::is_nothrow_move_constructible_v<
     PartyQuestSkyrimNativeSaveProviderPollCapability>);
+static_assert(!std::is_copy_constructible_v<
+    PartyQuestSkyrimNativeSaveProviderOwner>);
+static_assert(!std::is_move_constructible_v<
+    PartyQuestSkyrimNativeSaveProviderOwner>);
 
 TEST_CASE("Native save command capability defaults fail closed")
 {
