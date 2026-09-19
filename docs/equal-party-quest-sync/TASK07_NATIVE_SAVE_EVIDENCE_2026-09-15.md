@@ -210,7 +210,7 @@ authority. Task 7 and Task 8 remain open; P0 NOT CLOSED.
 
 ### Native descriptor export follow-up
 
-Native research commit `2d94456` adds the fixed 64-byte
+Native research commits `2d94456` and `fb8092a` add the fixed 64-byte
 `PartyQuestSKSE_GetSaveProviderDescriptor` export with the same ABI version,
 implementation version, capability mask, 1.6.1170 runtime tuple and provider
 fingerprint required by the portable policy. The export is fail-closed: it
@@ -222,7 +222,7 @@ The full MSVC v143 x64 Release DLL build, all 17 structural tests and the
 native descriptor/state executable passed. `dumpbin /exports` confirmed both
 `PartyQuestSKSE_GetSaveProviderDescriptor` and the legacy readiness export in
 the built DLL. DLL SHA256:
-`A2718C5CFCE9F0BE77D47F075BD2EFB911700F608F847E81349810B495FC4D61`.
+`16A4EC6C88DA3842931351E105D0AD31265096CCA7E8C314E52093416D9EAF2E`.
 
 The DLL was not loaded into a non-Skyrim process, installed or executed.
 Descriptor presence is compatibility evidence only. Trusted resolution of the
