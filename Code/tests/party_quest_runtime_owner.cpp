@@ -97,6 +97,90 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Runtime aggregate destruction waits for active callback lifetime",
+    "[quest.party-state.runtime-owner][lifetime][quiescence]")
+{
+    RuntimeOwnerSandbox sandbox;
+    std::atomic_bool operationEntered{};
+    std::atomic_bool allowOperationReturn{};
+    std::atomic_bool destroyed{};
+
+    auto owner = std::make_unique<PartyQuestRuntimeOwner>();
+    MakeRuntimeOwnerReady(*owner, sandbox.Root);
+    REQUIRE(owner->Enqueue(
+                [] { return true; },
+                [&]
+                {
+                    operationEntered.store(true, std::memory_order_release);
+                    while (!allowOperationReturn.load(std::memory_order_acquire))
+                        std::this_thread::yield();
+                }).Status ==
+        PartyQuestRuntimeOwner::EnqueueStatus::Queued);
+
+    auto callback = owner->MakeExecuteNextCallback();
+    REQUIRE(callback);
+
+    std::thread callbackThread([&]
+    {
+        callback();
+    });
+
+    while (!operationEntered.load(std::memory_order_acquire))
+        std::this_thread::yield();
+
+    std::thread destructionThread(
+        [owned = std::move(owner), &destroyed]() mutable
+        {
+            owned.reset();
+            destroyed.store(true, std::memory_order_release);
+        });
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    REQUIRE_FALSE(destroyed.load(std::memory_order_acquire));
+
+    allowOperationReturn.store(true, std::memory_order_release);
+    callbackThread.join();
+    destructionThread.join();
+
+    REQUIRE(destroyed.load(std::memory_order_acquire));
+    REQUIRE_NOTHROW(callback());
+}
+
+TEST_CASE(
+    "Runtime aggregate reentrant shutdown under execution lease fails closed",
+    "[quest.party-state.runtime-owner][shutdown][reentrant]")
+{
+    RuntimeOwnerSandbox sandbox;
+    PartyQuestRuntimeOwner owner;
+    MakeRuntimeOwnerReady(owner, sandbox.Root);
+
+    PartyQuestRuntimeOwner::BoundaryStatus shutdownStatus{
+        PartyQuestRuntimeOwner::BoundaryStatus::Applied};
+
+    REQUIRE(owner.Enqueue(
+                [] { return true; },
+                [&]
+                {
+                    shutdownStatus = owner.ApplyClientBoundary(
+                        PartyQuestRuntimeOwner::ClientBoundary::Shutdown);
+                }).Status ==
+        PartyQuestRuntimeOwner::EnqueueStatus::Queued);
+
+    REQUIRE(owner.ExecuteNext() ==
+        PartyQuestRuntimeOwner::ExecuteStatus::Executed);
+    REQUIRE(shutdownStatus ==
+        PartyQuestRuntimeOwner::BoundaryStatus::SynchronizationFailed);
+    REQUIRE_FALSE(owner.IsShutdown());
+    REQUIRE(owner.IsAcceptingOperations());
+
+    REQUIRE(owner.ApplyClientBoundary(
+                PartyQuestRuntimeOwner::ClientBoundary::Shutdown) ==
+        PartyQuestRuntimeOwner::BoundaryStatus::Applied);
+    REQUIRE(owner.IsShutdown());
+    REQUIRE_FALSE(owner.IsAcceptingOperations());
+}
+
+TEST_CASE(
     "Runtime aggregate enqueue racing disconnect cannot survive the boundary",
     "[quest.party-state.runtime-owner][lifecycle][race]")
 {
