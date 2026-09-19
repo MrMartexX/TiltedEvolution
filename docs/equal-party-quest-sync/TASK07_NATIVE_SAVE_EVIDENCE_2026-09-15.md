@@ -276,3 +276,16 @@ semantics (P0-C), or a lossless pull/snapshot contract that preserves exact
 PQS3/PQS4 identity and retirement semantics without callbacks. Until that
 primitive is independently proved, the resolver remains unwired and the native
 provider remains disabled.
+
+The current native dispatch path is additionally not lossless:
+`ObserveAndDispatchArtifact` and `DispatchAndRetireRequest` ignore the boolean
+returned by `DispatchPartyQuestMessage`. The reservation may therefore be
+retired even when PQS4 was not delivered, permanently stranding a portable
+request. Merely registering an SKSE listener would not repair this invariant.
+The preferred follow-up is a provider-owned, bounded pull queue: the single
+active request can produce at most four unique artifact transitions plus one
+retirement event; admission of the next request must remain closed until those
+events are drained. This avoids foreign callbacks entirely while preserving the
+existing PQS3/PQS4 payload ABI. Queue overflow, consumer absence, duplicate
+polling and generation invalidation must all fail closed and be regression
+tested before production wiring.
