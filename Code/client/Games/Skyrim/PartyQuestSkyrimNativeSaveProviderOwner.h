@@ -89,5 +89,6 @@ private:
     std::optional<PartyQuestSkyrimNativeSaveProviderPollCapability> m_capability;
     uint64_t m_runtimeGeneration{};
     bool m_accepting{};
+    std::atomic_bool m_revoking{true};
     std::atomic_bool m_shutdown{false};
 };

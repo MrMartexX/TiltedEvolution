@@ -73,6 +73,7 @@ PartyQuestSkyrimNativeSaveProviderOwner::Bind(
 
     m_runtimeGeneration = aExpectedGeneration;
     m_accepting = true;
+    m_revoking.store(false, std::memory_order_release);
     result.Status = PartyQuestSkyrimNativeSaveProviderOwnerStatus::Bound;
     return result;
 }
@@ -89,10 +90,12 @@ PartyQuestSkyrimNativeSaveProviderCommandStatus
 PartyQuestSkyrimNativeSaveProviderOwner::Begin(
     const PartyQuestAsyncSaveRequestIdentity& acIdentity) noexcept try
 {
-    if (m_shutdown.load(std::memory_order_acquire))
+    if (m_shutdown.load(std::memory_order_acquire) ||
+        m_revoking.load(std::memory_order_acquire))
         return PartyQuestSkyrimNativeSaveProviderCommandStatus::ProviderRejected;
     std::lock_guard lock(m_mutex);
-    if (m_shutdown.load(std::memory_order_acquire) || !m_accepting ||
+    if (m_shutdown.load(std::memory_order_acquire) ||
+        m_revoking.load(std::memory_order_acquire) || !m_accepting ||
         !m_capability)
         return PartyQuestSkyrimNativeSaveProviderCommandStatus::ProviderRejected;
     return m_capability->Begin(m_registration, acIdentity);
@@ -106,10 +109,12 @@ PartyQuestSkyrimNativeSaveProviderCommandStatus
 PartyQuestSkyrimNativeSaveProviderOwner::Cancel(
     uint64_t aAttemptNonce) noexcept try
 {
-    if (m_shutdown.load(std::memory_order_acquire))
+    if (m_shutdown.load(std::memory_order_acquire) ||
+        m_revoking.load(std::memory_order_acquire))
         return PartyQuestSkyrimNativeSaveProviderCommandStatus::ProviderRejected;
     std::lock_guard lock(m_mutex);
-    if (m_shutdown.load(std::memory_order_acquire) || !m_accepting ||
+    if (m_shutdown.load(std::memory_order_acquire) ||
+        m_revoking.load(std::memory_order_acquire) || !m_accepting ||
         !m_capability)
         return PartyQuestSkyrimNativeSaveProviderCommandStatus::ProviderRejected;
     return m_capability->Cancel(m_registration, aAttemptNonce);
@@ -126,10 +131,12 @@ PartyQuestSkyrimNativeSaveProviderOwner::PollAndRoute(
     PartyQuestAsyncSaveFinalizationGate& aGate,
     uint64_t aNowMs) noexcept try
 {
-    if (m_shutdown.load(std::memory_order_acquire))
+    if (m_shutdown.load(std::memory_order_acquire) ||
+        m_revoking.load(std::memory_order_acquire))
         return {};
     std::lock_guard lock(m_mutex);
-    if (m_shutdown.load(std::memory_order_acquire) || !m_accepting ||
+    if (m_shutdown.load(std::memory_order_acquire) ||
+        m_revoking.load(std::memory_order_acquire) || !m_accepting ||
         !m_capability)
         return {};
     return m_capability->PollAndRoute(
@@ -143,7 +150,9 @@ catch (...)
 PartyQuestSkyrimNativeSaveProviderOwnerStatus
 PartyQuestSkyrimNativeSaveProviderOwner::Invalidate() noexcept try
 {
+    m_revoking.store(true, std::memory_order_release);
     std::lock_guard lock(m_mutex);
+    m_revoking.store(true, std::memory_order_release);
     m_accepting = false;
     if (m_capability)
     {
@@ -162,6 +171,7 @@ catch (...)
 void PartyQuestSkyrimNativeSaveProviderOwner::Shutdown() noexcept
 {
     m_shutdown.store(true, std::memory_order_release);
+    m_revoking.store(true, std::memory_order_release);
     try
     {
         std::lock_guard lock(m_mutex);
@@ -183,7 +193,8 @@ bool PartyQuestSkyrimNativeSaveProviderOwner::IsBound() const noexcept try
     if (m_shutdown.load(std::memory_order_acquire))
         return false;
     std::lock_guard lock(m_mutex);
-    return !m_shutdown.load(std::memory_order_acquire) && m_accepting &&
+    return !m_shutdown.load(std::memory_order_acquire) &&
+        !m_revoking.load(std::memory_order_acquire) && m_accepting &&
         m_capability && m_capability->IsValid() &&
         m_runtimeGeneration != 0u;
 }
