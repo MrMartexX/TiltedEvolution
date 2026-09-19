@@ -36,15 +36,26 @@ PartyQuestSkyrimNativeSaveProviderOwner::Bind(
             PartyQuestSkyrimNativeSaveProviderOwnerStatus::AdmissionClosed;
         return result;
     }
-    if (m_capability)
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t currentGeneration = fence.GetGeneration();
+    if (m_capability && m_runtimeGeneration == aExpectedGeneration &&
+        currentGeneration == aExpectedGeneration && m_accepting &&
+        !m_revoking.load(std::memory_order_acquire))
     {
         result.Status = PartyQuestSkyrimNativeSaveProviderOwnerStatus::
             AlreadyBound;
         return result;
     }
+    if (m_capability)
+    {
+        m_revoking.store(true, std::memory_order_release);
+        m_accepting = false;
+        (void)m_capability->Invalidate(m_registration);
+        m_capability.reset();
+        m_runtimeGeneration = 0u;
+    }
 
-    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-    if (fence.GetGeneration() != aExpectedGeneration)
+    if (currentGeneration != aExpectedGeneration)
     {
         result.Status =
             PartyQuestSkyrimNativeSaveProviderOwnerStatus::StaleGeneration;

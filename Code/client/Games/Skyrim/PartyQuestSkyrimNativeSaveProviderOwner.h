@@ -29,7 +29,9 @@ struct PartyQuestSkyrimNativeSaveProviderOwnerBindResult final
 
     [[nodiscard]] bool IsBound() const noexcept
     {
-        return Status == PartyQuestSkyrimNativeSaveProviderOwnerStatus::Bound &&
+        return (Status == PartyQuestSkyrimNativeSaveProviderOwnerStatus::Bound ||
+                   Status == PartyQuestSkyrimNativeSaveProviderOwnerStatus::
+                       AlreadyBound) &&
             RuntimeGeneration != 0u;
     }
 };
