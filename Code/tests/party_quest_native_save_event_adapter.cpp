@@ -332,6 +332,63 @@ TEST_CASE("Native save transport rejects malformed envelopes without progress")
         PartyQuestNativeSaveEventAdapter::kArtifactEventMessageId,
         payload);
 
+    SECTION("null envelope poisons transport")
+    {
+        PartyQuestNativeSaveEventTransport nullTransport;
+        REQUIRE(nullTransport.Consume(
+                    nullptr, sizeof(base), provider.Registry, *provider.Token,
+                    identity.RuntimeGeneration, identity,
+                    contract, gate, 101).Status ==
+                PartyQuestNativeSaveEventTransportStatus::NullEnvelope);
+        REQUIRE(nullTransport.IsPoisoned());
+        REQUIRE(nullTransport.Consume(
+                    &base, sizeof(base), provider.Registry, *provider.Token,
+                    identity.RuntimeGeneration, identity,
+                    contract, gate, 102).Status ==
+                PartyQuestNativeSaveEventTransportStatus::Poisoned);
+    }
+
+    SECTION("wrong envelope size poisons transport")
+    {
+        for (const size_t size : {sizeof(base) - 1u, sizeof(base) + 1u})
+        {
+            PartyQuestNativeSaveEventTransport sizeTransport;
+            REQUIRE(sizeTransport.Consume(
+                        &base, size, provider.Registry, *provider.Token,
+                        identity.RuntimeGeneration, identity,
+                        contract, gate, 101).Status ==
+                    PartyQuestNativeSaveEventTransportStatus::InvalidEnvelopeSize);
+            REQUIRE(sizeTransport.IsPoisoned());
+        }
+    }
+
+    SECTION("declared envelope size mismatch poisons transport")
+    {
+        auto wrongStructSize = base;
+        --wrongStructSize.StructSize;
+        PartyQuestNativeSaveEventTransport structSizeTransport;
+        REQUIRE(structSizeTransport.Consume(
+                    &wrongStructSize, sizeof(wrongStructSize), provider.Registry,
+                    *provider.Token, identity.RuntimeGeneration, identity,
+                    contract, gate, 101).Status ==
+                PartyQuestNativeSaveEventTransportStatus::InvalidStructSize);
+        REQUIRE(structSizeTransport.IsPoisoned());
+    }
+
+    SECTION("unknown message poisons transport")
+    {
+        auto unsupportedMessage = base;
+        unsupportedMessage.MessageType = 0xDEADBEEFu;
+        PartyQuestNativeSaveEventTransport messageTransport;
+        REQUIRE(messageTransport.Consume(
+                    &unsupportedMessage, sizeof(unsupportedMessage),
+                    provider.Registry, *provider.Token,
+                    identity.RuntimeGeneration, identity,
+                    contract, gate, 101).Status ==
+                PartyQuestNativeSaveEventTransportStatus::UnsupportedMessage);
+        REQUIRE(messageTransport.IsPoisoned());
+    }
+
     auto unsupported = base;
     ++unsupported.AbiVersion;
     PartyQuestNativeSaveEventTransport unsupportedTransport;
@@ -340,6 +397,7 @@ TEST_CASE("Native save transport rejects malformed envelopes without progress")
                 *provider.Token, identity.RuntimeGeneration, identity,
                 contract, gate, 101).Status ==
             PartyQuestNativeSaveEventTransportStatus::UnsupportedAbi);
+    REQUIRE(unsupportedTransport.IsPoisoned());
 
     auto zeroSequence = base;
     zeroSequence.Sequence = 0u;
@@ -349,6 +407,17 @@ TEST_CASE("Native save transport rejects malformed envelopes without progress")
                 *provider.Token, identity.RuntimeGeneration, identity,
                 contract, gate, 101).Status ==
             PartyQuestNativeSaveEventTransportStatus::InvalidSequence);
+    REQUIRE(zeroTransport.IsPoisoned());
+
+    auto arbitraryFirst = base;
+    arbitraryFirst.Sequence = 7u;
+    PartyQuestNativeSaveEventTransport arbitraryFirstTransport;
+    REQUIRE(arbitraryFirstTransport.Consume(
+                &arbitraryFirst, sizeof(arbitraryFirst), provider.Registry,
+                *provider.Token, identity.RuntimeGeneration, identity,
+                contract, gate, 101).Status ==
+            PartyQuestNativeSaveEventTransportStatus::InvalidSequence);
+    REQUIRE(arbitraryFirstTransport.IsPoisoned());
 
     auto wrongPayload = base;
     --wrongPayload.PayloadSize;
@@ -358,8 +427,23 @@ TEST_CASE("Native save transport rejects malformed envelopes without progress")
                 *provider.Token, identity.RuntimeGeneration, identity,
                 contract, gate, 101).Status ==
             PartyQuestNativeSaveEventTransportStatus::InvalidPayloadSize);
+    REQUIRE(payloadTransport.IsPoisoned());
 
     const auto retiredPayload = RetiredEvent(identity);
+    auto wrongRetiredPayload = Envelope(
+        1u,
+        PartyQuestNativeSaveEventAdapter::kRequestRetiredMessageId,
+        retiredPayload);
+    ++wrongRetiredPayload.PayloadSize;
+    PartyQuestNativeSaveEventTransport retiredPayloadTransport;
+    REQUIRE(retiredPayloadTransport.Consume(
+                &wrongRetiredPayload, sizeof(wrongRetiredPayload),
+                provider.Registry, *provider.Token,
+                identity.RuntimeGeneration, identity,
+                contract, gate, 101).Status ==
+            PartyQuestNativeSaveEventTransportStatus::InvalidPayloadSize);
+    REQUIRE(retiredPayloadTransport.IsPoisoned());
+
     auto dirtyTail = Envelope(
         1u,
         PartyQuestNativeSaveEventAdapter::kRequestRetiredMessageId,
@@ -372,6 +456,168 @@ TEST_CASE("Native save transport rejects malformed envelopes without progress")
                 contract, gate, 101).Status ==
             PartyQuestNativeSaveEventTransportStatus::NonZeroPayloadTail);
     REQUIRE(tailTransport.IsPoisoned());
+}
+
+TEST_CASE("Native save transport consumes generation-rejected dequeued item")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    PartyQuestNativeSaveEventTransport transport;
+    const auto identity = Identity();
+    ProviderHarness provider(identity.RuntimeGeneration);
+    REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+
+    const auto payload = Event(identity);
+    const auto envelope = Envelope(
+        1u,
+        PartyQuestNativeSaveEventAdapter::kArtifactEventMessageId,
+        payload);
+    const auto rejected = transport.Consume(
+        &envelope, sizeof(envelope), provider.Registry, *provider.Token,
+        identity.RuntimeGeneration + 1u, identity, contract, gate, 101);
+    REQUIRE(rejected.Status ==
+            PartyQuestNativeSaveEventTransportStatus::ProviderRejected);
+    REQUIRE(transport.GetNextSequence() == 2u);
+    REQUIRE(transport.IsPoisoned());
+
+    const auto state = contract.Poll(102);
+    REQUIRE(state.Status == PartyQuestAsyncSaveContractStatus::Pending);
+    REQUIRE_FALSE(state.SkyrimEssClosed);
+    REQUIRE_FALSE(state.SkyrimEssPublished);
+    REQUIRE_FALSE(state.SkseCosaveClosed);
+    REQUIRE_FALSE(state.SkseCosavePublished);
+}
+
+TEST_CASE("Native save transport routes exact PQS4 retirement after logical completion")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    PartyQuestNativeSaveEventTransport transport;
+    const auto identity = Identity();
+    ProviderHarness provider(identity.RuntimeGeneration);
+    REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+
+    const std::array artifactPayloads{
+        Event(identity, 1, 1, 1),
+        Event(identity, 2, 1, 1),
+        Event(identity, 1, 2, 1),
+        Event(identity, 2, 2, 1)};
+
+    uint64_t sequence = 1u;
+    uint64_t now = 101u;
+    for (const auto& payload : artifactPayloads)
+    {
+        const auto envelope = Envelope(
+            sequence++,
+            PartyQuestNativeSaveEventAdapter::kArtifactEventMessageId,
+            payload);
+        REQUIRE(envelope.PayloadSize ==
+                PartyQuestNativeSaveEventAdapter::kArtifactEventStructSize);
+        const auto applied = transport.Consume(
+            &envelope, sizeof(envelope), provider.Registry, *provider.Token,
+            identity.RuntimeGeneration, identity, contract, gate, now++);
+        REQUIRE(applied.Status ==
+                PartyQuestNativeSaveEventTransportStatus::Applied);
+        REQUIRE_FALSE(applied.Route.Finalization.Completion.has_value());
+        REQUIRE_FALSE(transport.IsPoisoned());
+    }
+
+    const auto retiredPayload = RetiredEvent(identity);
+    const auto retirement = Envelope(
+        sequence,
+        PartyQuestNativeSaveEventAdapter::kRequestRetiredMessageId,
+        retiredPayload);
+    REQUIRE(retirement.PayloadSize ==
+            PartyQuestNativeSaveEventAdapter::kRequestRetiredStructSize);
+
+    const auto retired = transport.Consume(
+        &retirement, sizeof(retirement), provider.Registry, *provider.Token,
+        identity.RuntimeGeneration, identity, contract, gate, now);
+    REQUIRE(retired.Status ==
+            PartyQuestNativeSaveEventTransportStatus::Applied);
+    REQUIRE(retired.Route.Finalization.Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Finalized);
+    REQUIRE(retired.Route.Finalization.RetirementApplied);
+    REQUIRE(retired.Route.Finalization.Completion.has_value());
+    REQUIRE(retired.Route.Finalization.Completion->Matches(identity));
+    REQUIRE_FALSE(transport.IsPoisoned());
+}
+
+TEST_CASE("Native save transport consumes routed rejection before permanent poison")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    PartyQuestNativeSaveEventTransport transport;
+    const auto identity = Identity();
+    ProviderHarness provider(identity.RuntimeGeneration);
+    REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+
+    auto malformedPayload = Event(identity);
+    malformedPayload[219] = 1u;
+    const auto malformedEnvelope = Envelope(
+        1u,
+        PartyQuestNativeSaveEventAdapter::kArtifactEventMessageId,
+        malformedPayload);
+    const auto malformed = transport.Consume(
+        &malformedEnvelope, sizeof(malformedEnvelope), provider.Registry,
+        *provider.Token, identity.RuntimeGeneration, identity,
+        contract, gate, 101);
+    REQUIRE(malformed.Status ==
+            PartyQuestNativeSaveEventTransportStatus::RouteRejected);
+    REQUIRE(malformed.Route.Status ==
+            PartyQuestAsyncSaveEventRouteStatus::Malformed);
+    REQUIRE(transport.GetNextSequence() == 2u);
+    REQUIRE(transport.IsPoisoned());
+    REQUIRE_FALSE(malformed.Route.Finalization.Completion.has_value());
+
+    const auto state = contract.Poll(102);
+    REQUIRE(state.Status == PartyQuestAsyncSaveContractStatus::Pending);
+    REQUIRE_FALSE(state.SkyrimEssClosed);
+    REQUIRE_FALSE(state.SkyrimEssPublished);
+    REQUIRE_FALSE(state.SkseCosaveClosed);
+    REQUIRE_FALSE(state.SkseCosavePublished);
+
+    PartyQuestAsyncSaveContract mismatchContract;
+    PartyQuestAsyncSaveFinalizationGate mismatchGate;
+    PartyQuestNativeSaveEventTransport mismatchTransport;
+    REQUIRE(mismatchGate.BeginCoordinated(
+                mismatchContract, identity, 200, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+
+    auto otherIdentity = identity;
+    ++otherIdentity.AttemptNonce;
+    otherIdentity.SaveName = SaveName(
+        otherIdentity.TransactionId,
+        otherIdentity.TargetWorldRevision,
+        otherIdentity.AttemptNonce);
+    REQUIRE(otherIdentity.IsValid());
+
+    const auto mismatchedPayload = Event(otherIdentity);
+    const auto mismatchedEnvelope = Envelope(
+        1u,
+        PartyQuestNativeSaveEventAdapter::kArtifactEventMessageId,
+        mismatchedPayload);
+    const auto mismatched = mismatchTransport.Consume(
+        &mismatchedEnvelope, sizeof(mismatchedEnvelope), provider.Registry,
+        *provider.Token, identity.RuntimeGeneration, identity,
+        mismatchContract, mismatchGate, 201);
+    REQUIRE(mismatched.Status ==
+            PartyQuestNativeSaveEventTransportStatus::RouteRejected);
+    REQUIRE(mismatched.Route.Status ==
+            PartyQuestAsyncSaveEventRouteStatus::IdentityMismatch);
+    REQUIRE(mismatchTransport.GetNextSequence() == 2u);
+    REQUIRE(mismatchTransport.IsPoisoned());
+    REQUIRE_FALSE(mismatched.Route.Finalization.Completion.has_value());
+
+    const auto mismatchState = mismatchContract.Poll(202);
+    REQUIRE(mismatchState.Status == PartyQuestAsyncSaveContractStatus::Pending);
+    REQUIRE_FALSE(mismatchState.SkyrimEssClosed);
+    REQUIRE_FALSE(mismatchState.SkyrimEssPublished);
+    REQUIRE_FALSE(mismatchState.SkseCosaveClosed);
+    REQUIRE_FALSE(mismatchState.SkseCosavePublished);
 }
 
 TEST_CASE("Native save transport consumes rejected authenticated provider item")
