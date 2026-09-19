@@ -178,3 +178,32 @@ This remains research evidence, not production authorization. The provider is
 still compile-time disabled. Fault-injection, overlapping-save, authenticated
 bridge/lifecycle ownership, isolated live `.ess`/`.skse` validation and the
 Task 8 durability proof remain required. P0 NOT CLOSED.
+
+## Portable authorization and routing follow-up, 2026-09-19
+
+Local branch `codex/task07-save-event-adapter` now contains one fail-closed
+portable route from decoded native events to finalization. PQS3 always flows
+through adapter, logical contract and finalization gate; PQS4 is decoded and
+routed directly to the gate, which is the sole owner allowed to retire the
+logical contract. The former adapter API that independently retired the
+contract was removed.
+
+The route also requires a current move-only provider-registration token bound
+to the exact registration instance and runtime generation. The fixed provider
+descriptor requires event ABI v2, the complete PQS3/PQS4 and checked-I/O
+capability set, the exact implementation fingerprint and the currently proven
+Skyrim 1.6.1170 runtime tuple. Descriptor compatibility is explicitly not
+module/source authentication; `RegisterAuthenticated` may only be called by a
+future trusted loader after it establishes the module and export identity.
+Invalidation revokes authority immediately, and an old token cannot regain it
+after same-generation re-registration.
+
+Latest portable commit at the time of this note: `bd12080d`. The focused MSVC
+test executable passed 1131 assertions in 44 test cases. No Skyrim process was
+launched and no provider was installed or enabled.
+
+Still required before production wiring: trusted module/export resolution,
+validated callback registration and lifetime, serialized callback handoff
+under the existing generation fence, and P0-C-owned unregister/quiescence on
+shutdown. A descriptor or structurally valid payload alone grants no source
+authority. Task 7 and Task 8 remain open; P0 NOT CLOSED.
