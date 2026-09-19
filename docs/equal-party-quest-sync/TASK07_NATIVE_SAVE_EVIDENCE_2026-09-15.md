@@ -324,6 +324,12 @@ Any native fault, invalid/poisoned dequeue status, malformed already-dequeued
 envelope, replay, gap or rejected route permanently poisons that binding; it
 cannot resume from an unknowable queue position.
 
+The strict initial sequence also means a fresh binding cannot silently attach
+mid-stream. Re-registration after a previously used native queue remains
+fail-closed until the lifecycle owner can prove a drained/reset queue or pass an
+authenticated baseline. This is preferable to accepting an undetectably lost
+prefix.
+
 This ingress remains intentionally unwired. A production lifecycle owner must
 serialize registration, polling and invalidation and define when polling stops;
 that is a P0-C dependency, not authorization to enable capture here. Real
