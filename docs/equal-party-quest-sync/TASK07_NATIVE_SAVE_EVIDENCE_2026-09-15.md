@@ -250,3 +250,11 @@ not claim that a pathname proves the historical on-disk bytes from which Windows
 mapped the image; source trust still begins at the SKSE loader, while export
 range, runtime, descriptor and generation checks constrain what that loaded
 module can authorize.
+
+The resolver translation unit was compiled locally with the installed MSVC
+19.44 toolchain in C++20 mode under `/W4 /WX /Zs`, using only narrow stubs for
+the project PCH and `VersionDb`; the real resolver/header, native-provider ABI
+and generation-fence headers were compiled unchanged. This proves the new
+Windows/SEH code is warning-clean and type-correct, but is not a substitute for
+the full client link or TPTests. A full xmake client build was deliberately not
+allowed to start downloading its large missing dependency set (including CEF).
