@@ -2,6 +2,7 @@
 
 #include <Structs/Skyrim/PartyQuestNativeSaveProvider.h>
 #include <Structs/Skyrim/PartyQuestNativeSaveEventTransport.h>
+#include <Structs/Skyrim/PartyQuestNativeSaveRequest.h>
 
 #include <filesystem>
 #include <utility>
@@ -43,6 +44,16 @@ struct PartyQuestSkyrimNativeSaveProviderPollResult final
     PartyQuestNativeSaveEventTransportResult Transport;
 };
 
+enum class PartyQuestSkyrimNativeSaveProviderCommandStatus : uint8_t
+{
+    Accepted,
+    InvalidRequest,
+    GenerationUnavailable,
+    ProviderRejected,
+    NativeCallFailed,
+    NativeQueuePoisoned
+};
+
 class PartyQuestSkyrimNativeSaveProviderPollCapability final
 {
 public:
@@ -58,13 +69,24 @@ public:
 
     [[nodiscard]] bool IsValid() const noexcept
     {
-        return m_tryDequeue != nullptr && m_token.IsValid() &&
+        return m_begin != nullptr && m_cancel != nullptr &&
+            m_tryDequeue != nullptr && m_token.IsValid() &&
             m_runtimeGeneration != 0u;
     }
 
-    // The production lifecycle owner must serialize PollAndRoute and
-    // Invalidate. Each binding owns one token and one contiguous sequence
-    // domain; it is not a general thread-safe queue wrapper.
+    // The production lifecycle owner must serialize Begin, Cancel,
+    // PollAndRoute, and Invalidate. Each binding owns one token and one
+    // contiguous sequence domain; it is not a general thread-safe queue
+    // wrapper. In particular, this type does not provide P0-C shutdown
+    // quiescence around the pinned native calls.
+    [[nodiscard]] PartyQuestSkyrimNativeSaveProviderCommandStatus Begin(
+        const PartyQuestNativeSaveProviderRegistration& acRegistration,
+        const PartyQuestAsyncSaveRequestIdentity& acIdentity) noexcept;
+
+    [[nodiscard]] PartyQuestSkyrimNativeSaveProviderCommandStatus Cancel(
+        const PartyQuestNativeSaveProviderRegistration& acRegistration,
+        uint64_t aAttemptNonce) noexcept;
+
     [[nodiscard]] PartyQuestSkyrimNativeSaveProviderPollResult PollAndRoute(
         const PartyQuestNativeSaveProviderRegistration& acRegistration,
         const PartyQuestAsyncSaveRequestIdentity& acReservedIdentity,
@@ -77,17 +99,25 @@ public:
 
 private:
     friend class PartyQuestSkyrimNativeSaveProviderResolver;
+    using TBegin = bool(const void*, uint32_t);
+    using TCancel = bool(uint64_t);
     using TTryDequeue = uint32_t(void*, uint32_t);
 
     PartyQuestSkyrimNativeSaveProviderPollCapability(
+        TBegin* apBegin,
+        TCancel* apCancel,
         TTryDequeue* apTryDequeue,
         PartyQuestNativeSaveProviderToken&& aToken) noexcept
-        : m_tryDequeue(apTryDequeue),
+        : m_begin(apBegin),
+          m_cancel(apCancel),
+          m_tryDequeue(apTryDequeue),
           m_token(std::move(aToken)),
           m_runtimeGeneration(m_token.GetRuntimeGeneration())
     {
     }
 
+    TBegin* m_begin{};
+    TCancel* m_cancel{};
     TTryDequeue* m_tryDequeue{};
     PartyQuestNativeSaveProviderToken m_token;
     PartyQuestNativeSaveEventTransport m_transport;

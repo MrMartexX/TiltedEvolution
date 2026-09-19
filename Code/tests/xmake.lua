@@ -3,7 +3,7 @@ target("TPTests")
     set_kind("binary")
     set_group("Tests")
     add_includedirs(
-        ".", "../encoding", "../immersive_launcher")
+        ".", "../encoding", "../client", "../immersive_launcher")
     add_headerfiles("**.h")
     add_files("*.cpp")
     if is_plat("windows") then

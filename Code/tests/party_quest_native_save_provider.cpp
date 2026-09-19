@@ -1,3 +1,4 @@
+#include <Games/Skyrim/PartyQuestSkyrimNativeSaveProviderResolver.h>
 #include <Structs/Skyrim/PartyQuestNativeSaveProvider.h>
 
 #include <catch2/catch.hpp>
@@ -29,6 +30,18 @@ PartyQuestNativeSaveProviderDescriptor Descriptor()
 
 static_assert(!std::is_copy_constructible_v<PartyQuestNativeSaveProviderToken>);
 static_assert(!std::is_copy_assignable_v<PartyQuestNativeSaveProviderToken>);
+static_assert(!std::is_copy_constructible_v<
+    PartyQuestSkyrimNativeSaveProviderPollCapability>);
+static_assert(!std::is_copy_assignable_v<
+    PartyQuestSkyrimNativeSaveProviderPollCapability>);
+static_assert(std::is_nothrow_move_constructible_v<
+    PartyQuestSkyrimNativeSaveProviderPollCapability>);
+
+TEST_CASE("Native save command capability defaults fail closed")
+{
+    PartyQuestSkyrimNativeSaveProviderPollCapability capability;
+    REQUIRE_FALSE(capability.IsValid());
+}
 
 TEST_CASE("Native save provider descriptor is exact and fail closed",
     "[quest.party-state][native-save-provider]")

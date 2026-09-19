@@ -264,10 +264,15 @@ allowed to start downloading its large missing dependency set (including CEF).
 Repository-wide tracing confirms that the native research provider currently
 emits PQS3/PQS4 through SKSE's internal `PluginManager::Dispatch_Message`, while
 the STR client has no SKSE messaging-listener registration and contains no
-production call to `PartyQuestSKSE_BeginIsolatedSave` or
-`PartyQuestSKSE_CancelIsolatedSave`. The portable decoder/router is therefore
-not yet reachable from the native writer. Descriptor authentication alone does
-not close this gap.
+production caller of the native save capability. The authenticated pinned
+capability now resolves Begin, Cancel, and dequeue from the same verified PE
+image. Begin derives its fixed request ABI without a caller-controlled path;
+Begin and Cancel revalidate the provider token and hold the exact runtime
+generation lease across the foreign call. C++ and Windows structured
+exceptions are contained, and an uncertain call poisons the capability.
+These methods remain deliberately unwired, so the portable decoder/router is
+not yet reachable from production. Descriptor authentication alone does not
+close this gap.
 
 Returning raw event callbacks or provider function pointers from the resolver
 would create callback-after-unload and shutdown races. The next integration
