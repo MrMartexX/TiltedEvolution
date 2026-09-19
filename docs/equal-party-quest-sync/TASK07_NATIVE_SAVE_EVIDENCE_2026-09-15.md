@@ -207,3 +207,24 @@ validated callback registration and lifetime, serialized callback handoff
 under the existing generation fence, and P0-C-owned unregister/quiescence on
 shutdown. A descriptor or structurally valid payload alone grants no source
 authority. Task 7 and Task 8 remain open; P0 NOT CLOSED.
+
+### Native descriptor export follow-up
+
+Native research commit `2d94456` adds the fixed 64-byte
+`PartyQuestSKSE_GetSaveProviderDescriptor` export with the same ABI version,
+implementation version, capability mask, 1.6.1170 runtime tuple and provider
+fingerprint required by the portable policy. The export is fail-closed: it
+zeroes the caller's correctly sized output and returns false unless the native
+provider has already published verified readiness. An invalid pointer/size or
+the compile-time-disabled provider cannot produce an approved descriptor.
+
+The full MSVC v143 x64 Release DLL build, all 17 structural tests and the
+native descriptor/state executable passed. `dumpbin /exports` confirmed both
+`PartyQuestSKSE_GetSaveProviderDescriptor` and the legacy readiness export in
+the built DLL. DLL SHA256:
+`A2718C5CFCE9F0BE77D47F075BD2EFB911700F608F847E81349810B495FC4D61`.
+
+The DLL was not loaded into a non-Skyrim process, installed or executed.
+Descriptor presence is compatibility evidence only. Trusted resolution of the
+already loaded module, callback registration ownership and unload/quiescence
+remain external blockers; the provider remains disabled.
