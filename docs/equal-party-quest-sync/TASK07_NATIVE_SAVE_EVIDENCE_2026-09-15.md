@@ -132,6 +132,61 @@ checked co-save outcome is not promoted to ESS success.
 Task 7 still lacks a completed-save trace and the actual request-owned provider.
 P0 NOT CLOSED.
 
+## Portable command binding evidence (2026-09-20)
+
+The portable client now owns one move-only authenticated capability containing
+the Begin, Cancel, and dequeue exports from the same path-checked and pinned PE
+image. It never returns a naked export pointer. Begin encodes the fixed 480-byte
+request locally, derives the isolated path only from validated campaign/profile
+identity, revalidates the registration token, and holds the exact runtime
+generation lease across the native call. Cancel applies the same token and
+generation checks. A C++ exception or Windows structured exception makes the
+result uncertain and permanently poisons the capability. A normal native
+rejection remains a deterministic fail-closed rejection.
+
+The command capability remains deliberately absent from production bootstrap.
+Its owner must serialize Begin, Cancel, PollAndRoute, and Invalidate and must
+provide callback/native-call quiescence before teardown. That serialization and
+quiescence primitive belongs to P0-C; this Task 7 branch does not invent a
+second lifecycle domain.
+
+Portable commit `c72560009bc456216afc935fa98e5b489d003a25` is FULL GREEN:
+
+- Build Linux: success, run `35470419618`;
+- Build Windows: success, run `35470420865`;
+- diagnostics Linux: success, 168278 assertions / 676 test cases;
+- diagnostics Windows: success, 168269 assertions / 676 test cases;
+- diagnostics run: `35470418194`.
+
+The immediately preceding exact request-encoding commit
+`20b9652b10e621b585db2277d8a909c71622585f` is also FULL GREEN with 168277
+assertions / 675 cases on Linux and 168268 assertions / 675 cases on Windows.
+
+## Exact remaining Task 7 gate
+
+Static/source work cannot prove that the real 1.6.1170 engine and SKSE writers
+produce the asserted observations. Closing Task 7 now requires an explicitly
+identified research artifact and an isolated live run that records one exact
+request from admission through retirement. The evidence must show:
+
+1. the `.ess` and `.skse` paths both remain beneath the request-derived
+   campaign/profile root;
+2. ordinary manual, auto, and quick saves retain their ordinary paths;
+3. each checked close and final-name publication belongs to the same immutable
+   request identity;
+4. retirement occurs only after the synchronous writer chain has returned and
+   no request-owned writer can issue further I/O;
+5. cancel, writer failure, LoadGame/MainMenu, and shutdown remain fail-closed;
+6. the portable consumer receives the full contiguous event sequence and does
+   not accept a stale generation or partial prefix.
+
+The native compile-time production gate remains false. It must not be flipped
+in a distributable build merely to manufacture this evidence. A research-only
+activation mechanism needs an unmistakable non-production identity and must be
+installable only into the isolated 1.6.1170/MO2 environment. Until that live
+evidence and the P0-C owner/quiescence primitive exist, Task 7 and Task 8 remain
+open and engine PreRepair capture remains disabled.
+
 ## Offline exact-binary follow-up, 2026-09-18
 
 The exact `SkyrimSE.exe` above was inspected without launching Skyrim. The
