@@ -258,3 +258,21 @@ and generation-fence headers were compiled unchanged. This proves the new
 Windows/SEH code is warning-clean and type-correct, but is not a substitute for
 the full client link or TPTests. A full xmake client build was deliberately not
 allowed to start downloading its large missing dependency set (including CEF).
+
+## Production event-ingress gap
+
+Repository-wide tracing confirms that the native research provider currently
+emits PQS3/PQS4 through SKSE's internal `PluginManager::Dispatch_Message`, while
+the STR client has no SKSE messaging-listener registration and contains no
+production call to `PartyQuestSKSE_BeginIsolatedSave` or
+`PartyQuestSKSE_CancelIsolatedSave`. The portable decoder/router is therefore
+not yet reachable from the native writer. Descriptor authentication alone does
+not close this gap.
+
+Returning raw event callbacks or provider function pointers from the resolver
+would create callback-after-unload and shutdown races. The next integration
+slice must define one owned ingress primitive with explicit unregister/drain
+semantics (P0-C), or a lossless pull/snapshot contract that preserves exact
+PQS3/PQS4 identity and retirement semantics without callbacks. Until that
+primitive is independently proved, the resolver remains unwired and the native
+provider remains disabled.
