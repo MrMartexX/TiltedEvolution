@@ -25,12 +25,23 @@ PartyQuestAsyncSaveEventRouteResult
 PartyQuestAsyncSaveEventRouter::ApplyArtifact(
     const void* apPayload,
     size_t aPayloadSize,
+    const PartyQuestNativeSaveProviderRegistration& acProviderRegistration,
+    const PartyQuestNativeSaveProviderToken& acProviderToken,
+    uint64_t aRuntimeGeneration,
     const PartyQuestAsyncSaveRequestIdentity& acReservedIdentity,
     PartyQuestAsyncSaveContract& aContract,
     PartyQuestAsyncSaveFinalizationGate& aGate,
     uint64_t aNowMs) noexcept
 {
     PartyQuestAsyncSaveEventRouteResult result;
+    if (acReservedIdentity.RuntimeGeneration != aRuntimeGeneration ||
+        acProviderRegistration.Validate(
+            acProviderToken, aRuntimeGeneration) !=
+        PartyQuestNativeSaveProviderRegistrationStatus::Current)
+    {
+        result.Status = PartyQuestAsyncSaveEventRouteStatus::ProviderRejected;
+        return result;
+    }
     auto adapted = PartyQuestNativeSaveEventAdapter::ApplyTrustedProviderEvent(
         apPayload,
         aPayloadSize,
@@ -54,11 +65,22 @@ PartyQuestAsyncSaveEventRouteResult
 PartyQuestAsyncSaveEventRouter::ApplyRetirement(
     const void* apPayload,
     size_t aPayloadSize,
+    const PartyQuestNativeSaveProviderRegistration& acProviderRegistration,
+    const PartyQuestNativeSaveProviderToken& acProviderToken,
+    uint64_t aRuntimeGeneration,
     const PartyQuestAsyncSaveRequestIdentity& acReservedIdentity,
     PartyQuestAsyncSaveContract& aContract,
     PartyQuestAsyncSaveFinalizationGate& aGate) noexcept
 {
     PartyQuestAsyncSaveEventRouteResult result;
+    if (acReservedIdentity.RuntimeGeneration != aRuntimeGeneration ||
+        acProviderRegistration.Validate(
+            acProviderToken, aRuntimeGeneration) !=
+        PartyQuestNativeSaveProviderRegistrationStatus::Current)
+    {
+        result.Status = PartyQuestAsyncSaveEventRouteStatus::ProviderRejected;
+        return result;
+    }
     auto decoded = PartyQuestNativeSaveEventAdapter::DecodeRequestRetired(
         apPayload, aPayloadSize);
     result.DecodeStatus = decoded.Status;

@@ -41,11 +41,41 @@ RetiredBuffer RetiredEvent(
     uint8_t aOutcome = 1,
     uint32_t aNativeError = 0);
 
+struct ProviderHarness
+{
+    PartyQuestNativeSaveProviderRegistration Registry;
+    std::optional<PartyQuestNativeSaveProviderToken> Token;
+
+    explicit ProviderHarness(uint64_t aGeneration)
+    {
+        PartyQuestNativeSaveProviderDescriptor descriptor;
+        descriptor.AbiVersion = kPartyQuestNativeSaveProviderDescriptorAbi;
+        descriptor.StructSize = sizeof(descriptor);
+        descriptor.EventAbiVersion = kPartyQuestNativeSaveEventAbi;
+        descriptor.ImplementationVersion =
+            kPartyQuestNativeSaveProviderImplementationVersion;
+        descriptor.Capabilities =
+            kPartyQuestRequiredNativeSaveProviderCapabilities;
+        descriptor.RuntimeMajor = 1;
+        descriptor.RuntimeMinor = 6;
+        descriptor.RuntimePatch = 1170;
+        descriptor.ProviderFingerprint =
+            kPartyQuestNativeSaveProviderFingerprint;
+        auto registered = Registry.RegisterAuthenticated(
+            descriptor, aGeneration);
+        REQUIRE(registered.Status ==
+                PartyQuestNativeSaveProviderRegistrationStatus::Registered);
+        REQUIRE(registered.Token);
+        Token.emplace(std::move(*registered.Token));
+    }
+};
+
 TEST_CASE("Native save router releases completion only after matching PQS4")
 {
     PartyQuestAsyncSaveContract contract;
     PartyQuestAsyncSaveFinalizationGate gate;
     const auto identity = Identity();
+    ProviderHarness provider(identity.RuntimeGeneration);
     REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
             PartyQuestAsyncSaveFinalizationStatus::Pending);
 
@@ -58,7 +88,8 @@ TEST_CASE("Native save router releases completion only after matching PQS4")
     for (size_t index = 0; index < events.size(); ++index)
     {
         auto routed = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
-            events[index].data(), events[index].size(), identity,
+            events[index].data(), events[index].size(), provider.Registry,
+            *provider.Token, identity.RuntimeGeneration, identity,
             contract, gate, now++);
         REQUIRE(routed.Status == PartyQuestAsyncSaveEventRouteStatus::Applied);
         REQUIRE_FALSE(routed.Finalization.Completion.has_value());
@@ -70,7 +101,8 @@ TEST_CASE("Native save router releases completion only after matching PQS4")
 
     const auto retiredPayload = RetiredEvent(identity, 1);
     auto retired = PartyQuestAsyncSaveEventRouter::ApplyRetirement(
-        retiredPayload.data(), retiredPayload.size(), identity,
+        retiredPayload.data(), retiredPayload.size(), provider.Registry,
+        *provider.Token, identity.RuntimeGeneration, identity,
         contract, gate);
     REQUIRE(retired.Status == PartyQuestAsyncSaveEventRouteStatus::Applied);
     REQUIRE(retired.Finalization.Status ==
@@ -85,12 +117,14 @@ TEST_CASE("Native save router consumes early drain proof without success")
     PartyQuestAsyncSaveContract contract;
     PartyQuestAsyncSaveFinalizationGate gate;
     const auto identity = Identity();
+    ProviderHarness provider(identity.RuntimeGeneration);
     REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
             PartyQuestAsyncSaveFinalizationStatus::Pending);
 
     const auto retiredPayload = RetiredEvent(identity, 2, 5);
     auto retired = PartyQuestAsyncSaveEventRouter::ApplyRetirement(
-        retiredPayload.data(), retiredPayload.size(), identity,
+        retiredPayload.data(), retiredPayload.size(), provider.Registry,
+        *provider.Token, identity.RuntimeGeneration, identity,
         contract, gate);
     REQUIRE(retired.Status == PartyQuestAsyncSaveEventRouteStatus::Applied);
     REQUIRE(retired.Finalization.Status ==
@@ -104,6 +138,7 @@ TEST_CASE("Native save router revokes quarantined completion on late failure")
     PartyQuestAsyncSaveContract contract;
     PartyQuestAsyncSaveFinalizationGate gate;
     const auto identity = Identity();
+    ProviderHarness provider(identity.RuntimeGeneration);
     REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
             PartyQuestAsyncSaveFinalizationStatus::Pending);
 
@@ -116,14 +151,16 @@ TEST_CASE("Native save router revokes quarantined completion on late failure")
     for (const auto& payload : successes)
     {
         auto routed = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
-            payload.data(), payload.size(), identity, contract, gate, now++);
+            payload.data(), payload.size(), provider.Registry, *provider.Token,
+            identity.RuntimeGeneration, identity, contract, gate, now++);
         REQUIRE(routed.Status == PartyQuestAsyncSaveEventRouteStatus::Applied);
         REQUIRE_FALSE(routed.Finalization.Completion.has_value());
     }
 
     const auto lateFailure = Event(identity, 1, 1, 2, 5);
     auto failed = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
-        lateFailure.data(), lateFailure.size(), identity,
+        lateFailure.data(), lateFailure.size(), provider.Registry,
+        *provider.Token, identity.RuntimeGeneration, identity,
         contract, gate, now);
     REQUIRE(failed.Status == PartyQuestAsyncSaveEventRouteStatus::Applied);
     REQUIRE(failed.Finalization.Status ==
@@ -133,6 +170,7 @@ TEST_CASE("Native save router revokes quarantined completion on late failure")
     const auto contradictoryRetirement = RetiredEvent(identity, 1);
     auto retired = PartyQuestAsyncSaveEventRouter::ApplyRetirement(
         contradictoryRetirement.data(), contradictoryRetirement.size(),
+        provider.Registry, *provider.Token, identity.RuntimeGeneration,
         identity, contract, gate);
     REQUIRE(retired.Finalization.Status ==
             PartyQuestAsyncSaveFinalizationStatus::ProtocolViolationRetired);
@@ -145,6 +183,7 @@ TEST_CASE("Native save router rejects stale and malformed callbacks unchanged")
     PartyQuestAsyncSaveContract contract;
     PartyQuestAsyncSaveFinalizationGate gate;
     const auto identity = Identity();
+    ProviderHarness provider(identity.RuntimeGeneration);
     REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
             PartyQuestAsyncSaveFinalizationStatus::Pending);
 
@@ -152,18 +191,62 @@ TEST_CASE("Native save router rejects stale and malformed callbacks unchanged")
     ++staleIdentity.RuntimeGeneration;
     const auto stalePayload = Event(staleIdentity);
     const auto stale = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
-        stalePayload.data(), stalePayload.size(), identity,
+        stalePayload.data(), stalePayload.size(), provider.Registry,
+        *provider.Token, identity.RuntimeGeneration, identity,
         contract, gate, 101);
     REQUIRE(stale.Status == PartyQuestAsyncSaveEventRouteStatus::IdentityMismatch);
 
     const auto validPayload = Event(identity);
     const auto malformed = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
-        validPayload.data(), validPayload.size() - 1, identity,
+        validPayload.data(), validPayload.size() - 1, provider.Registry,
+        *provider.Token, identity.RuntimeGeneration, identity,
         contract, gate, 102);
     REQUIRE(malformed.Status == PartyQuestAsyncSaveEventRouteStatus::Malformed);
 
     REQUIRE(contract.Begin(staleIdentity, 103, false, false).Status ==
             PartyQuestAsyncSaveContractStatus::Busy);
+}
+
+TEST_CASE("Native save router rejects invalidated provider capability")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    const auto identity = Identity();
+    ProviderHarness provider(identity.RuntimeGeneration);
+    REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+    REQUIRE(provider.Registry.Invalidate(*provider.Token) ==
+            PartyQuestNativeSaveProviderRegistrationStatus::Invalidated);
+
+    const auto payload = Event(identity);
+    const auto rejected = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
+        payload.data(), payload.size(), provider.Registry, *provider.Token,
+        identity.RuntimeGeneration, identity, contract, gate, 101);
+    REQUIRE(rejected.Status ==
+            PartyQuestAsyncSaveEventRouteStatus::ProviderRejected);
+    REQUIRE(rejected.Finalization.Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Inactive);
+    REQUIRE(contract.Poll(102).Status ==
+            PartyQuestAsyncSaveContractStatus::Pending);
+}
+
+TEST_CASE("Native save router binds provider and request generation")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    const auto identity = Identity();
+    ProviderHarness provider(identity.RuntimeGeneration);
+    REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+
+    const auto payload = Event(identity);
+    const auto rejected = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
+        payload.data(), payload.size(), provider.Registry, *provider.Token,
+        identity.RuntimeGeneration + 1, identity, contract, gate, 101);
+    REQUIRE(rejected.Status ==
+            PartyQuestAsyncSaveEventRouteStatus::ProviderRejected);
+    REQUIRE(contract.Poll(102).Status ==
+            PartyQuestAsyncSaveContractStatus::Pending);
 }
 
 PartyQuestAsyncSaveRequestIdentity Identity()

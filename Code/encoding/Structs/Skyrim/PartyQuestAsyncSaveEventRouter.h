@@ -2,6 +2,7 @@
 
 #include <Structs/Skyrim/PartyQuestAsyncSaveFinalizationGate.h>
 #include <Structs/Skyrim/PartyQuestNativeSaveEventAdapter.h>
+#include <Structs/Skyrim/PartyQuestNativeSaveProvider.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -12,6 +13,7 @@ enum class PartyQuestAsyncSaveEventRouteStatus : uint8_t
     Malformed,
     InvalidExpectedIdentity,
     IdentityMismatch,
+    ProviderRejected,
     AdapterRejected
 };
 
@@ -36,6 +38,9 @@ public:
     [[nodiscard]] static PartyQuestAsyncSaveEventRouteResult ApplyArtifact(
         const void* apPayload,
         size_t aPayloadSize,
+        const PartyQuestNativeSaveProviderRegistration& acProviderRegistration,
+        const PartyQuestNativeSaveProviderToken& acProviderToken,
+        uint64_t aRuntimeGeneration,
         const PartyQuestAsyncSaveRequestIdentity& acReservedIdentity,
         PartyQuestAsyncSaveContract& aContract,
         PartyQuestAsyncSaveFinalizationGate& aGate,
@@ -44,6 +49,9 @@ public:
     [[nodiscard]] static PartyQuestAsyncSaveEventRouteResult ApplyRetirement(
         const void* apPayload,
         size_t aPayloadSize,
+        const PartyQuestNativeSaveProviderRegistration& acProviderRegistration,
+        const PartyQuestNativeSaveProviderToken& acProviderToken,
+        uint64_t aRuntimeGeneration,
         const PartyQuestAsyncSaveRequestIdentity& acReservedIdentity,
         PartyQuestAsyncSaveContract& aContract,
         PartyQuestAsyncSaveFinalizationGate& aGate) noexcept;

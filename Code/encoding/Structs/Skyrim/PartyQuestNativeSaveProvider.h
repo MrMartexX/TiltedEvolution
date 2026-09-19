@@ -1,0 +1,145 @@
+#pragma once
+
+#include <cstdint>
+#include <optional>
+
+enum class PartyQuestNativeSaveProviderCapabilityBit : uint64_t
+{
+    ArtifactEvents = 1ull << 0u,
+    RequestRetirement = 1ull << 1u,
+    ExactRequestIdentity = 1ull << 2u,
+    CheckedArtifactIo = 1ull << 3u,
+    RequestWideDrain = 1ull << 4u
+};
+
+inline constexpr uint32_t kPartyQuestNativeSaveProviderDescriptorAbi = 1u;
+inline constexpr uint32_t kPartyQuestNativeSaveEventAbi = 2u;
+inline constexpr uint32_t kPartyQuestNativeSaveProviderImplementationVersion = 1u;
+inline constexpr uint64_t kPartyQuestNativeSaveProviderFingerprint =
+    0x3256455641535150ull; // "PQSAVEV2", deterministic identity, not a secret.
+inline constexpr uint64_t kPartyQuestRequiredNativeSaveProviderCapabilities =
+    static_cast<uint64_t>(PartyQuestNativeSaveProviderCapabilityBit::ArtifactEvents) |
+    static_cast<uint64_t>(PartyQuestNativeSaveProviderCapabilityBit::RequestRetirement) |
+    static_cast<uint64_t>(PartyQuestNativeSaveProviderCapabilityBit::ExactRequestIdentity) |
+    static_cast<uint64_t>(PartyQuestNativeSaveProviderCapabilityBit::CheckedArtifactIo) |
+    static_cast<uint64_t>(PartyQuestNativeSaveProviderCapabilityBit::RequestWideDrain);
+
+struct PartyQuestNativeSaveProviderDescriptor final
+{
+    uint32_t AbiVersion{};
+    uint32_t StructSize{};
+    uint32_t EventAbiVersion{};
+    uint32_t ImplementationVersion{};
+    uint64_t Capabilities{};
+    uint32_t RuntimeMajor{};
+    uint32_t RuntimeMinor{};
+    uint32_t RuntimePatch{};
+    uint32_t RuntimeBuild{};
+    uint64_t ProviderFingerprint{};
+    uint64_t Reserved0{};
+    uint64_t Reserved1{};
+};
+
+static_assert(sizeof(PartyQuestNativeSaveProviderDescriptor) == 64u);
+
+struct PartyQuestNativeSaveProviderPolicy final
+{
+    [[nodiscard]] static constexpr bool IsApprovedDescriptor(
+        const PartyQuestNativeSaveProviderDescriptor& acDescriptor) noexcept
+    {
+        return acDescriptor.AbiVersion ==
+                kPartyQuestNativeSaveProviderDescriptorAbi &&
+            acDescriptor.StructSize == sizeof(PartyQuestNativeSaveProviderDescriptor) &&
+            acDescriptor.EventAbiVersion == kPartyQuestNativeSaveEventAbi &&
+            acDescriptor.ImplementationVersion ==
+                kPartyQuestNativeSaveProviderImplementationVersion &&
+            acDescriptor.Capabilities ==
+                kPartyQuestRequiredNativeSaveProviderCapabilities &&
+            acDescriptor.RuntimeMajor == 1u &&
+            acDescriptor.RuntimeMinor == 6u &&
+            acDescriptor.RuntimePatch == 1170u &&
+            acDescriptor.RuntimeBuild == 0u &&
+            acDescriptor.ProviderFingerprint ==
+                kPartyQuestNativeSaveProviderFingerprint &&
+            acDescriptor.Reserved0 == 0u && acDescriptor.Reserved1 == 0u;
+    }
+};
+
+class PartyQuestNativeSaveProviderRegistration;
+
+class PartyQuestNativeSaveProviderToken final
+{
+public:
+    PartyQuestNativeSaveProviderToken() noexcept = default;
+    PartyQuestNativeSaveProviderToken(PartyQuestNativeSaveProviderToken&& aOther) noexcept;
+    PartyQuestNativeSaveProviderToken& operator=(
+        PartyQuestNativeSaveProviderToken&& aOther) noexcept;
+    PartyQuestNativeSaveProviderToken(const PartyQuestNativeSaveProviderToken&) = delete;
+    PartyQuestNativeSaveProviderToken& operator=(
+        const PartyQuestNativeSaveProviderToken&) = delete;
+
+    [[nodiscard]] bool IsValid() const noexcept;
+    [[nodiscard]] uint64_t GetRuntimeGeneration() const noexcept
+    {
+        return m_runtimeGeneration;
+    }
+
+private:
+    friend class PartyQuestNativeSaveProviderRegistration;
+
+    PartyQuestNativeSaveProviderToken(
+        uint64_t aRegistrationId,
+        uint64_t aRuntimeGeneration) noexcept;
+    void Reset() noexcept;
+
+    uint64_t m_registrationId{};
+    uint64_t m_runtimeGeneration{};
+    uint64_t m_providerFingerprint{};
+};
+
+enum class PartyQuestNativeSaveProviderRegistrationStatus : uint8_t
+{
+    Registered,
+    Current,
+    Busy,
+    InvalidDescriptor,
+    InvalidGeneration,
+    Exhausted,
+    Stale,
+    Invalidated
+};
+
+struct PartyQuestNativeSaveProviderRegistrationResult
+{
+    PartyQuestNativeSaveProviderRegistrationStatus Status{
+        PartyQuestNativeSaveProviderRegistrationStatus::InvalidDescriptor};
+    std::optional<PartyQuestNativeSaveProviderToken> Token;
+};
+
+/**
+ * Pure, externally serialized registration state. RegisterAuthenticated has a
+ * strict trusted-loader precondition: descriptor bytes and fingerprint are
+ * compatibility identity, not proof of module origin. This class performs no
+ * module loading, callback registration, unregister or shutdown quiescence.
+ */
+class PartyQuestNativeSaveProviderRegistration final
+{
+public:
+    [[nodiscard]] PartyQuestNativeSaveProviderRegistrationResult
+    RegisterAuthenticated(
+        const PartyQuestNativeSaveProviderDescriptor& acDescriptor,
+        uint64_t aRuntimeGeneration) noexcept;
+
+    [[nodiscard]] PartyQuestNativeSaveProviderRegistrationStatus Validate(
+        const PartyQuestNativeSaveProviderToken& acToken,
+        uint64_t aRuntimeGeneration) const noexcept;
+
+    [[nodiscard]] PartyQuestNativeSaveProviderRegistrationStatus Invalidate(
+        const PartyQuestNativeSaveProviderToken& acToken) noexcept;
+
+private:
+    uint64_t m_registrationId{};
+    uint64_t m_runtimeGeneration{};
+    uint64_t m_nextRegistrationId{1};
+    bool m_active{};
+};
