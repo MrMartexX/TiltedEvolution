@@ -13,10 +13,18 @@ namespace
 constexpr wchar_t kProviderModule[] = L"skse64_1_6_1170.dll";
 constexpr char kProviderDescriptorExport[] =
     "PartyQuestSKSE_GetSaveProviderDescriptor";
+constexpr char kProviderDequeueExport[] =
+    "PartyQuestSKSE_TryDequeueSaveEvent";
+
+constexpr uint32_t kNativeDequeued = 1u;
+constexpr uint32_t kNativeEmpty = 2u;
+constexpr uint32_t kNativeInvalid = 3u;
+constexpr uint32_t kNativePoisoned = 4u;
 
 using TGetProviderDescriptor = bool(
     PartyQuestNativeSaveProviderDescriptor*,
     uint32_t);
+using TTryDequeue = uint32_t(void*, uint32_t);
 
 class ScopedModuleReference final
 {
@@ -234,7 +242,105 @@ private:
         return false;
     }
 }
+
+[[nodiscard]] uint32_t CallDequeueCpp(
+    TTryDequeue* apTryDequeue,
+    void* apEnvelope,
+    uint32_t aEnvelopeSize) noexcept
+{
+    try
+    {
+        return apTryDequeue(apEnvelope, aEnvelopeSize);
+    }
+    catch (...)
+    {
+        return kNativeInvalid;
+    }
+}
+
+[[nodiscard]] uint32_t DequeueSafely(
+    TTryDequeue* apTryDequeue,
+    PartyQuestNativeSaveEventEnvelope& aEnvelope) noexcept
+{
+    __try
+    {
+        return CallDequeueCpp(
+            apTryDequeue, &aEnvelope, static_cast<uint32_t>(sizeof(aEnvelope)));
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return kNativeInvalid;
+    }
+}
 } // namespace
+
+PartyQuestSkyrimNativeSaveProviderPollResult
+PartyQuestSkyrimNativeSaveProviderPollCapability::PollAndRoute(
+    const PartyQuestNativeSaveProviderRegistration& acRegistration,
+    const PartyQuestAsyncSaveRequestIdentity& acReservedIdentity,
+    PartyQuestAsyncSaveContract& aContract,
+    PartyQuestAsyncSaveFinalizationGate& aGate,
+    uint64_t aNowMs) noexcept
+{
+    PartyQuestSkyrimNativeSaveProviderPollResult result;
+    if (!IsValid() || acRegistration.Validate(m_token, m_runtimeGeneration) !=
+            PartyQuestNativeSaveProviderRegistrationStatus::Current)
+    {
+        return result;
+    }
+
+    auto lease = PartyQuestRuntimeGenerationFence::GetProcessFence().TryAcquire(
+        m_runtimeGeneration);
+    if (!lease || !lease->IsValid())
+    {
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderPollStatus::GenerationUnavailable;
+        return result;
+    }
+
+    PartyQuestNativeSaveEventEnvelope envelope{};
+    const uint32_t nativeStatus = DequeueSafely(m_tryDequeue, envelope);
+    if (nativeStatus == kNativeEmpty)
+    {
+        result.Status = PartyQuestSkyrimNativeSaveProviderPollStatus::Empty;
+        return result;
+    }
+    if (nativeStatus == kNativePoisoned)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderPollStatus::NativeQueuePoisoned;
+        return result;
+    }
+    if (nativeStatus != kNativeDequeued)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderPollStatus::NativeCallFailed;
+        return result;
+    }
+
+    result.Transport = m_transport.Consume(
+        &envelope,
+        sizeof(envelope),
+        acRegistration,
+        m_token,
+        m_runtimeGeneration,
+        acReservedIdentity,
+        aContract,
+        aGate,
+        aNowMs);
+    result.Status = result.Transport.Status ==
+            PartyQuestNativeSaveEventTransportStatus::Applied ?
+        PartyQuestSkyrimNativeSaveProviderPollStatus::Applied :
+        PartyQuestSkyrimNativeSaveProviderPollStatus::EventRejected;
+    return result;
+}
+
+PartyQuestNativeSaveProviderRegistrationStatus
+PartyQuestSkyrimNativeSaveProviderPollCapability::Invalidate(
+    PartyQuestNativeSaveProviderRegistration& aRegistration) noexcept
+{
+    return aRegistration.Invalidate(m_token);
+}
 
 PartyQuestSkyrimNativeSaveProviderResolveResult
 PartyQuestSkyrimNativeSaveProviderResolver::ResolveAndRegister(
@@ -297,6 +403,20 @@ PartyQuestSkyrimNativeSaveProviderResolver::ResolveAndRegister(
             InvalidExportAddress;
         return result;
     }
+    const auto tryDequeue = reinterpret_cast<TTryDequeue*>(
+        ::GetProcAddress(module, kProviderDequeueExport));
+    if (!tryDequeue)
+    {
+        result.Status = PartyQuestSkyrimNativeSaveProviderResolveStatus::
+            RequiredExportMissing;
+        return result;
+    }
+    if (!ExportBelongsToModule(module, tryDequeue))
+    {
+        result.Status = PartyQuestSkyrimNativeSaveProviderResolveStatus::
+            InvalidExportAddress;
+        return result;
+    }
 
     const auto& versionDb = VersionDb::Get();
     if (!versionDb.IsLoaded())
@@ -344,10 +464,9 @@ PartyQuestSkyrimNativeSaveProviderResolver::ResolveAndRegister(
     auto registered =
         aRegistration.RegisterAuthenticated(descriptor, generation);
     result.RegistrationStatus = registered.Status;
-    result.Token = std::move(registered.Token);
     if (result.RegistrationStatus !=
             PartyQuestNativeSaveProviderRegistrationStatus::Registered ||
-        !result.Token || !result.Token->IsValid())
+        !registered.Token || !registered.Token->IsValid())
     {
         result.Status = PartyQuestSkyrimNativeSaveProviderResolveStatus::
             RegistrationRejected;
@@ -366,8 +485,7 @@ PartyQuestSkyrimNativeSaveProviderResolver::ResolveAndRegister(
         pinnedModule != module)
     {
         result.RegistrationStatus =
-            aRegistration.Invalidate(*result.Token);
-        result.Token.reset();
+            aRegistration.Invalidate(*registered.Token);
         result.Status = PartyQuestSkyrimNativeSaveProviderResolveStatus::
             ProviderPinFailed;
         return result;
@@ -375,5 +493,7 @@ PartyQuestSkyrimNativeSaveProviderResolver::ResolveAndRegister(
 
     result.Status =
         PartyQuestSkyrimNativeSaveProviderResolveStatus::Registered;
+    result.PollCapability = PartyQuestSkyrimNativeSaveProviderPollCapability(
+        tryDequeue, std::move(*registered.Token));
     return result;
 }

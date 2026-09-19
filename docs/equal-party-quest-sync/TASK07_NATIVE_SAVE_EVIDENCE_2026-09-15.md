@@ -289,3 +289,39 @@ events are drained. This avoids foreign callbacks entirely while preserving the
 existing PQS3/PQS4 payload ABI. Queue overflow, consumer absence, duplicate
 polling and generation invalidation must all fail closed and be regression
 tested before production wiring.
+
+## Lossless pull ingress follow-up, 2026-09-19
+
+Native research commits `a97e916` and `df4f5d3` replace callback delivery as
+the required ingress with a provider-owned fixed-capacity queue. Its capacity
+is exactly five: at most four unique artifact transitions and one request
+retirement. Enqueue and reservation retirement share the reservation lock, a
+new request is rejected until the prior queue is drained, overflow or sequence
+exhaustion poison the provider, and the exported dequeue status distinguishes
+`Dequeued`, normal `Empty`, caller `Invalid`, and provider `Poisoned`.
+The fixed envelope is 256 bytes and contains transport ABI, exact size, PQS3 or
+PQS4 message type, exact payload size, a nonzero sequence and a zero-filled
+232-byte payload area. The provider remains compile-time disabled.
+
+The native full MSVC v143 x64 Release build passed, all 21 structural tests and
+the native state/queue executable passed, and `dumpbin` confirmed
+`PartyQuestSKSE_TryDequeueSaveEvent`. DLL SHA256 after the explicit dequeue
+status hardening:
+`E7F8E66F28953A20A5982F804A1D3E5604804637C0B3DB83DF9E180551669E59`.
+No DLL was installed and Skyrim was not launched.
+
+The portable branch now has a pure transport consumer that copies the complete
+envelope before validation, requires exact ABI/type/payload size and zero tail,
+rejects replay and sequence gaps, and routes only through the existing
+generation/token/identity-aware PQS3/PQS4 router. The Windows resolver also
+authenticates the dequeue export as part of the same pinned PE image. It returns
+one move-only opaque poll binding that privately owns the function pointer,
+provider token, registered generation and sequence state. Every poll acquires
+the matching runtime-generation execution lease across the contained foreign
+call and portable routing. No naked function pointer or callback is exposed.
+
+This ingress remains intentionally unwired. A production lifecycle owner must
+serialize registration, polling and invalidation and define when polling stops;
+that is a P0-C dependency, not authorization to enable capture here. Real
+PreRepair capture, `SetStage`, aliases, inventory and generic world mutation all
+remain disabled. Task 7 and Task 8 remain open; P0 NOT CLOSED.

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestNativeSaveProvider.h>
+#include <Structs/Skyrim/PartyQuestNativeSaveEventTransport.h>
 
 #include <filesystem>
+#include <utility>
 
 enum class PartyQuestSkyrimNativeSaveProviderResolveStatus : uint8_t
 {
@@ -22,13 +24,83 @@ enum class PartyQuestSkyrimNativeSaveProviderResolveStatus : uint8_t
     RegistrationRejected
 };
 
+enum class PartyQuestSkyrimNativeSaveProviderPollStatus : uint8_t
+{
+    Applied,
+    Empty,
+    GenerationUnavailable,
+    ProviderRejected,
+    NativeCallFailed,
+    NativeQueuePoisoned,
+    EventRejected
+};
+
+struct PartyQuestSkyrimNativeSaveProviderPollResult final
+{
+    PartyQuestSkyrimNativeSaveProviderPollStatus Status{
+        PartyQuestSkyrimNativeSaveProviderPollStatus::ProviderRejected};
+    PartyQuestNativeSaveEventTransportResult Transport;
+};
+
+class PartyQuestSkyrimNativeSaveProviderPollCapability final
+{
+public:
+    PartyQuestSkyrimNativeSaveProviderPollCapability() noexcept = default;
+    PartyQuestSkyrimNativeSaveProviderPollCapability(
+        PartyQuestSkyrimNativeSaveProviderPollCapability&&) noexcept = default;
+    PartyQuestSkyrimNativeSaveProviderPollCapability& operator=(
+        PartyQuestSkyrimNativeSaveProviderPollCapability&&) noexcept = default;
+    PartyQuestSkyrimNativeSaveProviderPollCapability(
+        const PartyQuestSkyrimNativeSaveProviderPollCapability&) = delete;
+    PartyQuestSkyrimNativeSaveProviderPollCapability& operator=(
+        const PartyQuestSkyrimNativeSaveProviderPollCapability&) = delete;
+
+    [[nodiscard]] bool IsValid() const noexcept
+    {
+        return m_tryDequeue != nullptr && m_token.IsValid() &&
+            m_runtimeGeneration != 0u;
+    }
+
+    // The production lifecycle owner must serialize PollAndRoute and
+    // Invalidate. Each binding owns one token and one contiguous sequence
+    // domain; it is not a general thread-safe queue wrapper.
+    [[nodiscard]] PartyQuestSkyrimNativeSaveProviderPollResult PollAndRoute(
+        const PartyQuestNativeSaveProviderRegistration& acRegistration,
+        const PartyQuestAsyncSaveRequestIdentity& acReservedIdentity,
+        PartyQuestAsyncSaveContract& aContract,
+        PartyQuestAsyncSaveFinalizationGate& aGate,
+        uint64_t aNowMs) noexcept;
+
+    [[nodiscard]] PartyQuestNativeSaveProviderRegistrationStatus Invalidate(
+        PartyQuestNativeSaveProviderRegistration& aRegistration) noexcept;
+
+private:
+    friend class PartyQuestSkyrimNativeSaveProviderResolver;
+    using TTryDequeue = uint32_t(void*, uint32_t);
+
+    PartyQuestSkyrimNativeSaveProviderPollCapability(
+        TTryDequeue* apTryDequeue,
+        PartyQuestNativeSaveProviderToken&& aToken) noexcept
+        : m_tryDequeue(apTryDequeue),
+          m_token(std::move(aToken)),
+          m_runtimeGeneration(m_token.GetRuntimeGeneration())
+    {
+    }
+
+    TTryDequeue* m_tryDequeue{};
+    PartyQuestNativeSaveProviderToken m_token;
+    PartyQuestNativeSaveEventTransport m_transport;
+    uint64_t m_runtimeGeneration{};
+};
+
 struct PartyQuestSkyrimNativeSaveProviderResolveResult final
 {
     PartyQuestSkyrimNativeSaveProviderResolveStatus Status{
         PartyQuestSkyrimNativeSaveProviderResolveStatus::ProviderUnavailable};
     PartyQuestNativeSaveProviderRegistrationStatus RegistrationStatus{
         PartyQuestNativeSaveProviderRegistrationStatus::InvalidDescriptor};
-    std::optional<PartyQuestNativeSaveProviderToken> Token;
+    std::optional<PartyQuestSkyrimNativeSaveProviderPollCapability>
+        PollCapability;
 
     [[nodiscard]] bool IsRegistered() const noexcept
     {
@@ -36,7 +108,7 @@ struct PartyQuestSkyrimNativeSaveProviderResolveResult final
                 PartyQuestSkyrimNativeSaveProviderResolveStatus::Registered &&
             RegistrationStatus ==
                 PartyQuestNativeSaveProviderRegistrationStatus::Registered &&
-            Token.has_value() && Token->IsValid();
+            PollCapability.has_value() && PollCapability->IsValid();
     }
 };
 
