@@ -277,8 +277,10 @@ TEST_CASE("Overlapping gate begin and post-completion failure fail closed",
     REQUIRE(Complete(contract, gate, identity).Status ==
             PartyQuestAsyncSaveFinalizationStatus::AwaitingRetirement);
 
-    PartyQuestAsyncSaveContractResult contradictory;
-    contradictory.Status = PartyQuestAsyncSaveContractStatus::Failed;
+    auto contradictory = contract.Observe(identity,
+        PartyQuestAsyncSaveArtifact::SkyrimEss,
+        PartyQuestAsyncSaveArtifactOutcome::Failed, 6);
+    REQUIRE(contradictory.Status == PartyQuestAsyncSaveContractStatus::Failed);
     REQUIRE(gate.ObserveContractResult(identity, std::move(contradictory)).Status ==
             PartyQuestAsyncSaveFinalizationStatus::ProtocolViolation);
     const auto retired = gate.ObserveRetirement(

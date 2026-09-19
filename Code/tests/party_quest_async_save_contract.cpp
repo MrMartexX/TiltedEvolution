@@ -148,6 +148,69 @@ TEST_CASE("Duplicate and out-of-order notifications are deterministic", "[quest.
     REQUIRE_FALSE(afterComplete.Completion.has_value());
 }
 
+TEST_CASE("Contradictory failure after completion revokes logical success",
+    "[quest.party-state][async-save-contract][failure][duplicate]")
+{
+    const auto runToComplete = [](PartyQuestAsyncSaveContract& aContract,
+                                   const PartyQuestAsyncSaveRequestIdentity& acIdentity) {
+        REQUIRE(aContract.Begin(acIdentity, 1, false, false).Status ==
+                PartyQuestAsyncSaveContractStatus::Pending);
+        REQUIRE(aContract.Observe(acIdentity, PartyQuestAsyncSaveArtifact::SkyrimEss,
+            PartyQuestAsyncSaveArtifactOutcome::ClosedSuccess, 2).Status ==
+                PartyQuestAsyncSaveContractStatus::Pending);
+        REQUIRE(aContract.Observe(acIdentity, PartyQuestAsyncSaveArtifact::SkseCosave,
+            PartyQuestAsyncSaveArtifactOutcome::ClosedSuccess, 3).Status ==
+                PartyQuestAsyncSaveContractStatus::Pending);
+        REQUIRE(aContract.ObservePublication(acIdentity,
+            PartyQuestAsyncSaveArtifact::SkyrimEss,
+            PartyQuestAsyncSavePublicationOutcome::PublishedSuccess, 4).Status ==
+                PartyQuestAsyncSaveContractStatus::Pending);
+        REQUIRE(aContract.ObservePublication(acIdentity,
+            PartyQuestAsyncSaveArtifact::SkseCosave,
+            PartyQuestAsyncSavePublicationOutcome::PublishedSuccess, 5).Status ==
+                PartyQuestAsyncSaveContractStatus::Complete);
+    };
+
+    SECTION("late close failure")
+    {
+        PartyQuestAsyncSaveContract contract;
+        const auto identity = Identity();
+        runToComplete(contract, identity);
+        const auto failed = contract.Observe(identity,
+            PartyQuestAsyncSaveArtifact::SkyrimEss,
+            PartyQuestAsyncSaveArtifactOutcome::Failed, 6);
+        REQUIRE(failed.Status == PartyQuestAsyncSaveContractStatus::Failed);
+        REQUIRE(failed.CleanupRequired);
+        REQUIRE_FALSE(failed.Completion.has_value());
+    }
+
+    SECTION("late publication failure")
+    {
+        PartyQuestAsyncSaveContract contract;
+        const auto identity = Identity();
+        runToComplete(contract, identity);
+        const auto failed = contract.ObservePublication(identity,
+            PartyQuestAsyncSaveArtifact::SkseCosave,
+            PartyQuestAsyncSavePublicationOutcome::Failed, 6);
+        REQUIRE(failed.Status == PartyQuestAsyncSaveContractStatus::Failed);
+        REQUIRE(failed.CleanupRequired);
+        REQUIRE_FALSE(failed.Completion.has_value());
+    }
+
+    SECTION("late unknown discriminant")
+    {
+        PartyQuestAsyncSaveContract contract;
+        const auto identity = Identity();
+        runToComplete(contract, identity);
+        const auto failed = contract.Observe(identity,
+            static_cast<PartyQuestAsyncSaveArtifact>(0xFF),
+            PartyQuestAsyncSaveArtifactOutcome::ClosedSuccess, 6);
+        REQUIRE(failed.Status == PartyQuestAsyncSaveContractStatus::Failed);
+        REQUIRE(failed.CleanupRequired);
+        REQUIRE_FALSE(failed.Completion.has_value());
+    }
+}
+
 TEST_CASE("Timeout cancellation and clock failure never publish completion", "[quest.party-state][async-save-contract][lifecycle]")
 {
     const auto identity = Identity();

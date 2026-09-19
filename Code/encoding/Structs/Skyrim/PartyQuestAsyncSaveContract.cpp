@@ -141,16 +141,26 @@ PartyQuestAsyncSaveContractResult PartyQuestAsyncSaveContract::Observe(
         return Result(PartyQuestAsyncSaveContractStatus::Stale);
     if (*m_identity != acIdentity)
         return Result(PartyQuestAsyncSaveContractStatus::Stale);
+    if (!IsKnownArtifact(aArtifact) || !IsKnownOutcome(aOutcome))
+    {
+        if (m_status == PartyQuestAsyncSaveContractStatus::Pending ||
+            m_status == PartyQuestAsyncSaveContractStatus::Complete)
+            return Fail(PartyQuestAsyncSaveContractStatus::Failed);
+        return Result(m_status);
+    }
     if (m_status != PartyQuestAsyncSaveContractStatus::Pending)
-        return Result(m_status == PartyQuestAsyncSaveContractStatus::Complete ? PartyQuestAsyncSaveContractStatus::Duplicate : m_status);
+    {
+        if (m_status == PartyQuestAsyncSaveContractStatus::Complete)
+            return aOutcome == PartyQuestAsyncSaveArtifactOutcome::Failed ?
+                Fail(PartyQuestAsyncSaveContractStatus::Failed) :
+                Result(PartyQuestAsyncSaveContractStatus::Duplicate);
+        return Result(m_status);
+    }
     if (!CheckClock(aNowMs))
         return Result(m_status);
 
     // The observer is an ABI boundary. Unknown discriminants must never alias
     // a known artifact or success result after an enum/version mismatch.
-    if (!IsKnownArtifact(aArtifact) || !IsKnownOutcome(aOutcome))
-        return Fail(PartyQuestAsyncSaveContractStatus::Failed);
-
     if (aOutcome == PartyQuestAsyncSaveArtifactOutcome::Failed)
         return Fail(PartyQuestAsyncSaveContractStatus::Failed);
 
@@ -169,13 +179,24 @@ PartyQuestAsyncSaveContractResult PartyQuestAsyncSaveContract::ObservePublicatio
         return Result(PartyQuestAsyncSaveContractStatus::Stale);
     if (*m_identity != acIdentity)
         return Result(PartyQuestAsyncSaveContractStatus::Stale);
+    if (!IsKnownArtifact(aArtifact) || !IsKnownPublicationOutcome(aOutcome))
+    {
+        if (m_status == PartyQuestAsyncSaveContractStatus::Pending ||
+            m_status == PartyQuestAsyncSaveContractStatus::Complete)
+            return Fail(PartyQuestAsyncSaveContractStatus::Failed);
+        return Result(m_status);
+    }
     if (m_status != PartyQuestAsyncSaveContractStatus::Pending)
-        return Result(m_status == PartyQuestAsyncSaveContractStatus::Complete ? PartyQuestAsyncSaveContractStatus::Duplicate : m_status);
+    {
+        if (m_status == PartyQuestAsyncSaveContractStatus::Complete)
+            return aOutcome == PartyQuestAsyncSavePublicationOutcome::Failed ?
+                Fail(PartyQuestAsyncSaveContractStatus::Failed) :
+                Result(PartyQuestAsyncSaveContractStatus::Duplicate);
+        return Result(m_status);
+    }
     if (!CheckClock(aNowMs))
         return Result(m_status);
 
-    if (!IsKnownArtifact(aArtifact) || !IsKnownPublicationOutcome(aOutcome))
-        return Fail(PartyQuestAsyncSaveContractStatus::Failed);
     if (aOutcome == PartyQuestAsyncSavePublicationOutcome::Failed)
         return Fail(PartyQuestAsyncSaveContractStatus::Failed);
 
