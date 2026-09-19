@@ -40,6 +40,47 @@ PartyQuestAsyncSaveFinalizationResult PartyQuestAsyncSaveFinalizationGate::Resul
     return result;
 }
 
+PartyQuestAsyncSaveFinalizationResult
+PartyQuestAsyncSaveFinalizationGate::BeginCoordinated(
+    PartyQuestAsyncSaveContract& aContract,
+    const PartyQuestAsyncSaveRequestIdentity& acIdentity,
+    uint64_t aNowMs,
+    bool aMainPathExists,
+    bool aCosavePathExists) noexcept
+{
+    PartyQuestAsyncSaveContractResult contractResult;
+    try
+    {
+        contractResult = aContract.Begin(
+            acIdentity, aNowMs, aMainPathExists, aCosavePathExists);
+    }
+    catch (...)
+    {
+        return Result(PartyQuestAsyncSaveFinalizationStatus::InvalidInput);
+    }
+
+    if (contractResult.Status != PartyQuestAsyncSaveContractStatus::Pending)
+    {
+        return Result(contractResult.Status == PartyQuestAsyncSaveContractStatus::Busy ?
+            PartyQuestAsyncSaveFinalizationStatus::Busy :
+            PartyQuestAsyncSaveFinalizationStatus::InvalidInput);
+    }
+
+    auto gateResult = Begin(acIdentity);
+    if (gateResult.Status == PartyQuestAsyncSaveFinalizationStatus::Pending)
+        return std::move(gateResult);
+
+    // Native work has not been admitted yet. Roll back the exact logical
+    // reservation so a gate allocation/busy failure cannot wedge the owner.
+    const auto cancelled = aContract.Cancel(acIdentity);
+    if (cancelled.Status != PartyQuestAsyncSaveContractStatus::Cancelled)
+        return Result(PartyQuestAsyncSaveFinalizationStatus::ContractMismatch);
+    const auto retired = aContract.Retire(acIdentity);
+    if (retired.Status != PartyQuestAsyncSaveContractStatus::Inactive)
+        return Result(PartyQuestAsyncSaveFinalizationStatus::ContractMismatch);
+    return std::move(gateResult);
+}
+
 PartyQuestAsyncSaveFinalizationResult PartyQuestAsyncSaveFinalizationGate::Begin(
     const PartyQuestAsyncSaveRequestIdentity& acIdentity) noexcept
 {

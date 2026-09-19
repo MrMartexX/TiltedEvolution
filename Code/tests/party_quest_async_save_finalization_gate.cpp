@@ -85,6 +85,52 @@ TEST_CASE("Logical completion is quarantined without request retirement",
     REQUIRE_FALSE(result.Completion.has_value());
 }
 
+TEST_CASE("Coordinated begin rolls back a half-admitted contract",
+    "[quest.party-state][async-save-finalization][admission]")
+{
+    SECTION("matching admission")
+    {
+        PartyQuestAsyncSaveContract contract;
+        PartyQuestAsyncSaveFinalizationGate gate;
+        const auto identity = Identity();
+        const auto result = gate.BeginCoordinated(
+            contract, identity, 1, false, false);
+        REQUIRE(result.Status == PartyQuestAsyncSaveFinalizationStatus::Pending);
+        REQUIRE(contract.Begin(Identity(51), 2, false, false).Status ==
+                PartyQuestAsyncSaveContractStatus::Busy);
+    }
+
+    SECTION("busy gate cannot strand a fresh contract")
+    {
+        PartyQuestAsyncSaveFinalizationGate gate;
+        PartyQuestAsyncSaveContract firstContract;
+        PartyQuestAsyncSaveContract secondContract;
+        const auto first = Identity();
+        const auto second = Identity(51);
+        REQUIRE(gate.BeginCoordinated(
+            firstContract, first, 1, false, false).Status ==
+                PartyQuestAsyncSaveFinalizationStatus::Pending);
+
+        REQUIRE(gate.BeginCoordinated(
+            secondContract, second, 2, false, false).Status ==
+                PartyQuestAsyncSaveFinalizationStatus::Busy);
+        REQUIRE(secondContract.Begin(second, 3, false, false).Status ==
+                PartyQuestAsyncSaveContractStatus::Pending);
+    }
+
+    SECTION("contract rejection does not touch gate")
+    {
+        PartyQuestAsyncSaveContract contract;
+        PartyQuestAsyncSaveFinalizationGate gate;
+        const auto first = Identity();
+        REQUIRE(gate.BeginCoordinated(
+            contract, first, 1, true, false).Status ==
+                PartyQuestAsyncSaveFinalizationStatus::InvalidInput);
+        REQUIRE(gate.Begin(Identity(51)).Status ==
+                PartyQuestAsyncSaveFinalizationStatus::Pending);
+    }
+}
+
 TEST_CASE("Successful retirement releases matching completion once",
     "[quest.party-state][async-save-finalization]")
 {

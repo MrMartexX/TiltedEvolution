@@ -44,6 +44,18 @@ struct PartyQuestAsyncSaveFinalizationResult
 class PartyQuestAsyncSaveFinalizationGate final
 {
 public:
+    /**
+     * Starts the logical contract and correlation gate as one fail-closed
+     * admission boundary. If gate admission fails after contract admission,
+     * the not-yet-enqueued contract is cancelled and retired before return.
+     */
+    [[nodiscard]] PartyQuestAsyncSaveFinalizationResult BeginCoordinated(
+        PartyQuestAsyncSaveContract& aContract,
+        const PartyQuestAsyncSaveRequestIdentity& acIdentity,
+        uint64_t aNowMs,
+        bool aMainPathExists,
+        bool aCosavePathExists) noexcept;
+
     [[nodiscard]] PartyQuestAsyncSaveFinalizationResult Begin(
         const PartyQuestAsyncSaveRequestIdentity& acIdentity) noexcept;
 
