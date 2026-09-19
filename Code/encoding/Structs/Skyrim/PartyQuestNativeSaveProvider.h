@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 #include <optional>
 
 enum class PartyQuestNativeSaveProviderCapabilityBit : uint64_t
@@ -41,6 +42,15 @@ struct PartyQuestNativeSaveProviderDescriptor final
 };
 
 static_assert(sizeof(PartyQuestNativeSaveProviderDescriptor) == 64u);
+static_assert(offsetof(PartyQuestNativeSaveProviderDescriptor, AbiVersion) == 0u);
+static_assert(offsetof(PartyQuestNativeSaveProviderDescriptor, StructSize) == 4u);
+static_assert(offsetof(PartyQuestNativeSaveProviderDescriptor, EventAbiVersion) == 8u);
+static_assert(offsetof(PartyQuestNativeSaveProviderDescriptor, ImplementationVersion) == 12u);
+static_assert(offsetof(PartyQuestNativeSaveProviderDescriptor, Capabilities) == 16u);
+static_assert(offsetof(PartyQuestNativeSaveProviderDescriptor, RuntimeMajor) == 24u);
+static_assert(offsetof(PartyQuestNativeSaveProviderDescriptor, ProviderFingerprint) == 40u);
+static_assert(offsetof(PartyQuestNativeSaveProviderDescriptor, Reserved0) == 48u);
+static_assert(offsetof(PartyQuestNativeSaveProviderDescriptor, Reserved1) == 56u);
 
 struct PartyQuestNativeSaveProviderPolicy final
 {
