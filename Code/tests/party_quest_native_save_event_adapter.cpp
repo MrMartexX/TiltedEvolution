@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestNativeSaveEventAdapter.h>
+#include <Structs/Skyrim/PartyQuestAsyncSaveEventRouter.h>
 
 #include <catch2/catch.hpp>
 
@@ -26,6 +27,143 @@ std::string SaveName(uint64_t aTransaction, uint64_t aRevision, uint64_t aNonce)
     REQUIRE(written > 0);
     REQUIRE(static_cast<size_t>(written) < text.size());
     return text.data();
+}
+
+PartyQuestAsyncSaveRequestIdentity Identity();
+Buffer Event(
+    const PartyQuestAsyncSaveRequestIdentity& acIdentity,
+    uint8_t aArtifact = 1,
+    uint8_t aPhase = 1,
+    uint8_t aOutcome = 1,
+    uint32_t aNativeError = 0);
+RetiredBuffer RetiredEvent(
+    const PartyQuestAsyncSaveRequestIdentity& acIdentity,
+    uint8_t aOutcome = 1,
+    uint32_t aNativeError = 0);
+
+TEST_CASE("Native save router releases completion only after matching PQS4")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    const auto identity = Identity();
+    REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+
+    const std::array events{
+        Event(identity, 1, 1, 1),
+        Event(identity, 2, 1, 1),
+        Event(identity, 1, 2, 1),
+        Event(identity, 2, 2, 1)};
+    uint64_t now = 101;
+    for (size_t index = 0; index < events.size(); ++index)
+    {
+        auto routed = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
+            events[index].data(), events[index].size(), identity,
+            contract, gate, now++);
+        REQUIRE(routed.Status == PartyQuestAsyncSaveEventRouteStatus::Applied);
+        REQUIRE_FALSE(routed.Finalization.Completion.has_value());
+        REQUIRE(routed.Finalization.Status ==
+            (index + 1 == events.size() ?
+                PartyQuestAsyncSaveFinalizationStatus::AwaitingRetirement :
+                PartyQuestAsyncSaveFinalizationStatus::Pending));
+    }
+
+    const auto retiredPayload = RetiredEvent(identity, 1);
+    auto retired = PartyQuestAsyncSaveEventRouter::ApplyRetirement(
+        retiredPayload.data(), retiredPayload.size(), identity,
+        contract, gate);
+    REQUIRE(retired.Status == PartyQuestAsyncSaveEventRouteStatus::Applied);
+    REQUIRE(retired.Finalization.Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Finalized);
+    REQUIRE(retired.Finalization.RetirementApplied);
+    REQUIRE(retired.Finalization.Completion.has_value());
+    REQUIRE(retired.Finalization.Completion->Matches(identity));
+}
+
+TEST_CASE("Native save router consumes early drain proof without success")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    const auto identity = Identity();
+    REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+
+    const auto retiredPayload = RetiredEvent(identity, 2, 5);
+    auto retired = PartyQuestAsyncSaveEventRouter::ApplyRetirement(
+        retiredPayload.data(), retiredPayload.size(), identity,
+        contract, gate);
+    REQUIRE(retired.Status == PartyQuestAsyncSaveEventRouteStatus::Applied);
+    REQUIRE(retired.Finalization.Status ==
+            PartyQuestAsyncSaveFinalizationStatus::ProtocolViolationRetired);
+    REQUIRE(retired.Finalization.RetirementApplied);
+    REQUIRE_FALSE(retired.Finalization.Completion.has_value());
+}
+
+TEST_CASE("Native save router revokes quarantined completion on late failure")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    const auto identity = Identity();
+    REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+
+    const std::array successes{
+        Event(identity, 1, 1, 1),
+        Event(identity, 2, 1, 1),
+        Event(identity, 1, 2, 1),
+        Event(identity, 2, 2, 1)};
+    uint64_t now = 101;
+    for (const auto& payload : successes)
+    {
+        auto routed = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
+            payload.data(), payload.size(), identity, contract, gate, now++);
+        REQUIRE(routed.Status == PartyQuestAsyncSaveEventRouteStatus::Applied);
+        REQUIRE_FALSE(routed.Finalization.Completion.has_value());
+    }
+
+    const auto lateFailure = Event(identity, 1, 1, 2, 5);
+    auto failed = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
+        lateFailure.data(), lateFailure.size(), identity,
+        contract, gate, now);
+    REQUIRE(failed.Status == PartyQuestAsyncSaveEventRouteStatus::Applied);
+    REQUIRE(failed.Finalization.Status ==
+            PartyQuestAsyncSaveFinalizationStatus::ProtocolViolation);
+    REQUIRE_FALSE(failed.Finalization.Completion.has_value());
+
+    const auto contradictoryRetirement = RetiredEvent(identity, 1);
+    auto retired = PartyQuestAsyncSaveEventRouter::ApplyRetirement(
+        contradictoryRetirement.data(), contradictoryRetirement.size(),
+        identity, contract, gate);
+    REQUIRE(retired.Finalization.Status ==
+            PartyQuestAsyncSaveFinalizationStatus::ProtocolViolationRetired);
+    REQUIRE(retired.Finalization.RetirementApplied);
+    REQUIRE_FALSE(retired.Finalization.Completion.has_value());
+}
+
+TEST_CASE("Native save router rejects stale and malformed callbacks unchanged")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    const auto identity = Identity();
+    REQUIRE(gate.BeginCoordinated(contract, identity, 100, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+
+    auto staleIdentity = identity;
+    ++staleIdentity.RuntimeGeneration;
+    const auto stalePayload = Event(staleIdentity);
+    const auto stale = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
+        stalePayload.data(), stalePayload.size(), identity,
+        contract, gate, 101);
+    REQUIRE(stale.Status == PartyQuestAsyncSaveEventRouteStatus::IdentityMismatch);
+
+    const auto validPayload = Event(identity);
+    const auto malformed = PartyQuestAsyncSaveEventRouter::ApplyArtifact(
+        validPayload.data(), validPayload.size() - 1, identity,
+        contract, gate, 102);
+    REQUIRE(malformed.Status == PartyQuestAsyncSaveEventRouteStatus::Malformed);
+
+    REQUIRE(contract.Begin(staleIdentity, 103, false, false).Status ==
+            PartyQuestAsyncSaveContractStatus::Busy);
 }
 
 PartyQuestAsyncSaveRequestIdentity Identity()
@@ -76,10 +214,10 @@ void WriteId(std::array<uint8_t, Size>& aBuffer, size_t aOffset, uint64_t aHigh,
 
 Buffer Event(
     const PartyQuestAsyncSaveRequestIdentity& acIdentity,
-    uint8_t aArtifact = 1,
-    uint8_t aPhase = 1,
-    uint8_t aOutcome = 1,
-    uint32_t aNativeError = 0)
+    uint8_t aArtifact,
+    uint8_t aPhase,
+    uint8_t aOutcome,
+    uint32_t aNativeError)
 {
     Buffer buffer{};
     WriteU32(buffer, 0, PartyQuestNativeSaveEventAdapter::kAbiVersion);
@@ -112,8 +250,8 @@ Buffer Event(
 
 RetiredBuffer RetiredEvent(
     const PartyQuestAsyncSaveRequestIdentity& acIdentity,
-    uint8_t aOutcome = 1,
-    uint32_t aNativeError = 0)
+    uint8_t aOutcome,
+    uint32_t aNativeError)
 {
     RetiredBuffer buffer{};
     WriteU32(buffer, 0, PartyQuestNativeSaveEventAdapter::kAbiVersion);
