@@ -36,6 +36,22 @@ PartyQuestNativeSaveProviderDescriptor ResearchDescriptor()
     descriptor.Reserved0 = kPartyQuestTask07ResearchProviderMarker;
     return descriptor;
 }
+
+PartyQuestAsyncSaveRequestIdentity TrackedIdentity(uint64_t aNonce = 1u)
+{
+    PartyQuestAsyncSaveRequestIdentity identity;
+    identity.CampaignId = {1u, 2u};
+    identity.PlayerProfileId = {3u, 4u};
+    identity.RuntimeGeneration = 5u;
+    identity.TransactionId = 6u;
+    identity.TargetWorldRevision = 7u;
+    identity.CaptureEpochId = 8u;
+    identity.AttemptNonce = aNonce;
+    identity.SaveName = aNonce == 1u ?
+        "STR_PreRepair_T0000000000000006_R0000000000000007_A0000000000000001" :
+        "STR_PreRepair_T0000000000000006_R0000000000000007_A0000000000000002";
+    return identity;
+}
 }
 
 static_assert(!std::is_copy_constructible_v<PartyQuestNativeSaveProviderToken>);
@@ -59,11 +75,86 @@ using TNativeBeginAndInvoke =
 static_assert(std::is_same_v<
     decltype(&PartyQuestSkyrimNativeSaveProviderOwner::BeginAndInvoke),
     TNativeBeginAndInvoke>);
+using TNativeTrackedBeginAndInvoke =
+    PartyQuestSkyrimNativeSaveTrackedBeginResult (
+        PartyQuestSkyrimNativeSaveProviderOwner::*)(
+            const PartyQuestAsyncSaveRequestIdentity&,
+            uint64_t,
+            bool,
+            bool,
+            PartyQuestSkyrimNativeSaveInvoker,
+            void*) noexcept;
+static_assert(std::is_same_v<
+    decltype(&PartyQuestSkyrimNativeSaveProviderOwner::BeginTrackedAndInvoke),
+    TNativeTrackedBeginAndInvoke>);
+static_assert(!std::is_copy_constructible_v<
+    PartyQuestSkyrimNativeSaveTrackedPollResult>);
+static_assert(std::is_move_constructible_v<
+    PartyQuestSkyrimNativeSaveTrackedPollResult>);
+static_assert(std::is_same_v<
+    decltype(PartyQuestSkyrimNativeSaveProviderBeginInvokeResult::
+        NativeReservationAccepted),
+    bool>);
+using TNativeShutdown = PartyQuestSkyrimNativeSaveProviderOwnerStatus (
+    PartyQuestSkyrimNativeSaveProviderOwner::*)() noexcept;
+static_assert(std::is_same_v<
+    decltype(&PartyQuestSkyrimNativeSaveProviderOwner::Shutdown),
+    TNativeShutdown>);
 
 TEST_CASE("Native save command capability defaults fail closed")
 {
     PartyQuestSkyrimNativeSaveProviderPollCapability capability;
     REQUIRE_FALSE(capability.IsValid());
+}
+
+TEST_CASE("Accepted native reservation remains drain-owned after engine rejection",
+    "[quest.party-state][native-save-provider][tracked-save]")
+{
+    PartyQuestAsyncSaveContract contract;
+    PartyQuestAsyncSaveFinalizationGate gate;
+    PartyQuestAsyncSaveLifecycle lifecycle;
+    const auto identity = TrackedIdentity();
+
+    REQUIRE(gate.BeginCoordinated(
+        contract, identity, 100u, false, false).Status ==
+            PartyQuestAsyncSaveFinalizationStatus::Pending);
+    PartyQuestSkyrimNativeSaveProviderBeginInvokeResult native;
+    native.Status = PartyQuestSkyrimNativeSaveProviderCommandStatus::Accepted;
+    native.EngineInvocationAttempted = true;
+    native.EngineInvocationSucceeded = false;
+    native.NativeReservationAccepted = true;
+
+    const auto admitted = lifecycle.ObserveReservation(identity,
+        native.NativeReservationAccepted ?
+            PartyQuestAsyncSaveReservationOutcome::Accepted :
+            PartyQuestAsyncSaveReservationOutcome::Rejected);
+    REQUIRE(admitted.DrainRequired);
+    REQUIRE_FALSE(admitted.SafeToInvalidate);
+    REQUIRE(lifecycle.CloseAdmission().CancelRequired);
+    REQUIRE(lifecycle.ObserveCancelRequested(identity).DrainRequired);
+    REQUIRE(lifecycle.ObserveCompletion(identity,
+        PartyQuestAsyncSavePhysicalOutcome::Failed).DrainRequired);
+    const auto retired = lifecycle.ObserveRetirement(identity);
+    REQUIRE(retired.SafeToInvalidate);
+    REQUIRE_FALSE(retired.ConsumptionAuthorized);
+}
+
+TEST_CASE("Tracked native save stale retirement cannot release the active request",
+    "[quest.party-state][native-save-provider][tracked-save]")
+{
+    PartyQuestAsyncSaveLifecycle lifecycle;
+    const auto first = TrackedIdentity();
+    const auto second = TrackedIdentity(2u);
+    REQUIRE(lifecycle.ObserveReservation(first,
+        PartyQuestAsyncSaveReservationOutcome::Accepted).DrainRequired);
+    REQUIRE(lifecycle.ObserveRetirement(second).Status ==
+            PartyQuestAsyncSaveLifecycleStatus::Stale);
+    REQUIRE_FALSE(lifecycle.ObserveRetirement(second).SafeToInvalidate);
+    REQUIRE(lifecycle.ObserveCompletion(first,
+        PartyQuestAsyncSavePhysicalOutcome::Succeeded).DrainRequired);
+    REQUIRE(lifecycle.ObserveRetirement(first).ConsumptionAuthorized);
+    REQUIRE(lifecycle.ObserveReservation(second,
+        PartyQuestAsyncSaveReservationOutcome::Accepted).DrainRequired);
 }
 
 TEST_CASE("Native save provider descriptor is exact and fail closed",

@@ -492,6 +492,7 @@ PartyQuestSkyrimNativeSaveProviderPollCapability::BeginAndInvoke(
         return result;
 
     result.Status = PartyQuestSkyrimNativeSaveProviderCommandStatus::Accepted;
+    result.NativeReservationAccepted = true;
     result.EngineInvocationAttempted = true;
     const auto engineResult =
         InvokeSaveSafely(apInvoker, apContext, acIdentity.SaveName.c_str());

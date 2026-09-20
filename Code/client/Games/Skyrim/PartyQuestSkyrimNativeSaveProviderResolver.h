@@ -60,6 +60,9 @@ struct PartyQuestSkyrimNativeSaveProviderBeginInvokeResult final
         PartyQuestSkyrimNativeSaveProviderCommandStatus::ProviderRejected};
     bool EngineInvocationAttempted{};
     bool EngineInvocationSucceeded{};
+    // Independent of Status: once true, only exact native retirement releases
+    // the accepted request, including uncertain engine/cancel failures.
+    bool NativeReservationAccepted{};
 };
 
 using PartyQuestSkyrimNativeSaveInvoker = bool (*)(

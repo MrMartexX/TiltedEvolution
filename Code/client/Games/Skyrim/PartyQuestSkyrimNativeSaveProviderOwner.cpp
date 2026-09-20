@@ -6,7 +6,7 @@
 PartyQuestSkyrimNativeSaveProviderOwner::
     ~PartyQuestSkyrimNativeSaveProviderOwner() noexcept
 {
-    Shutdown();
+    (void)Shutdown();
 }
 
 PartyQuestSkyrimNativeSaveProviderOwnerBindResult
@@ -37,6 +37,12 @@ PartyQuestSkyrimNativeSaveProviderOwner::Bind(
         return result;
     }
     if (m_operationActive)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderOwnerStatus::AdmissionClosed;
+        return result;
+    }
+    if (HasDrainLocked())
     {
         result.Status =
             PartyQuestSkyrimNativeSaveProviderOwnerStatus::AdmissionClosed;
@@ -113,7 +119,7 @@ PartyQuestSkyrimNativeSaveProviderOwner::Begin(
     std::lock_guard lock(m_mutex);
     if (m_shutdown.load(std::memory_order_acquire) ||
         m_revoking.load(std::memory_order_acquire) || m_operationActive ||
-        !m_accepting ||
+        !m_accepting || m_tracked ||
         !m_capability)
         return PartyQuestSkyrimNativeSaveProviderCommandStatus::ProviderRejected;
     return m_capability->Begin(m_registration, acIdentity);
@@ -143,7 +149,7 @@ PartyQuestSkyrimNativeSaveProviderOwner::BeginAndInvoke(
             std::lock_guard lock(m_mutex);
             if (m_shutdown.load(std::memory_order_acquire) ||
                 m_revoking.load(std::memory_order_acquire) || !m_accepting ||
-                m_operationActive || !m_capability)
+                m_operationActive || m_tracked || !m_capability)
             {
                 return result;
             }
@@ -167,6 +173,219 @@ PartyQuestSkyrimNativeSaveProviderOwner::BeginAndInvoke(
     }
 }
 
+PartyQuestSkyrimNativeSaveTrackedBeginResult
+PartyQuestSkyrimNativeSaveProviderOwner::BeginTrackedAndInvoke(
+    const PartyQuestAsyncSaveRequestIdentity& acIdentity,
+    uint64_t aNowMs,
+    bool aMainPathExists,
+    bool aCosavePathExists,
+    PartyQuestSkyrimNativeSaveInvoker apInvoker,
+    void* apContext) noexcept
+{
+    PartyQuestSkyrimNativeSaveTrackedBeginResult result;
+    if (!apInvoker || !acIdentity.IsValid())
+        return result;
+
+    std::unique_ptr<TrackedRequest> tracked;
+    try
+    {
+        tracked = std::make_unique<TrackedRequest>(acIdentity);
+    }
+    catch (...)
+    {
+        return result;
+    }
+    const auto coordinated = tracked->Gate.BeginCoordinated(
+        tracked->Contract, tracked->Identity, aNowMs,
+        aMainPathExists, aCosavePathExists);
+    if (coordinated.Status !=
+        PartyQuestAsyncSaveFinalizationStatus::Pending)
+    {
+        result.Status = PartyQuestSkyrimNativeSaveProviderCommandStatus::
+            InvalidRequest;
+        return result;
+    }
+    const auto reserved = tracked->Lifecycle.ObserveReservation(
+        tracked->Identity,
+        PartyQuestAsyncSaveReservationOutcome::Accepted);
+    if (reserved.Status != PartyQuestAsyncSaveLifecycleStatus::Active ||
+        !reserved.DrainRequired)
+    {
+        result.Status = PartyQuestSkyrimNativeSaveProviderCommandStatus::
+            InvalidRequest;
+        return result;
+    }
+
+    PartyQuestSkyrimNativeSaveProviderPollCapability* pCapability = nullptr;
+    TrackedRequest* pTracked = nullptr;
+    try
+    {
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_shutdown.load(std::memory_order_acquire) ||
+                m_revoking.load(std::memory_order_acquire) || !m_accepting ||
+                m_operationActive || !m_capability || HasDrainLocked())
+            {
+                return result;
+            }
+            m_operationActive = true;
+            m_operationThread = std::this_thread::get_id();
+            pCapability = &*m_capability;
+            m_tracked = std::move(tracked);
+            pTracked = m_tracked.get();
+        }
+
+        const auto native = pCapability->BeginAndInvoke(
+            m_registration, pTracked->Identity, apInvoker, apContext);
+        result.Status = native.Status;
+        result.EngineInvocationAttempted = native.EngineInvocationAttempted;
+        result.EngineInvocationSucceeded = native.EngineInvocationSucceeded;
+        result.NativeReservationAccepted = native.NativeReservationAccepted;
+
+        {
+            std::lock_guard lock(m_mutex);
+            if (native.NativeReservationAccepted)
+            {
+                if (!m_accepting || m_deferredInvalidation ||
+                    m_revoking.load(std::memory_order_acquire) ||
+                    m_shutdown.load(std::memory_order_acquire))
+                {
+                    (void)m_tracked->Lifecycle.CloseAdmission();
+                    m_accepting = false;
+                }
+                result.DrainRequired = true;
+            }
+            else
+            {
+                m_tracked.reset();
+            }
+        }
+        FinishActiveOperation();
+        return result;
+    }
+    catch (...)
+    {
+        if (pCapability)
+            FinishActiveOperation();
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderCommandStatus::NativeCallFailed;
+        return result;
+    }
+}
+
+PartyQuestSkyrimNativeSaveTrackedPollResult
+PartyQuestSkyrimNativeSaveProviderOwner::PollTracked(uint64_t aNowMs) noexcept
+{
+    PartyQuestSkyrimNativeSaveTrackedPollResult result;
+    PartyQuestSkyrimNativeSaveProviderPollCapability* pCapability = nullptr;
+    TrackedRequest* pTracked = nullptr;
+    try
+    {
+        {
+            std::lock_guard lock(m_mutex);
+            if (m_operationActive || !m_capability || !m_tracked)
+                return result;
+            m_operationActive = true;
+            m_operationThread = std::this_thread::get_id();
+            pCapability = &*m_capability;
+            pTracked = m_tracked.get();
+        }
+
+        auto polled = pCapability->PollAndRoute(
+            m_registration, pTracked->Identity, pTracked->Contract,
+            pTracked->Gate, aNowMs);
+        result.Status = polled.Status;
+
+        {
+            std::lock_guard lock(m_mutex);
+            if (polled.Status ==
+                    PartyQuestSkyrimNativeSaveProviderPollStatus::Applied &&
+                polled.Transport.Route.Finalization.RetirementApplied)
+            {
+                if (!m_accepting || m_deferredInvalidation ||
+                    m_revoking.load(std::memory_order_acquire) ||
+                    m_shutdown.load(std::memory_order_acquire))
+                {
+                    (void)pTracked->Lifecycle.CloseAdmission();
+                }
+                const bool succeeded = polled.Transport.Route.Finalization.
+                    Completion.has_value();
+                (void)pTracked->Lifecycle.ObserveCompletion(
+                    pTracked->Identity,
+                    succeeded ? PartyQuestAsyncSavePhysicalOutcome::Succeeded :
+                                PartyQuestAsyncSavePhysicalOutcome::Failed);
+                const auto retired = pTracked->Lifecycle.ObserveRetirement(
+                    pTracked->Identity);
+                result.Retired = retired.SafeToInvalidate;
+                if (retired.ConsumptionAuthorized &&
+                    polled.Transport.Route.Finalization.Completion)
+                {
+                    result.Completion.emplace(std::move(
+                        *polled.Transport.Route.Finalization.Completion));
+                }
+                m_tracked.reset();
+            }
+        }
+        FinishActiveOperation();
+        return result;
+    }
+    catch (...)
+    {
+        if (pCapability)
+            FinishActiveOperation();
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderPollStatus::NativeCallFailed;
+        return result;
+    }
+}
+
+PartyQuestSkyrimNativeSaveProviderOwnerStatus
+PartyQuestSkyrimNativeSaveProviderOwner::CloseAdmissionAndCancelForDrain()
+    noexcept
+{
+    PartyQuestSkyrimNativeSaveProviderPollCapability* pCapability = nullptr;
+    uint64_t nonce = 0u;
+    try
+    {
+        {
+            std::lock_guard lock(m_mutex);
+            m_accepting = false;
+            if (m_operationActive)
+                return PartyQuestSkyrimNativeSaveProviderOwnerStatus::DrainPending;
+            if (!m_tracked)
+                return PartyQuestSkyrimNativeSaveProviderOwnerStatus::Invalidated;
+            const auto closed = m_tracked->Lifecycle.CloseAdmission();
+            if (!closed.DrainRequired)
+                return PartyQuestSkyrimNativeSaveProviderOwnerStatus::Invalidated;
+            if (!m_capability)
+                return PartyQuestSkyrimNativeSaveProviderOwnerStatus::DrainPending;
+            m_operationActive = true;
+            m_operationThread = std::this_thread::get_id();
+            pCapability = &*m_capability;
+            nonce = m_tracked->Identity.AttemptNonce;
+        }
+        const auto cancelStatus =
+            pCapability->Cancel(m_registration, nonce);
+        {
+            std::lock_guard lock(m_mutex);
+            if (cancelStatus ==
+                    PartyQuestSkyrimNativeSaveProviderCommandStatus::Accepted &&
+                m_tracked && m_tracked->Identity.AttemptNonce == nonce)
+                (void)m_tracked->Lifecycle.ObserveCancelRequested(
+                    m_tracked->Identity);
+        }
+        FinishActiveOperation();
+        return PartyQuestSkyrimNativeSaveProviderOwnerStatus::DrainPending;
+    }
+    catch (...)
+    {
+        if (pCapability)
+            FinishActiveOperation();
+        return PartyQuestSkyrimNativeSaveProviderOwnerStatus::
+            SynchronizationFailed;
+    }
+}
+
 PartyQuestSkyrimNativeSaveProviderCommandStatus
 PartyQuestSkyrimNativeSaveProviderOwner::Cancel(
     uint64_t aAttemptNonce) noexcept try
@@ -177,7 +396,7 @@ PartyQuestSkyrimNativeSaveProviderOwner::Cancel(
     std::lock_guard lock(m_mutex);
     if (m_shutdown.load(std::memory_order_acquire) ||
         m_revoking.load(std::memory_order_acquire) || m_operationActive ||
-        !m_accepting ||
+        !m_accepting || m_tracked ||
         !m_capability)
         return PartyQuestSkyrimNativeSaveProviderCommandStatus::ProviderRejected;
     return m_capability->Cancel(m_registration, aAttemptNonce);
@@ -200,7 +419,7 @@ PartyQuestSkyrimNativeSaveProviderOwner::PollAndRoute(
     std::lock_guard lock(m_mutex);
     if (m_shutdown.load(std::memory_order_acquire) ||
         m_revoking.load(std::memory_order_acquire) || m_operationActive ||
-        !m_accepting ||
+        !m_accepting || m_tracked ||
         !m_capability)
         return {};
     return m_capability->PollAndRoute(
@@ -231,6 +450,11 @@ PartyQuestSkyrimNativeSaveProviderOwner::Invalidate() noexcept try
             return !m_operationActive;
         });
     }
+    if (HasDrainLocked())
+    {
+        (void)m_tracked->Lifecycle.CloseAdmission();
+        return PartyQuestSkyrimNativeSaveProviderOwnerStatus::DrainPending;
+    }
     InvalidateLocked();
     return PartyQuestSkyrimNativeSaveProviderOwnerStatus::Invalidated;
 }
@@ -240,7 +464,8 @@ catch (...)
         SynchronizationFailed;
 }
 
-void PartyQuestSkyrimNativeSaveProviderOwner::Shutdown() noexcept
+PartyQuestSkyrimNativeSaveProviderOwnerStatus
+PartyQuestSkyrimNativeSaveProviderOwner::Shutdown() noexcept
 {
     m_shutdown.store(true, std::memory_order_release);
     m_revoking.store(true, std::memory_order_release);
@@ -252,16 +477,25 @@ void PartyQuestSkyrimNativeSaveProviderOwner::Shutdown() noexcept
         {
             m_deferredInvalidation = true;
             if (m_operationThread == std::this_thread::get_id())
-                return;
+                return PartyQuestSkyrimNativeSaveProviderOwnerStatus::
+                    InvalidationDeferred;
             m_operationDrained.wait(lock, [this]() noexcept
             {
                 return !m_operationActive;
             });
         }
+        if (HasDrainLocked())
+        {
+            (void)m_tracked->Lifecycle.CloseAdmission();
+            return PartyQuestSkyrimNativeSaveProviderOwnerStatus::DrainPending;
+        }
         InvalidateLocked();
+        return PartyQuestSkyrimNativeSaveProviderOwnerStatus::Invalidated;
     }
     catch (...)
     {
+        return PartyQuestSkyrimNativeSaveProviderOwnerStatus::
+            SynchronizationFailed;
     }
 }
 
@@ -269,12 +503,38 @@ void PartyQuestSkyrimNativeSaveProviderOwner::FinishActiveOperation() noexcept
 {
     try
     {
-        std::lock_guard lock(m_mutex);
+        PartyQuestSkyrimNativeSaveProviderPollCapability* pCapability = nullptr;
+        uint64_t cancelNonce = 0u;
+        std::unique_lock lock(m_mutex);
+        if (m_tracked && !m_accepting)
+        {
+            const auto closed = m_tracked->Lifecycle.CloseAdmission();
+            if (closed.CancelRequired && m_capability)
+            {
+                pCapability = &*m_capability;
+                cancelNonce = m_tracked->Identity.AttemptNonce;
+            }
+        }
+        if (pCapability)
+        {
+            lock.unlock();
+            const auto cancelStatus =
+                pCapability->Cancel(m_registration, cancelNonce);
+            lock.lock();
+            if (cancelStatus ==
+                    PartyQuestSkyrimNativeSaveProviderCommandStatus::Accepted &&
+                m_tracked &&
+                m_tracked->Identity.AttemptNonce == cancelNonce)
+            {
+                (void)m_tracked->Lifecycle.ObserveCancelRequested(
+                    m_tracked->Identity);
+            }
+        }
         m_operationActive = false;
         m_operationThread = {};
-        if (m_deferredInvalidation ||
+        if ((m_deferredInvalidation ||
             m_revoking.load(std::memory_order_acquire) ||
-            m_shutdown.load(std::memory_order_acquire))
+            m_shutdown.load(std::memory_order_acquire)) && !HasDrainLocked())
         {
             InvalidateLocked();
         }
@@ -297,6 +557,11 @@ void PartyQuestSkyrimNativeSaveProviderOwner::InvalidateLocked() noexcept
         m_capability.reset();
     }
     m_runtimeGeneration = 0u;
+}
+
+bool PartyQuestSkyrimNativeSaveProviderOwner::HasDrainLocked() const noexcept
+{
+    return m_tracked && m_tracked->Lifecycle.Current().DrainRequired;
 }
 
 bool PartyQuestSkyrimNativeSaveProviderOwner::IsBound() const noexcept try

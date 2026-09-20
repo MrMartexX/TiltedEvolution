@@ -1,13 +1,16 @@
 #pragma once
 
 #include <Games/Skyrim/PartyQuestSkyrimNativeSaveProviderResolver.h>
+#include <Structs/Skyrim/PartyQuestAsyncSaveLifecycle.h>
 
 #include <filesystem>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <thread>
+#include <utility>
 
 enum class PartyQuestSkyrimNativeSaveProviderOwnerStatus : uint8_t
 {
@@ -19,7 +22,26 @@ enum class PartyQuestSkyrimNativeSaveProviderOwnerStatus : uint8_t
     StaleGeneration,
     Invalidated,
     InvalidationDeferred,
+    DrainPending,
     SynchronizationFailed
+};
+
+struct PartyQuestSkyrimNativeSaveTrackedBeginResult final
+{
+    PartyQuestSkyrimNativeSaveProviderCommandStatus Status{
+        PartyQuestSkyrimNativeSaveProviderCommandStatus::ProviderRejected};
+    bool EngineInvocationAttempted{};
+    bool EngineInvocationSucceeded{};
+    bool NativeReservationAccepted{};
+    bool DrainRequired{};
+};
+
+struct PartyQuestSkyrimNativeSaveTrackedPollResult final
+{
+    PartyQuestSkyrimNativeSaveProviderPollStatus Status{
+        PartyQuestSkyrimNativeSaveProviderPollStatus::ProviderRejected};
+    bool Retired{};
+    std::optional<PartyQuestAsyncSaveCompletion> Completion;
 };
 
 struct PartyQuestSkyrimNativeSaveProviderOwnerBindResult final
@@ -51,10 +73,12 @@ struct PartyQuestSkyrimNativeSaveProviderOwnerBindResult final
  * and is forbidden.
  *
  * This owner does not enable capture or register itself in production.
- * BeginAndInvoke is the sole safe reservation-to-engine-admission boundary:
- * it marks one active operation, executes outside the state mutex, and defers
- * same-thread revocation until that operation returns. The exact generation
- * lease is held by the capability across both calls.
+ * BeginTrackedAndInvoke is the only request-owning path suitable for future
+ * capture wiring. It preallocates correlation state before native reservation,
+ * keeps the exact request drain-owned through physical retirement, and defers
+ * same-thread revocation while the compound native/engine call is active. The
+ * exact generation lease is held by the capability across reservation and
+ * engine admission.
  */
 class PartyQuestSkyrimNativeSaveProviderOwner final
 {
@@ -82,6 +106,23 @@ public:
         const PartyQuestAsyncSaveRequestIdentity& acIdentity,
         PartyQuestSkyrimNativeSaveInvoker apInvoker,
         void* apContext) noexcept;
+    [[nodiscard]] PartyQuestSkyrimNativeSaveTrackedBeginResult
+    BeginTrackedAndInvoke(
+        const PartyQuestAsyncSaveRequestIdentity& acIdentity,
+        uint64_t aNowMs,
+        bool aMainPathExists,
+        bool aCosavePathExists,
+        PartyQuestSkyrimNativeSaveInvoker apInvoker,
+        void* apContext) noexcept;
+    // Polling remains available after admission closes. A completion is
+    // released only from the exact authenticated retirement event and only
+    // while the tracked lifecycle still authorizes publication.
+    [[nodiscard]] PartyQuestSkyrimNativeSaveTrackedPollResult
+    PollTracked(uint64_t aNowMs) noexcept;
+    // Revokes logical authority immediately and requests native cancellation,
+    // but deliberately retains the capability until exact retirement.
+    [[nodiscard]] PartyQuestSkyrimNativeSaveProviderOwnerStatus
+    CloseAdmissionAndCancelForDrain() noexcept;
     [[nodiscard]] PartyQuestSkyrimNativeSaveProviderCommandStatus Cancel(
         uint64_t aAttemptNonce) noexcept;
     [[nodiscard]] PartyQuestSkyrimNativeSaveProviderPollResult PollAndRoute(
@@ -92,13 +133,29 @@ public:
 
     [[nodiscard]] PartyQuestSkyrimNativeSaveProviderOwnerStatus
     Invalidate() noexcept;
-    void Shutdown() noexcept;
+    // DrainPending is a hard P0-C handoff requirement: the owner must remain
+    // alive and PollTracked must continue until retirement before destruction.
+    PartyQuestSkyrimNativeSaveProviderOwnerStatus Shutdown() noexcept;
 
     [[nodiscard]] bool IsBound() const noexcept;
     [[nodiscard]] bool IsShutdown() const noexcept;
     [[nodiscard]] uint64_t GetRuntimeGeneration() const noexcept;
 
 private:
+    struct TrackedRequest final
+    {
+        explicit TrackedRequest(PartyQuestAsyncSaveRequestIdentity aIdentity)
+            : Identity(std::move(aIdentity))
+        {
+        }
+
+        PartyQuestAsyncSaveRequestIdentity Identity;
+        PartyQuestAsyncSaveContract Contract;
+        PartyQuestAsyncSaveFinalizationGate Gate;
+        PartyQuestAsyncSaveLifecycle Lifecycle;
+    };
+
+    [[nodiscard]] bool HasDrainLocked() const noexcept;
     void FinishActiveOperation() noexcept;
     void InvalidateLocked() noexcept;
 
@@ -106,6 +163,7 @@ private:
     std::condition_variable m_operationDrained;
     PartyQuestNativeSaveProviderRegistration m_registration;
     std::optional<PartyQuestSkyrimNativeSaveProviderPollCapability> m_capability;
+    std::unique_ptr<TrackedRequest> m_tracked;
     uint64_t m_runtimeGeneration{};
     bool m_accepting{};
     bool m_operationActive{};
