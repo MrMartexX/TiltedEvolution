@@ -50,6 +50,15 @@ static_assert(!std::is_copy_constructible_v<
     PartyQuestSkyrimNativeSaveProviderOwner>);
 static_assert(!std::is_move_constructible_v<
     PartyQuestSkyrimNativeSaveProviderOwner>);
+using TNativeBeginAndInvoke =
+    PartyQuestSkyrimNativeSaveProviderBeginInvokeResult (
+        PartyQuestSkyrimNativeSaveProviderOwner::*)(
+            const PartyQuestAsyncSaveRequestIdentity&,
+            PartyQuestSkyrimNativeSaveInvoker,
+            void*) noexcept;
+static_assert(std::is_same_v<
+    decltype(&PartyQuestSkyrimNativeSaveProviderOwner::BeginAndInvoke),
+    TNativeBeginAndInvoke>);
 
 TEST_CASE("Native save command capability defaults fail closed")
 {

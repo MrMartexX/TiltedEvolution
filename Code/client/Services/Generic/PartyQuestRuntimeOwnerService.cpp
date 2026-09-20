@@ -93,18 +93,20 @@ void LogLifecycleFailure(
         acResult.GuardHeld);
 }
 
-void RevokeNativeSaveProvider(
+[[nodiscard]] bool RevokeNativeSaveProvider(
     PartyQuestSkyrimNativeSaveProviderOwner& aOwner,
     const char* acBoundary) noexcept
 {
     const auto status = aOwner.Invalidate();
-    if (status ==
-        PartyQuestSkyrimNativeSaveProviderOwnerStatus::SynchronizationFailed)
+    if (status != PartyQuestSkyrimNativeSaveProviderOwnerStatus::Invalidated)
     {
         spdlog::error(
-            "PartyQuest native save provider revocation failed closed at {}",
-            acBoundary);
+            "PartyQuest native save provider revocation did not complete at {}: status={}",
+            acBoundary,
+            static_cast<uint32_t>(status));
+        return false;
     }
+    return true;
 }
 
 [[nodiscard]] constexpr const char* BootstrapStatusName(
@@ -241,7 +243,8 @@ PartyQuestRuntimeOwnerService::~PartyQuestRuntimeOwnerService() noexcept
 
 void PartyQuestRuntimeOwnerService::OnConnected(const ConnectedEvent&) noexcept
 {
-    RevokeNativeSaveProvider(m_nativeSaveProvider, "connect");
+    if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "connect"))
+        return;
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     const auto status = owner.ApplyClientBoundary(
         PartyQuestRuntimeOwner::ClientBoundary::Connected);
@@ -256,7 +259,8 @@ void PartyQuestRuntimeOwnerService::OnConnected(const ConnectedEvent&) noexcept
 void PartyQuestRuntimeOwnerService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
     m_bootstrapSignal.Reset();
-    RevokeNativeSaveProvider(m_nativeSaveProvider, "disconnect");
+    if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "disconnect"))
+        return;
 
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(
@@ -266,7 +270,8 @@ void PartyQuestRuntimeOwnerService::OnDisconnected(const DisconnectedEvent&) noe
 
 void PartyQuestRuntimeOwnerService::OnPartyJoined(const PartyJoinedEvent&) noexcept
 {
-    RevokeNativeSaveProvider(m_nativeSaveProvider, "party-join");
+    if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "party-join"))
+        return;
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     const auto status = owner.ApplyClientBoundary(
         PartyQuestRuntimeOwner::ClientBoundary::PartyJoined);
@@ -281,7 +286,8 @@ void PartyQuestRuntimeOwnerService::OnPartyJoined(const PartyJoinedEvent&) noexc
 void PartyQuestRuntimeOwnerService::OnPartyLeft(const PartyLeftEvent&) noexcept
 {
     m_bootstrapSignal.Reset();
-    RevokeNativeSaveProvider(m_nativeSaveProvider, "party-leave");
+    if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "party-leave"))
+        return;
 
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(
@@ -311,7 +317,8 @@ BSTEventResult PartyQuestRuntimeOwnerService::OnEvent(
     // The engine lifecycle hook has already advanced the generation. Revoke
     // the old provider token before publishing a retry edge; a stale binding
     // must never consume events from the newly loaded character.
-    RevokeNativeSaveProvider(m_nativeSaveProvider, "load-game");
+    if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "load-game"))
+        return BSTEventResult::kOk;
     // This event means the character-load lifecycle produced new evidence that
     // may include a freshly persisted SKSE lineage. It grants no authority by
     // itself; the resolver revalidates the bridge and generation on consumption.
@@ -353,9 +360,12 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
         const auto* pSession = sessionOwner.GetRuntimeSession();
         if (!pSession || pSession->GetCampaignId() != *campaign)
         {
-            RevokeNativeSaveProvider(
-                m_nativeSaveProvider,
-                "campaign-switch-bootstrap");
+            if (!RevokeNativeSaveProvider(
+                    m_nativeSaveProvider,
+                    "campaign-switch-bootstrap"))
+            {
+                return;
+            }
             const auto switched = sessionOwner.PrepareAndRelease(
                 PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
             if (!switched.CanProceed())

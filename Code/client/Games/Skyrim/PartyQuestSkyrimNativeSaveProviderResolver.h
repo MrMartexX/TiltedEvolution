@@ -54,6 +54,18 @@ enum class PartyQuestSkyrimNativeSaveProviderCommandStatus : uint8_t
     NativeQueuePoisoned
 };
 
+struct PartyQuestSkyrimNativeSaveProviderBeginInvokeResult final
+{
+    PartyQuestSkyrimNativeSaveProviderCommandStatus Status{
+        PartyQuestSkyrimNativeSaveProviderCommandStatus::ProviderRejected};
+    bool EngineInvocationAttempted{};
+    bool EngineInvocationSucceeded{};
+};
+
+using PartyQuestSkyrimNativeSaveInvoker = bool (*)(
+    void*,
+    const char*) noexcept;
+
 class PartyQuestSkyrimNativeSaveProviderPollCapability final
 {
 public:
@@ -82,6 +94,13 @@ public:
     [[nodiscard]] PartyQuestSkyrimNativeSaveProviderCommandStatus Begin(
         const PartyQuestNativeSaveProviderRegistration& acRegistration,
         const PartyQuestAsyncSaveRequestIdentity& acIdentity) noexcept;
+
+    [[nodiscard]] PartyQuestSkyrimNativeSaveProviderBeginInvokeResult
+    BeginAndInvoke(
+        const PartyQuestNativeSaveProviderRegistration& acRegistration,
+        const PartyQuestAsyncSaveRequestIdentity& acIdentity,
+        PartyQuestSkyrimNativeSaveInvoker apInvoker,
+        void* apContext) noexcept;
 
     [[nodiscard]] PartyQuestSkyrimNativeSaveProviderCommandStatus Cancel(
         const PartyQuestNativeSaveProviderRegistration& acRegistration,

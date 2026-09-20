@@ -341,6 +341,24 @@ private:
         return NativeBoolCallResult::Failed;
     }
 }
+
+[[nodiscard]] NativeBoolCallResult InvokeSaveSafely(
+    PartyQuestSkyrimNativeSaveInvoker apInvoker,
+    void* apContext,
+    const char* acSaveName) noexcept
+{
+    if (!apInvoker || !acSaveName)
+        return NativeBoolCallResult::Rejected;
+    __try
+    {
+        return apInvoker(apContext, acSaveName) ?
+            NativeBoolCallResult::Accepted : NativeBoolCallResult::Rejected;
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return NativeBoolCallResult::Failed;
+    }
+}
 } // namespace
 
 PartyQuestSkyrimNativeSaveProviderCommandStatus
@@ -414,6 +432,94 @@ PartyQuestSkyrimNativeSaveProviderPollCapability::Cancel(
     return nativeResult == NativeBoolCallResult::Accepted ?
         PartyQuestSkyrimNativeSaveProviderCommandStatus::Accepted :
         PartyQuestSkyrimNativeSaveProviderCommandStatus::ProviderRejected;
+}
+
+PartyQuestSkyrimNativeSaveProviderBeginInvokeResult
+PartyQuestSkyrimNativeSaveProviderPollCapability::BeginAndInvoke(
+    const PartyQuestNativeSaveProviderRegistration& acRegistration,
+    const PartyQuestAsyncSaveRequestIdentity& acIdentity,
+    PartyQuestSkyrimNativeSaveInvoker apInvoker,
+    void* apContext) noexcept
+{
+    PartyQuestSkyrimNativeSaveProviderBeginInvokeResult result;
+    if (!apInvoker || !acIdentity.IsValid())
+    {
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderCommandStatus::InvalidRequest;
+        return result;
+    }
+    if (m_poisoned)
+    {
+        result.Status = PartyQuestSkyrimNativeSaveProviderCommandStatus::
+            NativeQueuePoisoned;
+        return result;
+    }
+    if (!IsValid() || acRegistration.Validate(m_token, m_runtimeGeneration) !=
+            PartyQuestNativeSaveProviderRegistrationStatus::Current)
+    {
+        return result;
+    }
+
+    const auto encoded = PartyQuestNativeSaveRequestEncoder::Encode(acIdentity);
+    if (encoded.Status != PartyQuestNativeSaveRequestEncodeStatus::Encoded ||
+        !encoded.Request)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderCommandStatus::InvalidRequest;
+        return result;
+    }
+
+    // One generation lease spans both native reservation and engine request
+    // admission. Lifecycle invalidation therefore cannot complete in the gap.
+    auto lease = PartyQuestRuntimeGenerationFence::GetProcessFence().TryAcquire(
+        m_runtimeGeneration);
+    if (!lease || !lease->IsValid())
+    {
+        result.Status = PartyQuestSkyrimNativeSaveProviderCommandStatus::
+            GenerationUnavailable;
+        return result;
+    }
+
+    const auto nativeResult = BeginSafely(m_begin, *encoded.Request);
+    if (nativeResult == NativeBoolCallResult::Failed)
+    {
+        m_poisoned = true;
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderCommandStatus::NativeCallFailed;
+        return result;
+    }
+    if (nativeResult != NativeBoolCallResult::Accepted)
+        return result;
+
+    result.Status = PartyQuestSkyrimNativeSaveProviderCommandStatus::Accepted;
+    result.EngineInvocationAttempted = true;
+    const auto engineResult =
+        InvokeSaveSafely(apInvoker, apContext, acIdentity.SaveName.c_str());
+    result.EngineInvocationSucceeded =
+        engineResult == NativeBoolCallResult::Accepted;
+    if (engineResult == NativeBoolCallResult::Rejected)
+    {
+        // The native side owns the accepted reservation. Ask it to retire a
+        // request which the engine explicitly refused to admit.
+        const auto cancelResult = CancelSafely(
+            m_cancel, acIdentity.AttemptNonce);
+        if (cancelResult == NativeBoolCallResult::Failed)
+        {
+            m_poisoned = true;
+            result.Status = PartyQuestSkyrimNativeSaveProviderCommandStatus::
+                NativeCallFailed;
+        }
+        return result;
+    }
+    if (engineResult == NativeBoolCallResult::Failed)
+    {
+        // The engine call crossed an uncertain native boundary. The request
+        // may have been admitted, so this capability cannot safely continue.
+        m_poisoned = true;
+        result.Status =
+            PartyQuestSkyrimNativeSaveProviderCommandStatus::NativeCallFailed;
+    }
+    return result;
 }
 
 PartyQuestSkyrimNativeSaveProviderPollResult
