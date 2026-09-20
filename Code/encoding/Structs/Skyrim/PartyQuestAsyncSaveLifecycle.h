@@ -5,9 +5,9 @@
 #include <cstdint>
 #include <optional>
 
-enum class PartyQuestAsyncSaveEngineAdmissionOutcome : uint8_t
+enum class PartyQuestAsyncSaveReservationOutcome : uint8_t
 {
-    Admitted,
+    Accepted,
     Rejected
 };
 
@@ -42,7 +42,7 @@ struct PartyQuestAsyncSaveLifecycleResult
 };
 
 /**
- * Pure lifecycle gate for one engine-admitted asynchronous native save.
+ * Pure lifecycle gate for one native-reserved asynchronous save.
  *
  * Closing admission revokes logical authority immediately, but deliberately
  * retains the exact request identity until matching physical retirement. This
@@ -53,9 +53,9 @@ struct PartyQuestAsyncSaveLifecycleResult
 class PartyQuestAsyncSaveLifecycle final
 {
 public:
-    [[nodiscard]] PartyQuestAsyncSaveLifecycleResult ObserveEngineAdmission(
+    [[nodiscard]] PartyQuestAsyncSaveLifecycleResult ObserveReservation(
         const PartyQuestAsyncSaveRequestIdentity& acIdentity,
-        PartyQuestAsyncSaveEngineAdmissionOutcome aOutcome) noexcept;
+        PartyQuestAsyncSaveReservationOutcome aOutcome) noexcept;
 
     [[nodiscard]] PartyQuestAsyncSaveLifecycleResult ObserveCompletion(
         const PartyQuestAsyncSaveRequestIdentity& acIdentity,

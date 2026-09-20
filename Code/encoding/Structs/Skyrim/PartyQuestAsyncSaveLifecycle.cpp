@@ -1,14 +1,14 @@
 #include <Structs/Skyrim/PartyQuestAsyncSaveLifecycle.h>
 
 PartyQuestAsyncSaveLifecycleResult
-PartyQuestAsyncSaveLifecycle::ObserveEngineAdmission(
+PartyQuestAsyncSaveLifecycle::ObserveReservation(
     const PartyQuestAsyncSaveRequestIdentity& acIdentity,
-    PartyQuestAsyncSaveEngineAdmissionOutcome aOutcome) noexcept
+    PartyQuestAsyncSaveReservationOutcome aOutcome) noexcept
 {
     if (!acIdentity.IsValid())
         return Result(PartyQuestAsyncSaveLifecycleStatus::InvalidIdentity);
 
-    if (aOutcome == PartyQuestAsyncSaveEngineAdmissionOutcome::Rejected)
+    if (aOutcome == PartyQuestAsyncSaveReservationOutcome::Rejected)
         return Result(HasActiveRequest() ?
                 PartyQuestAsyncSaveLifecycleStatus::Busy :
                 PartyQuestAsyncSaveLifecycleStatus::Inactive);

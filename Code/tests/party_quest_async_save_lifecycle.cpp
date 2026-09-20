@@ -23,8 +23,8 @@ PartyQuestAsyncSaveRequestIdentity Identity(uint64_t aNonce = 50)
 void Admit(PartyQuestAsyncSaveLifecycle& aLifecycle,
     const PartyQuestAsyncSaveRequestIdentity& acIdentity)
 {
-    const auto result = aLifecycle.ObserveEngineAdmission(acIdentity,
-        PartyQuestAsyncSaveEngineAdmissionOutcome::Admitted);
+    const auto result = aLifecycle.ObserveReservation(acIdentity,
+        PartyQuestAsyncSaveReservationOutcome::Accepted);
     REQUIRE(result.Status == PartyQuestAsyncSaveLifecycleStatus::Active);
     REQUIRE(result.DrainRequired);
     REQUIRE_FALSE(result.SafeToInvalidate);
@@ -130,12 +130,12 @@ TEST_CASE("Async save lifecycle close cancel and retire are deterministic",
             PartyQuestAsyncSaveLifecycleStatus::Duplicate);
 }
 
-TEST_CASE("Rejected engine save admission has no async ownership to drain",
+TEST_CASE("Rejected native save reservation has no async ownership to drain",
     "[quest.party-state][async-save-lifecycle]")
 {
     PartyQuestAsyncSaveLifecycle lifecycle;
-    const auto rejected = lifecycle.ObserveEngineAdmission(Identity(),
-        PartyQuestAsyncSaveEngineAdmissionOutcome::Rejected);
+    const auto rejected = lifecycle.ObserveReservation(Identity(),
+        PartyQuestAsyncSaveReservationOutcome::Rejected);
     REQUIRE(rejected.Status == PartyQuestAsyncSaveLifecycleStatus::Inactive);
     REQUIRE(rejected.SafeToInvalidate);
     REQUIRE_FALSE(rejected.CancelRequired);
@@ -176,14 +176,14 @@ TEST_CASE("Retired async save lifecycle admits the next distinct request",
             PartyQuestAsyncSaveLifecycleStatus::CompletionAccepted);
     REQUIRE(lifecycle.ObserveRetirement(first).ConsumptionAuthorized);
 
-    const auto rejectedNext = lifecycle.ObserveEngineAdmission(second,
-        PartyQuestAsyncSaveEngineAdmissionOutcome::Rejected);
+    const auto rejectedNext = lifecycle.ObserveReservation(second,
+        PartyQuestAsyncSaveReservationOutcome::Rejected);
     REQUIRE(rejectedNext.Status ==
             PartyQuestAsyncSaveLifecycleStatus::Inactive);
     REQUIRE(rejectedNext.SafeToInvalidate);
 
-    REQUIRE(lifecycle.ObserveEngineAdmission(first,
-        PartyQuestAsyncSaveEngineAdmissionOutcome::Admitted).Status ==
+    REQUIRE(lifecycle.ObserveReservation(first,
+        PartyQuestAsyncSaveReservationOutcome::Accepted).Status ==
             PartyQuestAsyncSaveLifecycleStatus::Duplicate);
     Admit(lifecycle, second);
 
