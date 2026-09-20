@@ -27,6 +27,15 @@ PartyQuestNativeSaveProviderDescriptor Descriptor()
         kPartyQuestNativeSaveProviderFingerprint;
     return descriptor;
 }
+
+PartyQuestNativeSaveProviderDescriptor ResearchDescriptor()
+{
+    auto descriptor = Descriptor();
+    descriptor.ProviderFingerprint =
+        kPartyQuestTask07ResearchProviderFingerprint;
+    descriptor.Reserved0 = kPartyQuestTask07ResearchProviderMarker;
+    return descriptor;
+}
 }
 
 static_assert(!std::is_copy_constructible_v<PartyQuestNativeSaveProviderToken>);
@@ -145,6 +154,50 @@ TEST_CASE("Native save provider descriptor is exact and fail closed",
         invalid.Reserved1 = 1;
         REQUIRE_FALSE(
             PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(invalid));
+    }
+}
+
+TEST_CASE("Research native save descriptor is disjoint from production",
+    "[quest.party-state][native-save-provider][research]")
+{
+    const auto production = Descriptor();
+    const auto research = ResearchDescriptor();
+
+    REQUIRE(PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(
+        production));
+    REQUIRE(PartyQuestNativeSaveProviderPolicy::IsApprovedBuildDescriptor(
+        production));
+    REQUIRE_FALSE(
+        PartyQuestNativeSaveProviderPolicy::IsApprovedTask07ResearchDescriptor(
+            production));
+    REQUIRE_FALSE(PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(
+        research));
+    REQUIRE_FALSE(PartyQuestNativeSaveProviderPolicy::IsApprovedBuildDescriptor(
+        research));
+    REQUIRE(
+        PartyQuestNativeSaveProviderPolicy::IsApprovedTask07ResearchDescriptor(
+            research));
+
+    SECTION("research marker is exact")
+    {
+        auto invalid = research;
+        ++invalid.Reserved0;
+        REQUIRE_FALSE(PartyQuestNativeSaveProviderPolicy::
+                IsApprovedTask07ResearchDescriptor(invalid));
+    }
+    SECTION("research fingerprint is exact")
+    {
+        auto invalid = research;
+        ++invalid.ProviderFingerprint;
+        REQUIRE_FALSE(PartyQuestNativeSaveProviderPolicy::
+                IsApprovedTask07ResearchDescriptor(invalid));
+    }
+    SECTION("reserved tail remains zero")
+    {
+        auto invalid = research;
+        invalid.Reserved1 = 1u;
+        REQUIRE_FALSE(PartyQuestNativeSaveProviderPolicy::
+                IsApprovedTask07ResearchDescriptor(invalid));
     }
 }
 

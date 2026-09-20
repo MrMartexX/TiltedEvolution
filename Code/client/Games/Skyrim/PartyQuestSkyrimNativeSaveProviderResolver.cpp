@@ -626,7 +626,8 @@ PartyQuestSkyrimNativeSaveProviderResolver::ResolveAndRegister(
             ProviderReadFailed;
         return result;
     }
-    if (!PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(descriptor))
+    if (!PartyQuestNativeSaveProviderPolicy::IsApprovedBuildDescriptor(
+            descriptor))
     {
         result.Status = PartyQuestSkyrimNativeSaveProviderResolveStatus::
             ProviderRejected;

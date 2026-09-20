@@ -53,7 +53,8 @@ PartyQuestNativeSaveProviderRegistration::RegisterAuthenticated(
     uint64_t aRuntimeGeneration) noexcept
 {
     PartyQuestNativeSaveProviderRegistrationResult result;
-    if (!PartyQuestNativeSaveProviderPolicy::IsApprovedDescriptor(acDescriptor))
+    if (!PartyQuestNativeSaveProviderPolicy::IsApprovedBuildDescriptor(
+            acDescriptor))
     {
         result.Status =
             PartyQuestNativeSaveProviderRegistrationStatus::InvalidDescriptor;

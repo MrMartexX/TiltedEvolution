@@ -18,6 +18,10 @@ inline constexpr uint32_t kPartyQuestNativeSaveEventAbi = 2u;
 inline constexpr uint32_t kPartyQuestNativeSaveProviderImplementationVersion = 1u;
 inline constexpr uint64_t kPartyQuestNativeSaveProviderFingerprint =
     0x3256455641535150ull; // "PQSAVEV2", deterministic identity, not a secret.
+inline constexpr uint64_t kPartyQuestTask07ResearchProviderFingerprint =
+    0x3148435253515051ull; // Exact research-only SKSE artifact identity.
+inline constexpr uint64_t kPartyQuestTask07ResearchProviderMarker =
+    0x594C4E4F48375254ull; // Must never be accepted by production policy.
 inline constexpr uint64_t kPartyQuestRequiredNativeSaveProviderCapabilities =
     static_cast<uint64_t>(PartyQuestNativeSaveProviderCapabilityBit::ArtifactEvents) |
     static_cast<uint64_t>(PartyQuestNativeSaveProviderCapabilityBit::RequestRetirement) |
@@ -72,6 +76,29 @@ struct PartyQuestNativeSaveProviderPolicy final
             acDescriptor.ProviderFingerprint ==
                 kPartyQuestNativeSaveProviderFingerprint &&
             acDescriptor.Reserved0 == 0u && acDescriptor.Reserved1 == 0u;
+    }
+
+    [[nodiscard]] static constexpr bool IsApprovedTask07ResearchDescriptor(
+        const PartyQuestNativeSaveProviderDescriptor& acDescriptor) noexcept
+    {
+        auto productionShape = acDescriptor;
+        productionShape.ProviderFingerprint =
+            kPartyQuestNativeSaveProviderFingerprint;
+        productionShape.Reserved0 = 0u;
+        return IsApprovedDescriptor(productionShape) &&
+            acDescriptor.ProviderFingerprint ==
+                kPartyQuestTask07ResearchProviderFingerprint &&
+            acDescriptor.Reserved0 == kPartyQuestTask07ResearchProviderMarker;
+    }
+
+    [[nodiscard]] static constexpr bool IsApprovedBuildDescriptor(
+        const PartyQuestNativeSaveProviderDescriptor& acDescriptor) noexcept
+    {
+#if defined(PARTYQUEST_TASK07_RESEARCH_ARTIFACT)
+        return IsApprovedTask07ResearchDescriptor(acDescriptor);
+#else
+        return IsApprovedDescriptor(acDescriptor);
+#endif
     }
 };
 
