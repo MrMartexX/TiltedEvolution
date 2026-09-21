@@ -173,6 +173,12 @@ struct ModelQueue final
             return result;
         }
 
+        if (Epochs.size() >= PartyQuestOrderedLifecycleQueue::kCapacity)
+        {
+            result.Status = Status::QueueCapacityExceeded;
+            return result;
+        }
+
         Epoch epoch{
             NextSequence++,
             NextRevision++,
@@ -263,6 +269,11 @@ public:
         aQueue.m_nextSequence = aSequence;
         aQueue.m_nextRevision = aRevision;
         aQueue.m_exhausted = false;
+    }
+
+    static size_t Size(const PartyQuestOrderedLifecycleQueue& aQueue) noexcept
+    {
+        return aQueue.m_epochs.size();
     }
 };
 
@@ -669,6 +680,174 @@ TEST_CASE("Terminal queue rejects all later executable events",
     }
 }
 
+TEST_CASE("Ordered lifecycle queue accepts exactly its fixed capacity",
+          "[quest.party-state.ordered-lifecycle][capacity]")
+{
+    PartyQuestOrderedLifecycleQueue queue;
+    STATIC_REQUIRE(PartyQuestOrderedLifecycleQueue::kCapacity == 32u);
+    STATIC_REQUIRE(PartyQuestOrderedLifecycleQueue::kCapacity > 0u);
+
+    for (size_t index = 0;
+         index < PartyQuestOrderedLifecycleQueue::kCapacity;
+         ++index)
+    {
+        const auto queued = queue.Enqueue(Reason::Connected);
+        REQUIRE(queued.Status == Status::Queued);
+        REQUIRE(queued.Epoch);
+        REQUIRE(queued.Epoch->Sequence == index + 1u);
+        REQUIRE(queued.Epoch->Revision == index + 1u);
+    }
+
+    REQUIRE(PartyQuestOrderedLifecycleQueueTestAccess::Size(queue) ==
+        PartyQuestOrderedLifecycleQueue::kCapacity);
+}
+
+TEST_CASE("Capacity overflow does not mutate queue counters or active claim",
+          "[quest.party-state.ordered-lifecycle][capacity]")
+{
+    PartyQuestOrderedLifecycleQueue queue;
+    for (size_t index = 0;
+         index < PartyQuestOrderedLifecycleQueue::kCapacity;
+         ++index)
+    {
+        REQUIRE(queue.Enqueue(Reason::Connected).Status == Status::Queued);
+    }
+
+    const auto active = queue.TryClaimFront();
+    REQUIRE(active);
+    REQUIRE(queue.IsCurrent(*active));
+
+    const auto overflow = queue.Enqueue(Reason::PartyJoined);
+    REQUIRE(overflow.Status == Status::QueueCapacityExceeded);
+    REQUIRE_FALSE(overflow.Epoch);
+    REQUIRE(queue.IsCurrent(*active));
+    REQUIRE(PartyQuestOrderedLifecycleQueueTestAccess::Size(queue) ==
+        PartyQuestOrderedLifecycleQueue::kCapacity);
+
+    REQUIRE(queue.Acknowledge(*active));
+
+    const auto afterRoom = queue.Enqueue(Reason::PartyJoined);
+    REQUIRE(afterRoom.Status == Status::Queued);
+    REQUIRE(afterRoom.Epoch);
+    REQUIRE(afterRoom.Epoch->Sequence ==
+        PartyQuestOrderedLifecycleQueue::kCapacity + 1u);
+    REQUIRE(afterRoom.Epoch->Revision ==
+        PartyQuestOrderedLifecycleQueue::kCapacity + 1u);
+}
+
+TEST_CASE("Adjacent release coalescing remains admissible at capacity",
+          "[quest.party-state.ordered-lifecycle][capacity]")
+{
+    PartyQuestOrderedLifecycleQueue queue;
+    for (size_t index = 0;
+         index + 1u < PartyQuestOrderedLifecycleQueue::kCapacity;
+         ++index)
+    {
+        REQUIRE(queue.Enqueue(Reason::Connected).Status == Status::Queued);
+    }
+
+    REQUIRE(queue.Enqueue(Reason::PartyLeft).Status == Status::Queued);
+    REQUIRE(PartyQuestOrderedLifecycleQueueTestAccess::Size(queue) ==
+        PartyQuestOrderedLifecycleQueue::kCapacity);
+
+    const auto coalesced = queue.Enqueue(Reason::Disconnect);
+    REQUIRE(coalesced.Status == Status::Coalesced);
+    REQUIRE(coalesced.Epoch);
+    REQUIRE(coalesced.Epoch->Action == Action::ReleaseDisconnect);
+    REQUIRE(coalesced.Epoch->Evidence ==
+        EvidenceOf({Reason::PartyLeft, Reason::Disconnect}));
+    REQUIRE(coalesced.Epoch->Sequence ==
+        PartyQuestOrderedLifecycleQueue::kCapacity);
+    REQUIRE(coalesced.Epoch->Revision ==
+        PartyQuestOrderedLifecycleQueue::kCapacity + 1u);
+    REQUIRE(PartyQuestOrderedLifecycleQueueTestAccess::Size(queue) ==
+        PartyQuestOrderedLifecycleQueue::kCapacity);
+}
+
+TEST_CASE("Claimed front stays current when enqueue overflows at capacity",
+          "[quest.party-state.ordered-lifecycle][capacity]")
+{
+    PartyQuestOrderedLifecycleQueue queue;
+    for (size_t index = 0;
+         index < PartyQuestOrderedLifecycleQueue::kCapacity;
+         ++index)
+    {
+        REQUIRE(queue.Enqueue(Reason::Connected).Status == Status::Queued);
+    }
+
+    const auto active = queue.TryClaimFront();
+    REQUIRE(active);
+    const auto overflow = queue.Enqueue(Reason::LoadGame);
+    REQUIRE(overflow.Status == Status::QueueCapacityExceeded);
+    REQUIRE(queue.IsCurrent(*active));
+
+    REQUIRE(queue.Retry(*active));
+    const auto retried = queue.TryClaimFront();
+    REQUIRE(retried);
+    REQUIRE(SameClaim(*retried, *active));
+    REQUIRE(queue.Acknowledge(*retried));
+}
+
+TEST_CASE("Shutdown atomically replaces a full queue and preserves evidence",
+          "[quest.party-state.ordered-lifecycle][capacity]")
+{
+    PartyQuestOrderedLifecycleQueue queue;
+    Evidence expected = PartyQuestOrderedLifecycleEvidenceFor(Reason::Shutdown);
+
+    for (size_t index = 0;
+         index < PartyQuestOrderedLifecycleQueue::kCapacity;
+         ++index)
+    {
+        const auto reason = (index % 2u == 0u)
+            ? Reason::Connected
+            : Reason::LoadGame;
+        REQUIRE(queue.Enqueue(reason).Status == Status::Queued);
+        expected = static_cast<Evidence>(
+            expected | PartyQuestOrderedLifecycleEvidenceFor(reason));
+    }
+
+    const auto shutdown = queue.Enqueue(Reason::Shutdown);
+    REQUIRE(shutdown.Status == Status::TerminalQueued);
+    REQUIRE(shutdown.Epoch);
+    REQUIRE(shutdown.Epoch->Evidence == expected);
+    REQUIRE(shutdown.Epoch->Action == Action::ApplyShutdown);
+    REQUIRE(queue.IsTerminal());
+    REQUIRE(PartyQuestOrderedLifecycleQueueTestAccess::Size(queue) == 1u);
+
+    const auto claim = queue.TryClaimFront();
+    REQUIRE(claim);
+    REQUIRE(claim->Evidence == expected);
+    REQUIRE(queue.Acknowledge(*claim));
+}
+
+TEST_CASE("Retry and acknowledge remain exact after a capacity overflow",
+          "[quest.party-state.ordered-lifecycle][capacity]")
+{
+    PartyQuestOrderedLifecycleQueue queue;
+    for (size_t index = 0;
+         index < PartyQuestOrderedLifecycleQueue::kCapacity;
+         ++index)
+    {
+        REQUIRE(queue.Enqueue(Reason::Connected).Status == Status::Queued);
+    }
+
+    const auto first = queue.TryClaimFront();
+    REQUIRE(first);
+    REQUIRE(queue.Enqueue(Reason::PartyJoined).Status ==
+        Status::QueueCapacityExceeded);
+
+    REQUIRE(queue.Retry(*first));
+    const auto retried = queue.TryClaimFront();
+    REQUIRE(retried);
+    REQUIRE(SameClaim(*retried, *first));
+
+    auto stale = *retried;
+    ++stale.Revision;
+    REQUIRE_FALSE(queue.Acknowledge(stale));
+    REQUIRE(queue.IsCurrent(*retried));
+    REQUIRE(queue.Acknowledge(*retried));
+}
+
 TEST_CASE("Sequence counter exhaustion fails closed without wrapping",
           "[quest.party-state.ordered-lifecycle]")
 {
@@ -775,7 +954,7 @@ TEST_CASE("Ordered lifecycle queue is move-only and preserves active state on mo
     REQUIRE_FALSE(moved.TryClaimFront());
 }
 
-TEST_CASE("Deterministic randomized model preserves ordering claim and retry invariants",
+TEST_CASE("Deterministic randomized bounded model preserves capacity ordering claim and retry invariants",
           "[quest.party-state.ordered-lifecycle][model]")
 {
     PartyQuestOrderedLifecycleQueue queue;
@@ -842,6 +1021,10 @@ TEST_CASE("Deterministic randomized model preserves ordering claim and retry inv
         if (model.Active)
             REQUIRE(queue.IsCurrent(*model.Active));
         REQUIRE(queue.IsTerminal() == model.Terminal);
+        REQUIRE(PartyQuestOrderedLifecycleQueueTestAccess::Size(queue) ==
+            model.Epochs.size());
+        REQUIRE(model.Epochs.size() <=
+            PartyQuestOrderedLifecycleQueue::kCapacity);
     }
 
     CompareResult(queue.Enqueue(Reason::Shutdown), model.Enqueue(Reason::Shutdown));

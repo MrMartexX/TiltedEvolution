@@ -113,6 +113,13 @@ PartyQuestOrderedLifecycleQueue::Enqueue(
         return result;
     }
 
+    if (m_epochs.size() >= kCapacity)
+    {
+        result.Status =
+            PartyQuestOrderedLifecycleEnqueueStatus::QueueCapacityExceeded;
+        return result;
+    }
+
     PartyQuestOrderedLifecycleEpoch epoch;
     epoch.Sequence = m_nextSequence;
     epoch.Revision = m_nextRevision;

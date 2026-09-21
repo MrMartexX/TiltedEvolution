@@ -91,6 +91,7 @@ enum class PartyQuestOrderedLifecycleEnqueueStatus : uint8_t
     TerminalQueued,
     TerminalClosed,
     CounterExhausted,
+    QueueCapacityExceeded,
     AllocationFailed,
     InvalidReason
 };
@@ -123,12 +124,22 @@ struct PartyQuestOrderedLifecycleEnqueueResult final
  * no waiting and no I/O. The caller owns serialization; this value type
  * intentionally contains no mutex or callback lifetime primitive.
  *
+ * Capacity is a compile-time invariant (kCapacity) and cannot be reconfigured
+ * at runtime. Capacity limits only creation of a new distinct epoch. Safe
+ * adjacent release coalescing remains admissible when full because it does not
+ * increase queue size. Shutdown may still replace a full queue atomically with
+ * one terminal epoch. QueueCapacityExceeded is fail-closed lifecycle evidence:
+ * callers must escalate/retain the lifecycle boundary and must never drop,
+ * reorder or silently merge an event to make room.
+ *
  * RetireBlockedLoadAttempt represents only retirement of an already blocked
  * LoadGame attempt. This primitive never stores or replays Load_Impl.
  */
 class PartyQuestOrderedLifecycleQueue final
 {
 public:
+    static constexpr size_t kCapacity = 32u;
+
     PartyQuestOrderedLifecycleQueue() noexcept = default;
     ~PartyQuestOrderedLifecycleQueue() = default;
 
@@ -193,6 +204,7 @@ private:
     bool m_exhausted{};
 };
 
+static_assert(PartyQuestOrderedLifecycleQueue::kCapacity > 0u);
 static_assert(sizeof(PartyQuestOrderedLifecycleReason) == 1u);
 static_assert(sizeof(PartyQuestOrderedLifecycleAction) == 1u);
 static_assert(sizeof(PartyQuestOrderedLifecycleEvidenceMask) == 2u);
