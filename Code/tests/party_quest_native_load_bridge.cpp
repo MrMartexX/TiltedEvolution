@@ -18,8 +18,14 @@ using Identity = PartyQuestNativeLoadBridgeIdentityV1;
 using ReserveRequest = PartyQuestNativeLoadBridgeReserveRequestV1;
 using Reservation = PartyQuestNativeLoadBridgeReservationV1;
 using Completion = PartyQuestNativeLoadBridgeCompletionV1;
+using DescriptorResult = PartyQuestNativeLoadBridgeDescriptorResult;
 using Status = PartyQuestNativeLoadBridgeStatus;
 using Policy = PartyQuestNativeLoadBridgePolicy;
+using GetDescriptorExport = PartyQuestNativeLoadBridgeGetDescriptorExport;
+using ReserveExport = PartyQuestNativeLoadBridgeReserveExport;
+using CancelExport = PartyQuestNativeLoadBridgeCancelExport;
+using PollExport = PartyQuestNativeLoadBridgePollExport;
+using RetireExport = PartyQuestNativeLoadBridgeRetireExport;
 
 constexpr uint64_t kExpectedRuntimeFingerprint =
     0xD00DFEED12345678ull;
@@ -290,6 +296,197 @@ TEST_CASE("Native load bridge validation never mutates descriptor",
         sizeof(descriptor)));
 }
 
+TEST_CASE("Native load bridge descriptor-result domain is exact uint32 and closed",
+          "[quest.party-state][native-load-bridge][descriptor-result]")
+{
+    STATIC_REQUIRE(sizeof(DescriptorResult) == 4u);
+    STATIC_REQUIRE(
+        static_cast<uint32_t>(DescriptorResult::Unavailable) == 0u);
+    STATIC_REQUIRE(
+        static_cast<uint32_t>(DescriptorResult::Available) == 1u);
+
+    REQUIRE(Policy::IsKnownDescriptorResult(0u));
+    REQUIRE(Policy::IsKnownDescriptorResult(1u));
+
+    for (const auto value : {
+             2u,
+             3u,
+             15u,
+             16u,
+             0x80000000u,
+             std::numeric_limits<uint32_t>::max()})
+    {
+        REQUIRE_FALSE(Policy::IsKnownDescriptorResult(value));
+    }
+
+    STATIC_REQUIRE(noexcept(
+        Policy::IsKnownDescriptorResult(uint32_t{})));
+}
+
+TEST_CASE("Native load bridge export names are fixed byte strings",
+          "[quest.party-state][native-load-bridge][exports]")
+{
+    REQUIRE(std::strcmp(
+        kPartyQuestNativeLoadBridgeGetDescriptorExport,
+        "PartyQuestSKSE_GetLoadBridgeDescriptor") == 0);
+    REQUIRE(std::strcmp(
+        kPartyQuestNativeLoadBridgeReserveExport,
+        "PartyQuestSKSE_ReserveLoad") == 0);
+    REQUIRE(std::strcmp(
+        kPartyQuestNativeLoadBridgeCancelExport,
+        "PartyQuestSKSE_CancelLoad") == 0);
+    REQUIRE(std::strcmp(
+        kPartyQuestNativeLoadBridgePollExport,
+        "PartyQuestSKSE_PollLoad") == 0);
+    REQUIRE(std::strcmp(
+        kPartyQuestNativeLoadBridgeRetireExport,
+        "PartyQuestSKSE_RetireLoad") == 0);
+
+    STATIC_REQUIRE(
+        sizeof(kPartyQuestNativeLoadBridgeGetDescriptorExport) ==
+        sizeof("PartyQuestSKSE_GetLoadBridgeDescriptor"));
+    STATIC_REQUIRE(
+        sizeof(kPartyQuestNativeLoadBridgeReserveExport) ==
+        sizeof("PartyQuestSKSE_ReserveLoad"));
+    STATIC_REQUIRE(
+        sizeof(kPartyQuestNativeLoadBridgeCancelExport) ==
+        sizeof("PartyQuestSKSE_CancelLoad"));
+    STATIC_REQUIRE(
+        sizeof(kPartyQuestNativeLoadBridgePollExport) ==
+        sizeof("PartyQuestSKSE_PollLoad"));
+    STATIC_REQUIRE(
+        sizeof(kPartyQuestNativeLoadBridgeRetireExport) ==
+        sizeof("PartyQuestSKSE_RetireLoad"));
+}
+
+TEST_CASE("Native load bridge export callable signatures are exact",
+          "[quest.party-state][native-load-bridge][exports]")
+{
+    STATIC_REQUIRE(std::is_same_v<
+        GetDescriptorExport,
+        uint32_t (*)(Descriptor*, uint32_t)>);
+    STATIC_REQUIRE(std::is_same_v<
+        ReserveExport,
+        uint32_t (*)(
+            const ReserveRequest*,
+            uint32_t,
+            Reservation*,
+            uint32_t)>);
+    STATIC_REQUIRE(std::is_same_v<
+        CancelExport,
+        uint32_t (*)(uint64_t)>);
+    STATIC_REQUIRE(std::is_same_v<
+        PollExport,
+        uint32_t (*)(uint64_t, Completion*, uint32_t)>);
+    STATIC_REQUIRE(std::is_same_v<
+        RetireExport,
+        uint32_t (*)(uint64_t)>);
+
+    STATIC_REQUIRE(std::is_invocable_r_v<
+        uint32_t,
+        GetDescriptorExport,
+        Descriptor*,
+        uint32_t>);
+    STATIC_REQUIRE(std::is_invocable_r_v<
+        uint32_t,
+        ReserveExport,
+        const ReserveRequest*,
+        uint32_t,
+        Reservation*,
+        uint32_t>);
+    STATIC_REQUIRE(std::is_invocable_r_v<
+        uint32_t,
+        CancelExport,
+        uint64_t>);
+    STATIC_REQUIRE(std::is_invocable_r_v<
+        uint32_t,
+        PollExport,
+        uint64_t,
+        Completion*,
+        uint32_t>);
+    STATIC_REQUIRE(std::is_invocable_r_v<
+        uint32_t,
+        RetireExport,
+        uint64_t>);
+
+    STATIC_REQUIRE(std::is_same_v<
+        std::invoke_result_t<
+            GetDescriptorExport,
+            Descriptor*,
+            uint32_t>,
+        uint32_t>);
+    STATIC_REQUIRE(std::is_same_v<
+        std::invoke_result_t<
+            ReserveExport,
+            const ReserveRequest*,
+            uint32_t,
+            Reservation*,
+            uint32_t>,
+        uint32_t>);
+    STATIC_REQUIRE(std::is_same_v<
+        std::invoke_result_t<CancelExport, uint64_t>,
+        uint32_t>);
+    STATIC_REQUIRE(std::is_same_v<
+        std::invoke_result_t<
+            PollExport,
+            uint64_t,
+            Completion*,
+            uint32_t>,
+        uint32_t>);
+    STATIC_REQUIRE(std::is_same_v<
+        std::invoke_result_t<RetireExport, uint64_t>,
+        uint32_t>);
+
+    // The portable callable type intentionally does not encode noexcept.
+    STATIC_REQUIRE_FALSE(std::is_nothrow_invocable_v<
+        GetDescriptorExport,
+        Descriptor*,
+        uint32_t>);
+    STATIC_REQUIRE_FALSE(std::is_nothrow_invocable_v<
+        ReserveExport,
+        const ReserveRequest*,
+        uint32_t,
+        Reservation*,
+        uint32_t>);
+    STATIC_REQUIRE_FALSE(std::is_nothrow_invocable_v<
+        CancelExport,
+        uint64_t>);
+    STATIC_REQUIRE_FALSE(std::is_nothrow_invocable_v<
+        PollExport,
+        uint64_t,
+        Completion*,
+        uint32_t>);
+    STATIC_REQUIRE_FALSE(std::is_nothrow_invocable_v<
+        RetireExport,
+        uint64_t>);
+}
+
+TEST_CASE("Native load bridge export pointer directions reject incompatible call shapes",
+          "[quest.party-state][native-load-bridge][exports]")
+{
+    STATIC_REQUIRE_FALSE(std::is_invocable_v<
+        GetDescriptorExport,
+        const Descriptor*,
+        uint32_t>);
+    STATIC_REQUIRE_FALSE(std::is_invocable_v<
+        ReserveExport,
+        ReserveRequest*,
+        uint32_t,
+        const Reservation*,
+        uint32_t>);
+    STATIC_REQUIRE_FALSE(std::is_invocable_v<
+        PollExport,
+        uint64_t,
+        const Completion*,
+        uint32_t>);
+
+    STATIC_REQUIRE(std::is_pointer_v<GetDescriptorExport>);
+    STATIC_REQUIRE(std::is_pointer_v<ReserveExport>);
+    STATIC_REQUIRE(std::is_pointer_v<CancelExport>);
+    STATIC_REQUIRE(std::is_pointer_v<PollExport>);
+    STATIC_REQUIRE(std::is_pointer_v<RetireExport>);
+}
+
 TEST_CASE("Native load bridge status domain is exact uint32 and rejects unknowns",
           "[quest.party-state][native-load-bridge][status]")
 {
@@ -501,6 +698,7 @@ TEST_CASE("Native load bridge payload validation never mutates inputs",
 TEST_CASE("Native load bridge fixed ABI layout is exact and portable",
           "[quest.party-state][native-load-bridge][abi]")
 {
+    STATIC_REQUIRE(sizeof(DescriptorResult) == 4u);
     STATIC_REQUIRE(sizeof(Status) == 4u);
 
     STATIC_REQUIRE(sizeof(Descriptor) == 72u);

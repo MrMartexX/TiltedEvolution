@@ -52,6 +52,12 @@ inline constexpr uint64_t kPartyQuestRequiredNativeLoadBridgeCapabilities =
     static_cast<uint64_t>(
         PartyQuestNativeLoadBridgeCapabilityBit::TargetReturnCompletion);
 
+enum class PartyQuestNativeLoadBridgeDescriptorResult : uint32_t
+{
+    Unavailable = 0u,
+    Available = 1u
+};
+
 enum class PartyQuestNativeLoadBridgeStatus : uint32_t
 {
     Reserved = 1u,
@@ -128,6 +134,54 @@ struct PartyQuestNativeLoadBridgeCompletionV1 final
     uint8_t Reserved[7]{};
 };
 
+inline constexpr char kPartyQuestNativeLoadBridgeGetDescriptorExport[] =
+    "PartyQuestSKSE_GetLoadBridgeDescriptor";
+inline constexpr char kPartyQuestNativeLoadBridgeReserveExport[] =
+    "PartyQuestSKSE_ReserveLoad";
+inline constexpr char kPartyQuestNativeLoadBridgeCancelExport[] =
+    "PartyQuestSKSE_CancelLoad";
+inline constexpr char kPartyQuestNativeLoadBridgePollExport[] =
+    "PartyQuestSKSE_PollLoad";
+inline constexpr char kPartyQuestNativeLoadBridgeRetireExport[] =
+    "PartyQuestSKSE_RetireLoad";
+
+/**
+ * Exact cross-DLL callable signatures for the five v1 exports.
+ *
+ * Deliberately do not put noexcept into these function types. Since C++17,
+ * noexcept participates in the function type, and the portable contract must
+ * not require identical compiler type-system treatment merely to call a C ABI
+ * export. Native implementations still have the separate hard requirement to
+ * contain C++ exceptions and platform structured exceptions before crossing
+ * the DLL boundary.
+ *
+ * These function pointers are resolver-side callable types only. They are not
+ * fields of any ABI payload and establish no callback ownership.
+ */
+using PartyQuestNativeLoadBridgeGetDescriptorExport =
+    uint32_t (*)(
+        PartyQuestNativeLoadBridgeDescriptorV1*,
+        uint32_t);
+
+using PartyQuestNativeLoadBridgeReserveExport =
+    uint32_t (*)(
+        const PartyQuestNativeLoadBridgeReserveRequestV1*,
+        uint32_t,
+        PartyQuestNativeLoadBridgeReservationV1*,
+        uint32_t);
+
+using PartyQuestNativeLoadBridgeCancelExport =
+    uint32_t (*)(uint64_t);
+
+using PartyQuestNativeLoadBridgePollExport =
+    uint32_t (*)(
+        uint64_t,
+        PartyQuestNativeLoadBridgeCompletionV1*,
+        uint32_t);
+
+using PartyQuestNativeLoadBridgeRetireExport =
+    uint32_t (*)(uint64_t);
+
 /**
  * Pure compatibility policy for the future native LoadGame completion bridge.
  *
@@ -143,6 +197,20 @@ struct PartyQuestNativeLoadBridgeCompletionV1 final
  */
 struct PartyQuestNativeLoadBridgePolicy final
 {
+    [[nodiscard]] static constexpr bool IsKnownDescriptorResult(
+        uint32_t aResult) noexcept
+    {
+        switch (
+            static_cast<PartyQuestNativeLoadBridgeDescriptorResult>(aResult))
+        {
+        case PartyQuestNativeLoadBridgeDescriptorResult::Unavailable:
+        case PartyQuestNativeLoadBridgeDescriptorResult::Available:
+            return true;
+        }
+
+        return false;
+    }
+
     [[nodiscard]] static constexpr bool IsApprovedDescriptor(
         const PartyQuestNativeLoadBridgeDescriptorV1& acDescriptor,
         uint64_t aExpectedRuntimeFingerprint) noexcept
@@ -250,6 +318,7 @@ struct PartyQuestNativeLoadBridgePolicy final
     }
 };
 
+static_assert(sizeof(PartyQuestNativeLoadBridgeDescriptorResult) == 4u);
 static_assert(sizeof(PartyQuestNativeLoadBridgeStatus) == 4u);
 
 static_assert(sizeof(PartyQuestNativeLoadBridgeDescriptorV1) == 72u);
