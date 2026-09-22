@@ -145,7 +145,7 @@ TEST_CASE("Native load bridge rejects every descriptor version and size mismatch
 TEST_CASE("Native load bridge requires exact capability mask",
           "[quest.party-state][native-load-bridge][descriptor]")
 {
-    constexpr std::array<uint64_t, 10> requiredBits{
+    constexpr std::array<uint64_t, 11> requiredBits{
         static_cast<uint64_t>(Capability::ExclusiveRequest),
         static_cast<uint64_t>(Capability::ExactNormalizedIdentity),
         static_cast<uint64_t>(Capability::ClaimBeforeTargetEntry),
@@ -155,7 +155,8 @@ TEST_CASE("Native load bridge requires exact capability mask",
         static_cast<uint64_t>(Capability::ExplicitRetirement),
         static_cast<uint64_t>(Capability::MonotonicAttemptNonce),
         static_cast<uint64_t>(Capability::MonotonicEventSequence),
-        static_cast<uint64_t>(Capability::PullOnlyNoCallbacks)};
+        static_cast<uint64_t>(Capability::PullOnlyNoCallbacks),
+        static_cast<uint64_t>(Capability::TargetReturnCompletion)};
 
     for (const auto bit : requiredBits)
     {
@@ -582,6 +583,9 @@ TEST_CASE("Native load bridge ABI constants are fixed and capability mask has no
         kPartyQuestNativeLoadBridgeFingerprint ==
         0x315644414F4C5150ull);
     STATIC_REQUIRE(
+        static_cast<uint64_t>(Capability::TargetReturnCompletion) ==
+        (1ull << 10u));
+    STATIC_REQUIRE(
         kPartyQuestRequiredNativeLoadBridgeCapabilities ==
-        ((1ull << 10u) - 1ull));
+        ((1ull << 11u) - 1ull));
 }

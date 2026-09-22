@@ -17,7 +17,8 @@ enum class PartyQuestNativeLoadBridgeCapabilityBit : uint64_t
     ExplicitRetirement = 1ull << 6u,
     MonotonicAttemptNonce = 1ull << 7u,
     MonotonicEventSequence = 1ull << 8u,
-    PullOnlyNoCallbacks = 1ull << 9u
+    PullOnlyNoCallbacks = 1ull << 9u,
+    TargetReturnCompletion = 1ull << 10u
 };
 
 inline constexpr uint32_t kPartyQuestNativeLoadBridgeDescriptorAbi = 1u;
@@ -47,7 +48,9 @@ inline constexpr uint64_t kPartyQuestRequiredNativeLoadBridgeCapabilities =
     static_cast<uint64_t>(
         PartyQuestNativeLoadBridgeCapabilityBit::MonotonicEventSequence) |
     static_cast<uint64_t>(
-        PartyQuestNativeLoadBridgeCapabilityBit::PullOnlyNoCallbacks);
+        PartyQuestNativeLoadBridgeCapabilityBit::PullOnlyNoCallbacks) |
+    static_cast<uint64_t>(
+        PartyQuestNativeLoadBridgeCapabilityBit::TargetReturnCompletion);
 
 enum class PartyQuestNativeLoadBridgeStatus : uint32_t
 {
