@@ -147,10 +147,13 @@ public:
         const PartyQuestOrderedLifecycleQueue&) = delete;
     PartyQuestOrderedLifecycleQueue& operator=(
         const PartyQuestOrderedLifecycleQueue&) = delete;
+    // Queue identity belongs to the exact-claim domain. Moving could discard
+    // pending work or make an old claim match an unrelated queue whose
+    // counters happen to have the same values.
     PartyQuestOrderedLifecycleQueue(
-        PartyQuestOrderedLifecycleQueue&&) noexcept = default;
+        PartyQuestOrderedLifecycleQueue&&) = delete;
     PartyQuestOrderedLifecycleQueue& operator=(
-        PartyQuestOrderedLifecycleQueue&&) noexcept = default;
+        PartyQuestOrderedLifecycleQueue&&) = delete;
 
     [[nodiscard]] PartyQuestOrderedLifecycleEnqueueResult Enqueue(
         PartyQuestOrderedLifecycleReason aReason) noexcept;
@@ -215,7 +218,5 @@ static_assert(std::is_standard_layout_v<PartyQuestOrderedLifecycleClaim>);
 static_assert(std::is_trivially_copyable_v<PartyQuestOrderedLifecycleClaim>);
 static_assert(!std::is_copy_constructible_v<PartyQuestOrderedLifecycleQueue>);
 static_assert(!std::is_copy_assignable_v<PartyQuestOrderedLifecycleQueue>);
-static_assert(std::is_nothrow_move_constructible_v<
-    PartyQuestOrderedLifecycleQueue>);
-static_assert(std::is_nothrow_move_assignable_v<
-    PartyQuestOrderedLifecycleQueue>);
+static_assert(!std::is_move_constructible_v<PartyQuestOrderedLifecycleQueue>);
+static_assert(!std::is_move_assignable_v<PartyQuestOrderedLifecycleQueue>);

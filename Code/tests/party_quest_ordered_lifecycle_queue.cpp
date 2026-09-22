@@ -914,17 +914,17 @@ TEST_CASE("Invalid reason is rejected without consuming counters",
     REQUIRE(valid.Epoch->Revision == 1u);
 }
 
-TEST_CASE("Ordered lifecycle queue is move-only and preserves active state on move",
+TEST_CASE("Ordered lifecycle queue identity cannot move across claim domains",
           "[quest.party-state.ordered-lifecycle]")
 {
     STATIC_REQUIRE_FALSE(
         std::is_copy_constructible_v<PartyQuestOrderedLifecycleQueue>);
     STATIC_REQUIRE_FALSE(
         std::is_copy_assignable_v<PartyQuestOrderedLifecycleQueue>);
-    STATIC_REQUIRE(
-        std::is_nothrow_move_constructible_v<PartyQuestOrderedLifecycleQueue>);
-    STATIC_REQUIRE(
-        std::is_nothrow_move_assignable_v<PartyQuestOrderedLifecycleQueue>);
+    STATIC_REQUIRE_FALSE(
+        std::is_move_constructible_v<PartyQuestOrderedLifecycleQueue>);
+    STATIC_REQUIRE_FALSE(
+        std::is_move_assignable_v<PartyQuestOrderedLifecycleQueue>);
     STATIC_REQUIRE(sizeof(PartyQuestOrderedLifecycleReason) == 1u);
     STATIC_REQUIRE(sizeof(PartyQuestOrderedLifecycleAction) == 1u);
     STATIC_REQUIRE(sizeof(PartyQuestOrderedLifecycleEvidenceMask) == 2u);
@@ -943,15 +943,6 @@ TEST_CASE("Ordered lifecycle queue is move-only and preserves active state on mo
         std::declval<PartyQuestOrderedLifecycleQueue&>().Retry(
             std::declval<const Claim&>())));
 
-    PartyQuestOrderedLifecycleQueue source;
-    REQUIRE(source.Enqueue(Reason::Connected).Status == Status::Queued);
-    const auto claim = source.TryClaimFront();
-    REQUIRE(claim);
-
-    PartyQuestOrderedLifecycleQueue moved(std::move(source));
-    REQUIRE(moved.IsCurrent(*claim));
-    REQUIRE(moved.Acknowledge(*claim));
-    REQUIRE_FALSE(moved.TryClaimFront());
 }
 
 TEST_CASE("Deterministic randomized bounded model preserves capacity ordering claim and retry invariants",
