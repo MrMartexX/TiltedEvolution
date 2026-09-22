@@ -95,6 +95,8 @@ struct PartyQuestNativeLoadBridgeDescriptorV1 final
 
 struct PartyQuestNativeLoadBridgeIdentityV1 final
 {
+    // Only Bytes[0..Length) participate in identity, comparison, hashing and
+    // correlation. Tail bytes are outside the identity and must be ignored.
     uint16_t Length{};
     uint16_t Reserved0{};
     uint8_t Bytes[PartyQuestNativeLoadIdentity::kCapacity]{};
