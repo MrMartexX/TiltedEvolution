@@ -55,6 +55,60 @@ struct PartyQuestNativeLoadBridgeCallCapability final
     uint64_t RuntimeFingerprint{};
     uint64_t AttemptNonce{};
 
+    // Populated only for Reserve. The reducer publishes a canonical identity:
+    // Reserved0 and bytes outside Length are zero. Drain operations carry an
+    // all-zero identity because their authority is the exact active nonce.
+    PartyQuestNativeLoadBridgeIdentityV1 ReserveIdentity;
+
+    [[nodiscard]] static constexpr bool IsZeroIdentity(
+        const PartyQuestNativeLoadBridgeIdentityV1& acIdentity) noexcept
+    {
+        if (acIdentity.Length != 0u || acIdentity.Reserved0 != 0u)
+            return false;
+
+        for (const auto value : acIdentity.Bytes)
+        {
+            if (value != 0u)
+                return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] static constexpr bool IsCanonicalIdentity(
+        const PartyQuestNativeLoadBridgeIdentityV1& acIdentity) noexcept
+    {
+        if (!PartyQuestNativeLoadBridgePolicy::IsValidIdentity(acIdentity))
+            return false;
+
+        for (size_t index = acIdentity.Length;
+             index < sizeof(acIdentity.Bytes);
+             ++index)
+        {
+            if (acIdentity.Bytes[index] != 0u)
+                return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] static constexpr bool IdentityEquals(
+        const PartyQuestNativeLoadBridgeIdentityV1& acLeft,
+        const PartyQuestNativeLoadBridgeIdentityV1& acRight) noexcept
+    {
+        if (!PartyQuestNativeLoadBridgePolicy::IsValidIdentity(acLeft) ||
+            !PartyQuestNativeLoadBridgePolicy::IsValidIdentity(acRight) ||
+            acLeft.Length != acRight.Length)
+        {
+            return false;
+        }
+
+        for (size_t index = 0u; index < acLeft.Length; ++index)
+        {
+            if (acLeft.Bytes[index] != acRight.Bytes[index])
+                return false;
+        }
+        return true;
+    }
+
     [[nodiscard]] constexpr bool IsAuthorized() const noexcept
     {
         if (PinnedModuleRequired != 1u ||
@@ -68,15 +122,21 @@ struct PartyQuestNativeLoadBridgeCallCapability final
         switch (EffectKind)
         {
         case PartyQuestNativeLoadBridgeOwnerEffectKind::Reserve:
-            if (AttemptNonce != 0u)
+            if (AttemptNonce != 0u ||
+                !IsCanonicalIdentity(ReserveIdentity))
+            {
                 return false;
+            }
             break;
 
         case PartyQuestNativeLoadBridgeOwnerEffectKind::Cancel:
         case PartyQuestNativeLoadBridgeOwnerEffectKind::Poll:
         case PartyQuestNativeLoadBridgeOwnerEffectKind::Retire:
-            if (AttemptNonce == 0u)
+            if (AttemptNonce == 0u ||
+                !IsZeroIdentity(ReserveIdentity))
+            {
                 return false;
+            }
             break;
 
         case PartyQuestNativeLoadBridgeOwnerEffectKind::None:
@@ -128,21 +188,38 @@ struct PartyQuestNativeLoadBridgeCallCapability final
             aGeneration == BoundGeneration;
     }
 
+    /**
+     * Non-Reserve operations are correlated exclusively by exact active nonce.
+     * Reserve deliberately returns false here so a caller cannot authorize it
+     * without also presenting the exact identity through AuthorizesExactReserve.
+     */
     [[nodiscard]] constexpr bool AuthorizesExactCall(
         PartyQuestNativeLoadBridgeOwnerEffectKind aEffectKind,
         uint64_t aAttemptNonce) const noexcept
     {
-        if (!IsAuthorized() || aEffectKind != EffectKind)
-            return false;
-
-        if (EffectKind ==
-            PartyQuestNativeLoadBridgeOwnerEffectKind::Reserve)
+        if (!IsAuthorized() ||
+            aEffectKind != EffectKind ||
+            EffectKind == PartyQuestNativeLoadBridgeOwnerEffectKind::Reserve)
         {
-            return aAttemptNonce == 0u;
+            return false;
         }
 
         return aAttemptNonce != 0u &&
             aAttemptNonce == AttemptNonce;
+    }
+
+    /**
+     * Reserve is authorized only for the semantic identity that Plan()
+     * published. Tail bytes outside Length are intentionally not identity by
+     * ABI contract and therefore do not affect this comparison.
+     */
+    [[nodiscard]] constexpr bool AuthorizesExactReserve(
+        const PartyQuestNativeLoadBridgeIdentityV1& acIdentity) const noexcept
+    {
+        return IsAuthorized() &&
+            EffectKind ==
+                PartyQuestNativeLoadBridgeOwnerEffectKind::Reserve &&
+            IdentityEquals(ReserveIdentity, acIdentity);
     }
 };
 
@@ -193,7 +270,7 @@ public:
 static_assert(sizeof(PartyQuestNativeLoadBridgeCallAuthority) == 1u);
 static_assert(sizeof(PartyQuestNativeLoadBridgeCallCapabilityStatus) == 1u);
 
-static_assert(sizeof(PartyQuestNativeLoadBridgeCallCapability) == 40u);
+static_assert(sizeof(PartyQuestNativeLoadBridgeCallCapability) == 304u);
 static_assert(alignof(PartyQuestNativeLoadBridgeCallCapability) == 8u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeCallCapability, EffectKind) == 0u);
@@ -201,8 +278,10 @@ static_assert(offsetof(
     PartyQuestNativeLoadBridgeCallCapability, BoundGeneration) == 8u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeCallCapability, AttemptNonce) == 32u);
+static_assert(offsetof(
+    PartyQuestNativeLoadBridgeCallCapability, ReserveIdentity) == 40u);
 
-static_assert(sizeof(PartyQuestNativeLoadBridgeCallCapabilityResult) == 48u);
+static_assert(sizeof(PartyQuestNativeLoadBridgeCallCapabilityResult) == 312u);
 static_assert(alignof(PartyQuestNativeLoadBridgeCallCapabilityResult) == 8u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeCallCapabilityResult, Status) == 0u);

@@ -171,7 +171,8 @@ Capability RequireCapability(
     const Result& acPlan,
     EffectKind aKind,
     Authority aAuthority,
-    uint64_t aNonce)
+    uint64_t aNonce,
+    const Identity* apReserveIdentity = nullptr)
 {
     const auto authorized =
         Policy::Authorize(acOwner.Snapshot(), acPlan);
@@ -181,7 +182,20 @@ Capability RequireCapability(
     REQUIRE(authorized.Capability.Authority == aAuthority);
     REQUIRE(authorized.Capability.PinnedModuleRequired == 1u);
     REQUIRE(authorized.Capability.AttemptNonce == aNonce);
-    REQUIRE(authorized.Capability.AuthorizesExactCall(aKind, aNonce));
+
+    if (aKind == EffectKind::Reserve)
+    {
+        REQUIRE(apReserveIdentity != nullptr);
+        REQUIRE_FALSE(authorized.Capability.AuthorizesExactCall(
+            aKind, aNonce));
+        REQUIRE(authorized.Capability.AuthorizesExactReserve(
+            *apReserveIdentity));
+    }
+    else
+    {
+        REQUIRE(apReserveIdentity == nullptr);
+        REQUIRE(authorized.Capability.AuthorizesExactCall(aKind, aNonce));
+    }
 
     if (aAuthority == Authority::CurrentGeneration)
     {
@@ -213,7 +227,8 @@ void ReserveOwner(
         plan,
         EffectKind::Reserve,
         Authority::CurrentGeneration,
-        0u);
+        0u,
+        &acIdentity);
     REQUIRE(capability.BoundGeneration ==
         capability.ObservedGeneration);
 
@@ -264,7 +279,7 @@ TEST_CASE(
     STATIC_REQUIRE(sizeof(PartyQuestNativeLoadBridgeCallAuthority) == 1u);
     STATIC_REQUIRE(
         sizeof(PartyQuestNativeLoadBridgeCallCapabilityStatus) == 1u);
-    STATIC_REQUIRE(sizeof(Capability) == 40u);
+    STATIC_REQUIRE(sizeof(Capability) == 304u);
     STATIC_REQUIRE(alignof(Capability) == 8u);
     STATIC_REQUIRE(std::is_standard_layout_v<Capability>);
     STATIC_REQUIRE(std::is_trivially_copyable_v<Capability>);
@@ -287,6 +302,71 @@ TEST_CASE(
     forged.RuntimeFingerprint = kFingerprint;
     forged.AttemptNonce = 1u;
     REQUIRE_FALSE(forged.IsAuthorized());
+
+    Capability forgedReserve{};
+    forgedReserve.EffectKind = EffectKind::Reserve;
+    forgedReserve.Authority = Authority::CurrentGeneration;
+    forgedReserve.PinnedModuleRequired = 1u;
+    forgedReserve.BoundGeneration = 1u;
+    forgedReserve.ObservedGeneration = 1u;
+    forgedReserve.RuntimeFingerprint = kFingerprint;
+    REQUIRE_FALSE(forgedReserve.IsAuthorized());
+}
+
+TEST_CASE(
+    "Reserve capability is bound to the exact planned identity",
+    "[quest.party-state][native-load-call-capability][reserve-identity]")
+{
+    Owner owner;
+    BindOwner(owner, 3u);
+
+    auto plannedIdentity = MakeIdentity(21u);
+    plannedIdentity.Bytes[100] = 0xA5u; // Tail is outside semantic identity.
+
+    const auto plan = owner.Plan(ReserveCommand(plannedIdentity));
+    const auto authorized = Policy::Authorize(owner.Snapshot(), plan);
+    REQUIRE(authorized.IsAuthorized());
+    REQUIRE(authorized.Capability.EffectKind == EffectKind::Reserve);
+    REQUIRE(authorized.Capability.AttemptNonce == 0u);
+    REQUIRE(authorized.Capability.ReserveIdentity.Length ==
+        plannedIdentity.Length);
+    REQUIRE(authorized.Capability.ReserveIdentity.Bytes[100] == 0u);
+
+    REQUIRE_FALSE(authorized.Capability.AuthorizesExactCall(
+        EffectKind::Reserve, 0u));
+    REQUIRE(authorized.Capability.AuthorizesExactReserve(plannedIdentity));
+
+    auto differentFirst = plannedIdentity;
+    ++differentFirst.Bytes[0];
+    REQUIRE_FALSE(
+        authorized.Capability.AuthorizesExactReserve(differentFirst));
+
+    auto differentMiddle = plannedIdentity;
+    ++differentMiddle.Bytes[2];
+    REQUIRE_FALSE(
+        authorized.Capability.AuthorizesExactReserve(differentMiddle));
+
+    auto differentLast = plannedIdentity;
+    ++differentLast.Bytes[3];
+    REQUIRE_FALSE(
+        authorized.Capability.AuthorizesExactReserve(differentLast));
+
+    auto differentLength = plannedIdentity;
+    differentLength.Length = 3u;
+    REQUIRE_FALSE(
+        authorized.Capability.AuthorizesExactReserve(differentLength));
+
+    auto malformed = plannedIdentity;
+    malformed.Reserved0 = 1u;
+    REQUIRE_FALSE(
+        authorized.Capability.AuthorizesExactReserve(malformed));
+
+    auto tailOnlyDifference = plannedIdentity;
+    tailOnlyDifference.Bytes[100] = 0x5Au;
+    REQUIRE(
+        authorized.Capability.AuthorizesExactReserve(tailOnlyDifference));
+
+    REQUIRE_FALSE(authorized.Capability.AuthorizesExactReserve(Identity{}));
 }
 
 TEST_CASE(

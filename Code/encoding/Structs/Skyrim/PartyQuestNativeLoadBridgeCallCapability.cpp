@@ -223,6 +223,12 @@ PartyQuestNativeLoadBridgeCallCapabilityPolicy::Authorize(
     result.Capability.ObservedGeneration = acSnapshot.CurrentGeneration;
     result.Capability.RuntimeFingerprint = acSnapshot.RuntimeFingerprint;
     result.Capability.AttemptNonce = attemptNonce;
+    if (effectKind ==
+        PartyQuestNativeLoadBridgeOwnerEffectKind::Reserve)
+    {
+        result.Capability.ReserveIdentity =
+            acPlan.Effect.ReserveRequest.Identity;
+    }
 
     if (!result.Capability.IsAuthorized())
     {
