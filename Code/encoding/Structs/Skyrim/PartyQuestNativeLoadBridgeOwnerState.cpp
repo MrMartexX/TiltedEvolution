@@ -786,6 +786,8 @@ PartyQuestNativeLoadBridgeOwnerState::ApplyForeignOutcome(
     }
 
     if (acOutcome.EffectKind != m_pendingEffect.Kind ||
+        acOutcome.EffectSequence == 0u ||
+        acOutcome.EffectSequence != m_pendingEffect.Sequence ||
         !AreZero(acOutcome.Reserved0, sizeof(acOutcome.Reserved0)) ||
         acOutcome.Reserved1 != 0u)
     {

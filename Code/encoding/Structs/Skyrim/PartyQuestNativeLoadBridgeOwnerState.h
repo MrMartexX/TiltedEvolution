@@ -127,6 +127,7 @@ struct PartyQuestNativeLoadBridgeOwnerForeignOutcome final
     uint8_t HasCompletion{};
     uint8_t Reserved0[4]{};
 
+    uint64_t EffectSequence{};
     uint32_t RawStatus{};
     uint32_t Reserved1{};
 
@@ -331,18 +332,20 @@ static_assert(offsetof(
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeOwnerEffect, ReserveRequest) == 24u);
 
-static_assert(sizeof(PartyQuestNativeLoadBridgeOwnerForeignOutcome) == 592u);
+static_assert(sizeof(PartyQuestNativeLoadBridgeOwnerForeignOutcome) == 600u);
 static_assert(alignof(PartyQuestNativeLoadBridgeOwnerForeignOutcome) == 8u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeOwnerForeignOutcome, EffectKind) == 0u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeOwnerForeignOutcome, Disposition) == 1u);
 static_assert(offsetof(
-    PartyQuestNativeLoadBridgeOwnerForeignOutcome, RawStatus) == 8u);
+    PartyQuestNativeLoadBridgeOwnerForeignOutcome, EffectSequence) == 8u);
 static_assert(offsetof(
-    PartyQuestNativeLoadBridgeOwnerForeignOutcome, Reservation) == 16u);
+    PartyQuestNativeLoadBridgeOwnerForeignOutcome, RawStatus) == 16u);
 static_assert(offsetof(
-    PartyQuestNativeLoadBridgeOwnerForeignOutcome, Completion) == 296u);
+    PartyQuestNativeLoadBridgeOwnerForeignOutcome, Reservation) == 24u);
+static_assert(offsetof(
+    PartyQuestNativeLoadBridgeOwnerForeignOutcome, Completion) == 304u);
 
 static_assert(sizeof(PartyQuestNativeLoadBridgeOwnerResult) == 600u);
 static_assert(alignof(PartyQuestNativeLoadBridgeOwnerResult) == 8u);

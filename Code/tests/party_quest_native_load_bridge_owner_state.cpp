@@ -214,6 +214,15 @@ Outcome UnknownOutcome(EffectKind aKind) noexcept
     return outcome;
 }
 
+Result Apply(
+    Owner& aOwner,
+    Outcome aOutcome) noexcept
+{
+    aOutcome.EffectSequence =
+        aOwner.Snapshot().PendingEffectSequence;
+    return aOwner.ApplyForeignOutcome(aOutcome);
+}
+
 Outcome ReserveSuccess(
     uint64_t aNonce,
     const Identity& acIdentity) noexcept
@@ -383,7 +392,7 @@ uint64_t ReserveOwner(
         acIdentity));
 
     const auto applied =
-        aOwner.ApplyForeignOutcome(
+        Apply(aOwner, 
             ReserveSuccess(aNonce, acIdentity));
     REQUIRE(applied.Code == ResultCode::Reserved);
     REQUIRE(applied.HasEffect == 0u);
@@ -403,7 +412,7 @@ Completion CacheCompletion(
         aOwner.Plan(NonceCommand(CommandKind::Poll, aNonce));
     RequireEffect(plan, EffectKind::Poll, aNonce);
 
-    const auto applied = aOwner.ApplyForeignOutcome(
+    const auto applied = Apply(aOwner, 
         CompletionSuccess(
             aNonce,
             aSequence,
@@ -424,7 +433,7 @@ void RetireOwner(Owner& aOwner, uint64_t aNonce)
 
     const auto outcome =
         ReturnedOutcome(EffectKind::Retire, Status::Retired);
-    const auto applied = aOwner.ApplyForeignOutcome(outcome);
+    const auto applied = Apply(aOwner, outcome);
     REQUIRE(applied.Code == ResultCode::Retired);
     RequireSnapshotInvariant(aOwner.Snapshot());
     RequireReleaseSafe(applied, aOwner.Snapshot());
@@ -457,7 +466,7 @@ void ReachPhase(Owner& aOwner, Phase aPhase)
         ReserveOwner(aOwner, 1u);
         const auto shutdown = aOwner.Plan(ShutdownCommand());
         RequireEffect(shutdown, EffectKind::Cancel, 1u);
-        const auto pending = aOwner.ApplyForeignOutcome(
+        const auto pending = Apply(aOwner, 
             ReturnedOutcome(EffectKind::Cancel, Status::InvalidState));
         REQUIRE(pending.Code == ResultCode::Pending);
         REQUIRE(aOwner.Snapshot().Phase == Phase::ShutdownDrain);
@@ -477,7 +486,7 @@ void ReachPhase(Owner& aOwner, Phase aPhase)
         const auto reserve = aOwner.Plan(ReserveCommand());
         RequireEffect(reserve, EffectKind::Reserve);
         const auto poisoned =
-            aOwner.ApplyForeignOutcome(
+            Apply(aOwner, 
                 UnknownOutcome(EffectKind::Reserve));
         REQUIRE(poisoned.Code ==
             ResultCode::PoisonedUnsafeToUnload);
@@ -930,7 +939,7 @@ TEST_CASE("Native load bridge owner Reserve accepts only exact valid monotonic r
 
     auto returnedIdentity = identity;
     returnedIdentity.Bytes[200] = 0xA5u;
-    const auto applied = owner.ApplyForeignOutcome(
+    const auto applied = Apply(owner, 
         ReserveSuccess(9u, returnedIdentity));
     REQUIRE(applied.Code == ResultCode::Reserved);
 
@@ -955,7 +964,7 @@ TEST_CASE("Native load bridge owner local nonce classification prevents stale AB
     const auto cancelPlan =
         owner.Plan(NonceCommand(CommandKind::Cancel, 10u));
     RequireEffect(cancelPlan, EffectKind::Cancel, 10u);
-    const auto cancelled = owner.ApplyForeignOutcome(
+    const auto cancelled = Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::Cancelled));
     REQUIRE(cancelled.Code == ResultCode::Cancelled);
 
@@ -1049,7 +1058,7 @@ TEST_CASE("Native load bridge owner ignores identity tail outside Length",
 
     auto reservationIdentity = identity;
     reservationIdentity.Bytes[100] = 0x22u;
-    REQUIRE(owner.ApplyForeignOutcome(
+    REQUIRE(Apply(owner, 
         ReserveSuccess(1u, reservationIdentity)).Code ==
         ResultCode::Reserved);
 
@@ -1059,7 +1068,7 @@ TEST_CASE("Native load bridge owner ignores identity tail outside Length",
 
     auto completionIdentity = identity;
     completionIdentity.Bytes[100] = 0x33u;
-    const auto completion = owner.ApplyForeignOutcome(
+    const auto completion = Apply(owner, 
         CompletionSuccess(1u, 1u, completionIdentity, 1u));
     REQUIRE(completion.Code == ResultCode::CompletionAvailable);
     REQUIRE(completion.Completion.Identity.Bytes[100] == 0u);
@@ -1091,7 +1100,7 @@ TEST_CASE("Native load bridge owner generation transition retains active drain a
         const auto cancel =
             owner.Plan(NonceCommand(CommandKind::Cancel, 1u));
         RequireEffect(cancel, EffectKind::Cancel, 1u);
-        const auto cancelled = owner.ApplyForeignOutcome(
+        const auto cancelled = Apply(owner, 
             ReturnedOutcome(EffectKind::Cancel, Status::Cancelled));
         REQUIRE(cancelled.Code == ResultCode::Cancelled);
         REQUIRE(cancelled.ReleaseCapability == 1u);
@@ -1116,7 +1125,7 @@ TEST_CASE("Native load bridge owner generation transition retains active drain a
         const auto cancel =
             owner.Plan(NonceCommand(CommandKind::Cancel, 1u));
         RequireEffect(cancel, EffectKind::Cancel, 1u);
-        const auto pending = owner.ApplyForeignOutcome(
+        const auto pending = Apply(owner, 
             ReturnedOutcome(EffectKind::Cancel, Status::InvalidState));
         REQUIRE(pending.Code == ResultCode::Pending);
         REQUIRE(pending.ReleaseCapability == 0u);
@@ -1125,7 +1134,7 @@ TEST_CASE("Native load bridge owner generation transition retains active drain a
         const auto poll =
             owner.Plan(NonceCommand(CommandKind::Poll, 1u));
         RequireEffect(poll, EffectKind::Poll, 1u);
-        REQUIRE(owner.ApplyForeignOutcome(
+        REQUIRE(Apply(owner, 
             ReturnedOutcome(EffectKind::Poll, Status::Pending)).Code ==
             ResultCode::Pending);
 
@@ -1133,7 +1142,7 @@ TEST_CASE("Native load bridge owner generation transition retains active drain a
         const auto retire =
             owner.Plan(NonceCommand(CommandKind::Retire, 1u));
         RequireEffect(retire, EffectKind::Retire, 1u);
-        const auto retired = owner.ApplyForeignOutcome(
+        const auto retired = Apply(owner, 
             ReturnedOutcome(EffectKind::Retire, Status::Retired));
         REQUIRE(retired.Code == ResultCode::Retired);
         REQUIRE(retired.ReleaseCapability == 1u);
@@ -1210,7 +1219,7 @@ TEST_CASE("Native load bridge owner Shutdown drains before releasing capability"
         RequireEffect(shutdown, EffectKind::Cancel, 1u);
         REQUIRE(owner.Snapshot().Phase == Phase::ShutdownDrain);
 
-        const auto cancelled = owner.ApplyForeignOutcome(
+        const auto cancelled = Apply(owner, 
             ReturnedOutcome(EffectKind::Cancel, Status::Cancelled));
         REQUIRE(cancelled.Code == ResultCode::Cancelled);
         REQUIRE(cancelled.ReleaseCapability == 1u);
@@ -1229,7 +1238,7 @@ TEST_CASE("Native load bridge owner Shutdown drains before releasing capability"
         const auto shutdown = owner.Plan(ShutdownCommand());
         RequireEffect(shutdown, EffectKind::Cancel, 1u);
 
-        const auto pending = owner.ApplyForeignOutcome(
+        const auto pending = Apply(owner, 
             ReturnedOutcome(EffectKind::Cancel, Status::InvalidState));
         REQUIRE(pending.Code == ResultCode::Pending);
         REQUIRE(owner.Snapshot().Phase == Phase::ShutdownDrain);
@@ -1239,7 +1248,7 @@ TEST_CASE("Native load bridge owner Shutdown drains before releasing capability"
 
         const auto shutdownAgain = owner.Plan(ShutdownCommand());
         RequireEffect(shutdownAgain, EffectKind::Retire, 1u);
-        const auto retired = owner.ApplyForeignOutcome(
+        const auto retired = Apply(owner, 
             ReturnedOutcome(EffectKind::Retire, Status::Retired));
         REQUIRE(retired.Code == ResultCode::Retired);
         REQUIRE(retired.ReleaseCapability == 1u);
@@ -1328,7 +1337,7 @@ TEST_CASE("Native load bridge owner maps every known status per pending effect",
                 ValidOutcomeFor(effect, status, before);
 
             const auto result =
-                owner.ApplyForeignOutcome(outcome);
+                Apply(owner, outcome);
 
             if (!IsAllowedStatus(effect, status))
             {
@@ -1384,7 +1393,7 @@ TEST_CASE("Native load bridge owner unknown status poisons every effect",
             std::numeric_limits<uint32_t>::max();
 
         const auto result =
-            owner.ApplyForeignOutcome(outcome);
+            Apply(owner, outcome);
         REQUIRE(result.Code ==
             ResultCode::PoisonedUnsafeToUnload);
         REQUIRE(result.ReleaseCapability == 0u);
@@ -1407,7 +1416,7 @@ TEST_CASE("Native load bridge owner unknown foreign disposition poisons every ef
         ReachPendingEffect(owner, effect);
 
         const auto result =
-            owner.ApplyForeignOutcome(UnknownOutcome(effect));
+            Apply(owner, UnknownOutcome(effect));
         REQUIRE(result.Code ==
             ResultCode::PoisonedUnsafeToUnload);
         REQUIRE(result.ReleaseCapability == 0u);
@@ -1427,7 +1436,7 @@ TEST_CASE("Native load bridge owner effect mismatch and outcome reserved fields 
         auto outcome =
             ReserveSuccess(1u, MakeIdentity());
         outcome.EffectKind = EffectKind::Poll;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1438,7 +1447,7 @@ TEST_CASE("Native load bridge owner effect mismatch and outcome reserved fields 
         auto outcome =
             ReturnedOutcome(EffectKind::Cancel, Status::Cancelled);
         outcome.Reserved0[1] = 1u;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1449,7 +1458,7 @@ TEST_CASE("Native load bridge owner effect mismatch and outcome reserved fields 
         auto outcome =
             ReturnedOutcome(EffectKind::Poll, Status::Pending);
         outcome.Reserved1 = 1u;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1461,7 +1470,7 @@ TEST_CASE("Native load bridge owner effect mismatch and outcome reserved fields 
             ReturnedOutcome(EffectKind::Retire, Status::Retired);
         outcome.Disposition =
             static_cast<ForeignDisposition>(0xFFu);
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 }
@@ -1475,7 +1484,7 @@ TEST_CASE("Native load bridge owner Reserve payload corruption poisons",
         ReachPendingEffect(owner, EffectKind::Reserve);
         auto outcome = ReserveSuccess(1u, MakeIdentity());
         outcome.HasReservation = 0u;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1487,7 +1496,7 @@ TEST_CASE("Native load bridge owner Reserve payload corruption poisons",
         outcome.HasCompletion = 1u;
         outcome.Completion =
             MakeCompletion(1u, 1u, MakeIdentity());
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1497,7 +1506,7 @@ TEST_CASE("Native load bridge owner Reserve payload corruption poisons",
         ReachPendingEffect(owner, EffectKind::Reserve);
         auto outcome = ReserveSuccess(1u, MakeIdentity());
         ++outcome.Reservation.AbiVersion;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1507,7 +1516,7 @@ TEST_CASE("Native load bridge owner Reserve payload corruption poisons",
         ReachPendingEffect(owner, EffectKind::Reserve);
         auto outcome = ReserveSuccess(1u, MakeIdentity());
         --outcome.Reservation.StructSize;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1517,7 +1526,7 @@ TEST_CASE("Native load bridge owner Reserve payload corruption poisons",
         ReachPendingEffect(owner, EffectKind::Reserve);
         auto outcome = ReserveSuccess(1u, MakeIdentity());
         outcome.Reservation.AttemptNonce = 0u;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1527,7 +1536,7 @@ TEST_CASE("Native load bridge owner Reserve payload corruption poisons",
         ReachPendingEffect(owner, EffectKind::Reserve);
         auto mismatch = MakeIdentity(5u);
         auto outcome = ReserveSuccess(1u, mismatch);
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1541,7 +1550,7 @@ TEST_CASE("Native load bridge owner Reserve payload corruption poisons",
             auto mismatch = MakeIdentity();
             ++mismatch.Bytes[position];
             auto outcome = ReserveSuccess(1u, mismatch);
-            REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+            REQUIRE(Apply(owner, outcome).Code ==
                 ResultCode::PoisonedUnsafeToUnload);
         }
     }
@@ -1559,7 +1568,7 @@ TEST_CASE("Native load bridge owner Poll payload corruption poisons",
         outcome.HasCompletion = 1u;
         outcome.Completion =
             MakeCompletion(1u, 1u, MakeIdentity());
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1570,7 +1579,7 @@ TEST_CASE("Native load bridge owner Poll payload corruption poisons",
         auto outcome = CompletionSuccess(
             1u, 1u, MakeIdentity());
         outcome.HasCompletion = 0u;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1581,7 +1590,7 @@ TEST_CASE("Native load bridge owner Poll payload corruption poisons",
         auto outcome = CompletionSuccess(
             1u, 1u, MakeIdentity());
         ++outcome.Completion.AbiVersion;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
 
         Owner owner2;
@@ -1589,7 +1598,7 @@ TEST_CASE("Native load bridge owner Poll payload corruption poisons",
         outcome = CompletionSuccess(
             1u, 1u, MakeIdentity());
         --outcome.Completion.StructSize;
-        REQUIRE(owner2.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner2, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1599,7 +1608,7 @@ TEST_CASE("Native load bridge owner Poll payload corruption poisons",
         ReachPendingEffect(owner, EffectKind::Poll);
         auto outcome = CompletionSuccess(
             2u, 1u, MakeIdentity());
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1610,7 +1619,7 @@ TEST_CASE("Native load bridge owner Poll payload corruption poisons",
         auto outcome = CompletionSuccess(
             1u, 1u, MakeIdentity());
         outcome.Completion.EventSequence = 0u;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1620,7 +1629,7 @@ TEST_CASE("Native load bridge owner Poll payload corruption poisons",
         ReachPendingEffect(owner, EffectKind::Poll);
         auto outcome = CompletionSuccess(
             1u, 1u, MakeIdentity(), 2u);
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1631,7 +1640,7 @@ TEST_CASE("Native load bridge owner Poll payload corruption poisons",
         auto outcome = CompletionSuccess(
             1u, 1u, MakeIdentity());
         outcome.Completion.Reserved[4] = 1u;
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1643,7 +1652,7 @@ TEST_CASE("Native load bridge owner Poll payload corruption poisons",
         ++mismatch.Bytes[2];
         auto outcome = CompletionSuccess(
             1u, 1u, mismatch);
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1656,7 +1665,7 @@ TEST_CASE("Native load bridge owner Poll payload corruption poisons",
         outcome.HasReservation = 1u;
         outcome.Reservation =
             MakeReservation(1u, MakeIdentity());
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 }
@@ -1673,7 +1682,7 @@ TEST_CASE("Native load bridge owner Cancel and Retire reject contradictory paylo
         outcome.HasCompletion = 1u;
         outcome.Completion =
             MakeCompletion(1u, 1u, MakeIdentity());
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 
@@ -1686,7 +1695,7 @@ TEST_CASE("Native load bridge owner Cancel and Retire reject contradictory paylo
         outcome.HasReservation = 1u;
         outcome.Reservation =
             MakeReservation(1u, MakeIdentity());
-        REQUIRE(owner.ApplyForeignOutcome(outcome).Code ==
+        REQUIRE(Apply(owner, outcome).Code ==
             ResultCode::PoisonedUnsafeToUnload);
     }
 }
@@ -1701,7 +1710,7 @@ TEST_CASE("Native load bridge owner attempt nonce is strictly monotonic across r
     const auto cancel =
         owner.Plan(NonceCommand(CommandKind::Cancel, 5u));
     RequireEffect(cancel, EffectKind::Cancel, 5u);
-    REQUIRE(owner.ApplyForeignOutcome(
+    REQUIRE(Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::Cancelled)).Code ==
         ResultCode::Cancelled);
 
@@ -1712,14 +1721,14 @@ TEST_CASE("Native load bridge owner attempt nonce is strictly monotonic across r
 
     const auto reservePlan = owner.Plan(ReserveCommand());
     RequireEffect(reservePlan, EffectKind::Reserve);
-    REQUIRE(owner.ApplyForeignOutcome(
+    REQUIRE(Apply(owner, 
         ReserveSuccess(6u, MakeIdentity())).Code ==
         ResultCode::Reserved);
 
     const auto cancel2 =
         owner.Plan(NonceCommand(CommandKind::Cancel, 6u));
     RequireEffect(cancel2, EffectKind::Cancel, 6u);
-    REQUIRE(owner.ApplyForeignOutcome(
+    REQUIRE(Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::Cancelled)).Code ==
         ResultCode::Cancelled);
 
@@ -1727,7 +1736,7 @@ TEST_CASE("Native load bridge owner attempt nonce is strictly monotonic across r
     {
         const auto badPlan = owner.Plan(ReserveCommand());
         RequireEffect(badPlan, EffectKind::Reserve);
-        const auto poisoned = owner.ApplyForeignOutcome(
+        const auto poisoned = Apply(owner, 
             ReserveSuccess(6u, MakeIdentity()));
         REQUIRE(poisoned.Code ==
             ResultCode::PoisonedUnsafeToUnload);
@@ -1738,7 +1747,7 @@ TEST_CASE("Native load bridge owner attempt nonce is strictly monotonic across r
     {
         const auto badPlan = owner.Plan(ReserveCommand());
         RequireEffect(badPlan, EffectKind::Reserve);
-        const auto poisoned = owner.ApplyForeignOutcome(
+        const auto poisoned = Apply(owner, 
             ReserveSuccess(5u, MakeIdentity()));
         REQUIRE(poisoned.Code ==
             ResultCode::PoisonedUnsafeToUnload);
@@ -1768,7 +1777,7 @@ TEST_CASE("Native load bridge owner completion sequence is strictly monotonic ac
         const auto poll =
             owner.Plan(NonceCommand(CommandKind::Poll, 2u));
         RequireEffect(poll, EffectKind::Poll, 2u);
-        const auto poisoned = owner.ApplyForeignOutcome(
+        const auto poisoned = Apply(owner, 
             CompletionSuccess(2u, 9u, MakeIdentity()));
         REQUIRE(poisoned.Code ==
             ResultCode::PoisonedUnsafeToUnload);
@@ -1780,7 +1789,7 @@ TEST_CASE("Native load bridge owner completion sequence is strictly monotonic ac
         const auto poll =
             owner.Plan(NonceCommand(CommandKind::Poll, 2u));
         RequireEffect(poll, EffectKind::Poll, 2u);
-        const auto poisoned = owner.ApplyForeignOutcome(
+        const auto poisoned = Apply(owner, 
             CompletionSuccess(2u, 8u, MakeIdentity()));
         REQUIRE(poisoned.Code ==
             ResultCode::PoisonedUnsafeToUnload);
@@ -1807,7 +1816,7 @@ TEST_CASE("Native load bridge owner accepts UINT64_MAX only as final monotonic v
             cancel,
             EffectKind::Cancel,
             std::numeric_limits<uint64_t>::max());
-        REQUIRE(owner.ApplyForeignOutcome(
+        REQUIRE(Apply(owner, 
             ReturnedOutcome(
                 EffectKind::Cancel,
                 Status::Cancelled)).Code ==
@@ -1815,7 +1824,7 @@ TEST_CASE("Native load bridge owner accepts UINT64_MAX only as final monotonic v
 
         const auto next = owner.Plan(ReserveCommand());
         RequireEffect(next, EffectKind::Reserve);
-        REQUIRE(owner.ApplyForeignOutcome(
+        REQUIRE(Apply(owner, 
             ReserveSuccess(
                 std::numeric_limits<uint64_t>::max(),
                 MakeIdentity())).Code ==
@@ -1837,7 +1846,7 @@ TEST_CASE("Native load bridge owner accepts UINT64_MAX only as final monotonic v
         const auto poll =
             owner.Plan(NonceCommand(CommandKind::Poll, 2u));
         RequireEffect(poll, EffectKind::Poll, 2u);
-        REQUIRE(owner.ApplyForeignOutcome(
+        REQUIRE(Apply(owner, 
             CompletionSuccess(
                 2u,
                 std::numeric_limits<uint64_t>::max(),
@@ -1858,7 +1867,7 @@ TEST_CASE("Native load bridge owner poison is absorbing and never releasable",
     RequireEffect(poll, EffectKind::Poll, 1u);
 
     const auto poisoned =
-        owner.ApplyForeignOutcome(
+        Apply(owner, 
             UnknownOutcome(EffectKind::Poll));
     REQUIRE(poisoned.Code ==
         ResultCode::PoisonedUnsafeToUnload);
@@ -1893,7 +1902,7 @@ TEST_CASE("Native load bridge owner poison is absorbing and never releasable",
     arbitrary.EffectKind = EffectKind::Reserve;
     arbitrary.Disposition = ForeignDisposition::Returned;
     arbitrary.RawStatus = static_cast<uint32_t>(Status::Reserved);
-    const auto apply = owner.ApplyForeignOutcome(arbitrary);
+    const auto apply = Apply(owner, arbitrary);
     REQUIRE(apply.Code ==
         ResultCode::PoisonedUnsafeToUnload);
     REQUIRE(apply.ReleaseCapability == 0u);
@@ -1910,7 +1919,7 @@ TEST_CASE("Native load bridge owner Apply without a pending effect is inert",
 {
     Owner owner;
     const auto before = owner.Snapshot();
-    const auto result = owner.ApplyForeignOutcome(
+    const auto result = Apply(owner, 
         ReturnedOutcome(EffectKind::Reserve, Status::Reserved));
     REQUIRE(result.Code == ResultCode::InvalidState);
     const auto after = owner.Snapshot();
@@ -1938,7 +1947,7 @@ TEST_CASE("Native load bridge owner deterministic model trace preserves ownershi
         const auto firstPoll =
             owner.Plan(NonceCommand(CommandKind::Poll, index));
         RequireEffect(firstPoll, EffectKind::Poll, index);
-        REQUIRE(owner.ApplyForeignOutcome(
+        REQUIRE(Apply(owner, 
             ReturnedOutcome(
                 EffectKind::Poll,
                 Status::Pending)).Code ==
@@ -1987,6 +1996,59 @@ TEST_CASE("Native load bridge owner deterministic model trace preserves ownershi
     RequireSnapshotInvariant(finalSnapshot);
 }
 
+TEST_CASE("Native load bridge owner rejects foreign outcome without exact Plan sequence",
+          "[quest.party-state][native-load-owner][effect-sequence]")
+{
+    Owner owner;
+    BindOwner(owner, 1u);
+
+    const auto reserve = owner.Plan(ReserveCommand());
+    RequireEffect(reserve, EffectKind::Reserve);
+
+    auto uncorrelated = ReserveSuccess(1u, MakeIdentity());
+    REQUIRE(uncorrelated.EffectSequence == 0u);
+
+    const auto poisoned =
+        owner.ApplyForeignOutcome(uncorrelated);
+    REQUIRE(poisoned.Code == ResultCode::PoisonedUnsafeToUnload);
+    REQUIRE(poisoned.ReleaseCapability == 0u);
+    REQUIRE(owner.Snapshot().Phase == Phase::PoisonedUnsafeToUnload);
+    REQUIRE(owner.Snapshot().CapabilityRetained == 1u);
+}
+
+TEST_CASE("Native load bridge owner rejects replayed foreign outcome from an older Plan",
+          "[quest.party-state][native-load-owner][effect-sequence][replay]")
+{
+    Owner owner;
+    BindOwner(owner, 1u);
+    ReserveOwner(owner, 1u);
+
+    const auto firstPoll =
+        owner.Plan(NonceCommand(CommandKind::Poll, 1u));
+    RequireEffect(firstPoll, EffectKind::Poll, 1u);
+
+    auto stale =
+        ReturnedOutcome(EffectKind::Poll, Status::Pending);
+    stale.EffectSequence = firstPoll.Effect.Sequence;
+    REQUIRE(owner.ApplyForeignOutcome(stale).Code ==
+        ResultCode::Pending);
+
+    const auto secondPoll =
+        owner.Plan(NonceCommand(CommandKind::Poll, 1u));
+    RequireEffect(secondPoll, EffectKind::Poll, 1u);
+    REQUIRE(secondPoll.Effect.Sequence != firstPoll.Effect.Sequence);
+    REQUIRE(owner.Snapshot().PendingEffectSequence ==
+        secondPoll.Effect.Sequence);
+
+    // Same kind, nonce and valid status are insufficient: this outcome belongs
+    // to the previous Poll Plan instance.
+    const auto poisoned = owner.ApplyForeignOutcome(stale);
+    REQUIRE(poisoned.Code == ResultCode::PoisonedUnsafeToUnload);
+    REQUIRE(poisoned.ReleaseCapability == 0u);
+    REQUIRE(owner.Snapshot().Phase == Phase::PoisonedUnsafeToUnload);
+    REQUIRE(owner.Snapshot().CapabilityRetained == 1u);
+}
+
 TEST_CASE("Native load bridge owner effect sequence binds each published Plan instance",
           "[quest.party-state][native-load-owner][effect-sequence]")
 {
@@ -1998,7 +2060,7 @@ TEST_CASE("Native load bridge owner effect sequence binds each published Plan in
     const uint64_t firstSequence = firstReserve.Effect.Sequence;
     REQUIRE(owner.Snapshot().PendingEffectSequence == firstSequence);
 
-    REQUIRE(owner.ApplyForeignOutcome(
+    REQUIRE(Apply(owner, 
         ReserveSuccess(1u, MakeIdentity(4u, 0x31u))).Code ==
         ResultCode::Reserved);
     REQUIRE(owner.Snapshot().PendingEffectSequence == 0u);
@@ -2010,7 +2072,7 @@ TEST_CASE("Native load bridge owner effect sequence binds each published Plan in
     REQUIRE(owner.Snapshot().PendingEffectSequence ==
         cancel.Effect.Sequence);
 
-    REQUIRE(owner.ApplyForeignOutcome(
+    REQUIRE(Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::Cancelled)).Code ==
         ResultCode::Cancelled);
     REQUIRE(owner.Snapshot().PendingEffectSequence == 0u);
@@ -2115,13 +2177,14 @@ TEST_CASE("Native load bridge owner fixed POD layouts and noexcept surface are s
     STATIC_REQUIRE(offsetof(Effect, AttemptNonce) == 16u);
     STATIC_REQUIRE(offsetof(Effect, ReserveRequest) == 24u);
 
-    STATIC_REQUIRE(sizeof(Outcome) == 592u);
+    STATIC_REQUIRE(sizeof(Outcome) == 600u);
     STATIC_REQUIRE(alignof(Outcome) == 8u);
     STATIC_REQUIRE(offsetof(Outcome, EffectKind) == 0u);
     STATIC_REQUIRE(offsetof(Outcome, Disposition) == 1u);
-    STATIC_REQUIRE(offsetof(Outcome, RawStatus) == 8u);
-    STATIC_REQUIRE(offsetof(Outcome, Reservation) == 16u);
-    STATIC_REQUIRE(offsetof(Outcome, Completion) == 296u);
+    STATIC_REQUIRE(offsetof(Outcome, EffectSequence) == 8u);
+    STATIC_REQUIRE(offsetof(Outcome, RawStatus) == 16u);
+    STATIC_REQUIRE(offsetof(Outcome, Reservation) == 24u);
+    STATIC_REQUIRE(offsetof(Outcome, Completion) == 304u);
 
     STATIC_REQUIRE(sizeof(Result) == 600u);
     STATIC_REQUIRE(alignof(Result) == 8u);

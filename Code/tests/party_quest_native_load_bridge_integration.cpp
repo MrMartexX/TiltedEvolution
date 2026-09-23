@@ -97,6 +97,7 @@ Outcome BaseOutcome(
     Outcome outcome{};
     outcome.EffectKind = acPlan.Effect.Kind;
     outcome.Disposition = ForeignDisposition::Returned;
+    outcome.EffectSequence = acPlan.Effect.Sequence;
     outcome.RawStatus = static_cast<uint32_t>(aStatus);
     return outcome;
 }

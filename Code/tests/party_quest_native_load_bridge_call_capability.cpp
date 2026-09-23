@@ -158,6 +158,15 @@ Outcome UnknownOutcome(EffectKind aKind) noexcept
     return outcome;
 }
 
+PartyQuestNativeLoadBridgeOwnerResult Apply(
+    Owner& aOwner,
+    Outcome aOutcome) noexcept
+{
+    aOutcome.EffectSequence =
+        aOwner.Snapshot().PendingEffectSequence;
+    return aOwner.ApplyForeignOutcome(aOutcome);
+}
+
 void BindOwner(Owner& aOwner, uint64_t aGeneration)
 {
     const auto result = aOwner.Plan(BindCommand(aGeneration));
@@ -236,7 +245,7 @@ void ReserveOwner(
         capability.ObservedGeneration);
 
     const auto applied =
-        aOwner.ApplyForeignOutcome(ReserveSuccess(aNonce, acIdentity));
+        Apply(aOwner, ReserveSuccess(aNonce, acIdentity));
     REQUIRE(applied.Code == ResultCode::Reserved);
     REQUIRE(applied.ReleaseCapability == 0u);
     REQUIRE(aOwner.Snapshot().ActiveAttemptNonce == aNonce);
@@ -266,7 +275,7 @@ void EnterCompletion(
         EffectKind::Poll,
         Authority::RequestDrain,
         aNonce);
-    const auto completed = aOwner.ApplyForeignOutcome(
+    const auto completed = Apply(aOwner, 
         CompletionSuccess(aNonce, aSequence, acIdentity));
     REQUIRE(completed.Code == ResultCode::CompletionAvailable);
     REQUIRE(completed.ReleaseCapability == 0u);
@@ -392,7 +401,7 @@ TEST_CASE(
         &identity);
     const uint64_t firstSequence = firstCapability.EffectSequence;
 
-    REQUIRE(owner.ApplyForeignOutcome(
+    REQUIRE(Apply(owner, 
         ReserveSuccess(1u, identity)).Code == ResultCode::Reserved);
 
     const auto cancel =
@@ -403,7 +412,7 @@ TEST_CASE(
         EffectKind::Cancel,
         Authority::CurrentGeneration,
         1u);
-    REQUIRE(owner.ApplyForeignOutcome(
+    REQUIRE(Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::Cancelled)).Code ==
         ResultCode::Cancelled);
 
@@ -530,7 +539,7 @@ TEST_CASE(
         50u);
     REQUIRE(beforeCapability.AuthorizesRuntimeGeneration(20u));
 
-    const auto stillActive = owner.ApplyForeignOutcome(
+    const auto stillActive = Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::InvalidState));
     REQUIRE(stillActive.Code == ResultCode::Pending);
     REQUIRE(stillActive.ReleaseCapability == 0u);
@@ -549,7 +558,7 @@ TEST_CASE(
     REQUIRE(afterCapability.BoundGeneration == 20u);
     REQUIRE(afterCapability.ObservedGeneration == 21u);
 
-    const auto cancelled = owner.ApplyForeignOutcome(
+    const auto cancelled = Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::Cancelled));
     REQUIRE(cancelled.Code == ResultCode::Cancelled);
     REQUIRE(cancelled.ReleaseCapability == 1u);
@@ -589,7 +598,7 @@ TEST_CASE(
     REQUIRE(capability.BoundGeneration == 30u);
     REQUIRE(capability.ObservedGeneration == 31u);
 
-    const auto retired = owner.ApplyForeignOutcome(
+    const auto retired = Apply(owner, 
         ReturnedOutcome(EffectKind::Retire, Status::Retired));
     REQUIRE(retired.Code == ResultCode::Retired);
     REQUIRE(retired.ReleaseCapability == 1u);
@@ -619,7 +628,7 @@ TEST_CASE(
         EffectKind::Cancel,
         Authority::RequestDrain,
         70u);
-    REQUIRE(owner.ApplyForeignOutcome(
+    REQUIRE(Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::Cancelled)).
         ReleaseCapability == 1u);
 
@@ -665,7 +674,7 @@ TEST_CASE(
     REQUIRE(cancelCapability.ObservedGeneration == 50u);
     REQUIRE_FALSE(cancelCapability.AuthorizesRuntimeGeneration(50u));
 
-    const auto claimed = owner.ApplyForeignOutcome(
+    const auto claimed = Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::InvalidState));
     REQUIRE(claimed.Code == ResultCode::Pending);
     REQUIRE(claimed.ReleaseCapability == 0u);
@@ -681,7 +690,7 @@ TEST_CASE(
         80u);
     REQUIRE_FALSE(retireCapability.AuthorizesRuntimeGeneration(50u));
 
-    const auto retired = owner.ApplyForeignOutcome(
+    const auto retired = Apply(owner, 
         ReturnedOutcome(EffectKind::Retire, Status::Retired));
     REQUIRE(retired.Code == ResultCode::Retired);
     REQUIRE(retired.ReleaseCapability == 1u);
@@ -715,7 +724,7 @@ TEST_CASE(
             90u);
 
         const auto poisoned =
-            owner.ApplyForeignOutcome(UnknownOutcome(EffectKind::Poll));
+            Apply(owner, UnknownOutcome(EffectKind::Poll));
         REQUIRE(poisoned.Code ==
             ResultCode::PoisonedUnsafeToUnload);
         REQUIRE(poisoned.ReleaseCapability == 0u);
@@ -742,7 +751,7 @@ TEST_CASE(
             Authority::RequestDrain,
             91u);
 
-        const auto poisoned = owner.ApplyForeignOutcome(
+        const auto poisoned = Apply(owner, 
             CompletionSuccess(92u, 1u, identity));
         REQUIRE(poisoned.Code ==
             ResultCode::PoisonedUnsafeToUnload);
@@ -770,7 +779,7 @@ TEST_CASE(
 
         auto malformed = CompletionSuccess(92u, 1u, identity);
         malformed.Completion.Reserved[0] = 1u;
-        const auto poisoned = owner.ApplyForeignOutcome(malformed);
+        const auto poisoned = Apply(owner, malformed);
         REQUIRE(poisoned.Code ==
             ResultCode::PoisonedUnsafeToUnload);
         REQUIRE(poisoned.ReleaseCapability == 0u);
@@ -798,7 +807,7 @@ TEST_CASE(
             ReturnedOutcome(EffectKind::Cancel, Status::Cancelled);
         impossible.RawStatus = std::numeric_limits<uint32_t>::max();
         const auto poisoned =
-            owner.ApplyForeignOutcome(impossible);
+            Apply(owner, impossible);
         REQUIRE(poisoned.Code ==
             ResultCode::PoisonedUnsafeToUnload);
         REQUIRE(poisoned.ReleaseCapability == 0u);
@@ -825,7 +834,7 @@ TEST_CASE(
         Authority::RequestDrain,
         100u);
 
-    const auto released = owner.ApplyForeignOutcome(
+    const auto released = Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::Cancelled));
     REQUIRE(released.ReleaseCapability == 1u);
 
@@ -835,7 +844,7 @@ TEST_CASE(
     REQUIRE(duplicate.ReleaseCapability == 0u);
     RequireNoForeignAuthority(owner, duplicate);
 
-    const auto spurious = owner.ApplyForeignOutcome(
+    const auto spurious = Apply(owner, 
         ReturnedOutcome(EffectKind::Cancel, Status::Cancelled));
     REQUIRE(spurious.Code == ResultCode::InvalidState);
     REQUIRE(spurious.ReleaseCapability == 0u);
@@ -878,7 +887,7 @@ TEST_CASE(
             REQUIRE_FALSE(capability.AuthorizesExactCall(
                 EffectKind::Cancel, nonce + 1u));
 
-            const auto released = owner.ApplyForeignOutcome(
+            const auto released = Apply(owner, 
                 ReturnedOutcome(EffectKind::Cancel, Status::Cancelled));
             REQUIRE(released.ReleaseCapability == 1u);
         }
@@ -892,7 +901,7 @@ TEST_CASE(
                 EffectKind::Cancel,
                 Authority::RequestDrain,
                 nonce);
-            REQUIRE(owner.ApplyForeignOutcome(
+            REQUIRE(Apply(owner, 
                 ReturnedOutcome(EffectKind::Cancel, Status::InvalidState)).
                 ReleaseCapability == 0u);
 
@@ -909,7 +918,7 @@ TEST_CASE(
                     EffectKind::Poll,
                     Authority::RequestDrain,
                     nonce);
-                const auto pending = owner.ApplyForeignOutcome(
+                const auto pending = Apply(owner, 
                     ReturnedOutcome(EffectKind::Poll, Status::Pending));
                 REQUIRE(pending.Code == ResultCode::Pending);
                 REQUIRE(pending.ReleaseCapability == 0u);
@@ -929,7 +938,7 @@ TEST_CASE(
                 EffectKind::Retire,
                 Authority::RequestDrain,
                 nonce);
-            const auto released = owner.ApplyForeignOutcome(
+            const auto released = Apply(owner, 
                 ReturnedOutcome(EffectKind::Retire, Status::Retired));
             REQUIRE(released.ReleaseCapability == 1u);
         }
