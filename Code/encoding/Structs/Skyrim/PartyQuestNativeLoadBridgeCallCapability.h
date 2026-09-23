@@ -54,6 +54,7 @@ struct PartyQuestNativeLoadBridgeCallCapability final
     uint64_t ObservedGeneration{};
     uint64_t RuntimeFingerprint{};
     uint64_t AttemptNonce{};
+    uint64_t EffectSequence{};
 
     // Populated only for Reserve. The reducer publishes a canonical identity:
     // Reserved0 and bytes outside Length are zero. Drain operations carry an
@@ -114,7 +115,8 @@ struct PartyQuestNativeLoadBridgeCallCapability final
         if (PinnedModuleRequired != 1u ||
             BoundGeneration == 0u ||
             ObservedGeneration == 0u ||
-            RuntimeFingerprint == 0u)
+            RuntimeFingerprint == 0u ||
+            EffectSequence == 0u)
         {
             return false;
         }
@@ -270,7 +272,7 @@ public:
 static_assert(sizeof(PartyQuestNativeLoadBridgeCallAuthority) == 1u);
 static_assert(sizeof(PartyQuestNativeLoadBridgeCallCapabilityStatus) == 1u);
 
-static_assert(sizeof(PartyQuestNativeLoadBridgeCallCapability) == 304u);
+static_assert(sizeof(PartyQuestNativeLoadBridgeCallCapability) == 312u);
 static_assert(alignof(PartyQuestNativeLoadBridgeCallCapability) == 8u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeCallCapability, EffectKind) == 0u);
@@ -279,9 +281,11 @@ static_assert(offsetof(
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeCallCapability, AttemptNonce) == 32u);
 static_assert(offsetof(
-    PartyQuestNativeLoadBridgeCallCapability, ReserveIdentity) == 40u);
+    PartyQuestNativeLoadBridgeCallCapability, EffectSequence) == 40u);
+static_assert(offsetof(
+    PartyQuestNativeLoadBridgeCallCapability, ReserveIdentity) == 48u);
 
-static_assert(sizeof(PartyQuestNativeLoadBridgeCallCapabilityResult) == 312u);
+static_assert(sizeof(PartyQuestNativeLoadBridgeCallCapabilityResult) == 320u);
 static_assert(alignof(PartyQuestNativeLoadBridgeCallCapabilityResult) == 8u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeCallCapabilityResult, Status) == 0u);

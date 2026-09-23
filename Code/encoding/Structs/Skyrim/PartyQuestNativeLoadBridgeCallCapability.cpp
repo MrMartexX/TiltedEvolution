@@ -54,6 +54,7 @@ namespace
         acPlan.ReleaseCapability == 0u &&
         acPlan.HasCompletion == 0u &&
         AreZero(acPlan.Reserved, sizeof(acPlan.Reserved)) &&
+        acPlan.Effect.Sequence != 0u &&
         acPlan.Effect.Kind !=
             PartyQuestNativeLoadBridgeOwnerEffectKind::None &&
         AreZero(acPlan.Effect.Reserved, sizeof(acPlan.Effect.Reserved)) &&
@@ -108,7 +109,9 @@ PartyQuestNativeLoadBridgeCallCapabilityPolicy::Authorize(
                 CapabilityUnavailable);
     }
 
-    if (acSnapshot.PendingEffect != acPlan.Effect.Kind)
+    if (acSnapshot.PendingEffect != acPlan.Effect.Kind ||
+        acSnapshot.PendingEffectSequence == 0u ||
+        acSnapshot.PendingEffectSequence != acPlan.Effect.Sequence)
     {
         return Failure(
             PartyQuestNativeLoadBridgeCallCapabilityStatus::StateMismatch);
@@ -223,6 +226,7 @@ PartyQuestNativeLoadBridgeCallCapabilityPolicy::Authorize(
     result.Capability.ObservedGeneration = acSnapshot.CurrentGeneration;
     result.Capability.RuntimeFingerprint = acSnapshot.RuntimeFingerprint;
     result.Capability.AttemptNonce = attemptNonce;
+    result.Capability.EffectSequence = acPlan.Effect.Sequence;
     if (effectKind ==
         PartyQuestNativeLoadBridgeOwnerEffectKind::Reserve)
     {

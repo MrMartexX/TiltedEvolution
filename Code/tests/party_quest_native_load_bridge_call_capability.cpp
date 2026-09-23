@@ -182,6 +182,9 @@ Capability RequireCapability(
     REQUIRE(authorized.Capability.Authority == aAuthority);
     REQUIRE(authorized.Capability.PinnedModuleRequired == 1u);
     REQUIRE(authorized.Capability.AttemptNonce == aNonce);
+    REQUIRE(authorized.Capability.EffectSequence ==
+        acPlan.Effect.Sequence);
+    REQUIRE(authorized.Capability.EffectSequence != 0u);
 
     if (aKind == EffectKind::Reserve)
     {
@@ -279,7 +282,7 @@ TEST_CASE(
     STATIC_REQUIRE(sizeof(PartyQuestNativeLoadBridgeCallAuthority) == 1u);
     STATIC_REQUIRE(
         sizeof(PartyQuestNativeLoadBridgeCallCapabilityStatus) == 1u);
-    STATIC_REQUIRE(sizeof(Capability) == 304u);
+    STATIC_REQUIRE(sizeof(Capability) == 312u);
     STATIC_REQUIRE(alignof(Capability) == 8u);
     STATIC_REQUIRE(std::is_standard_layout_v<Capability>);
     STATIC_REQUIRE(std::is_trivially_copyable_v<Capability>);
@@ -301,6 +304,7 @@ TEST_CASE(
     forged.ObservedGeneration = 2u;
     forged.RuntimeFingerprint = kFingerprint;
     forged.AttemptNonce = 1u;
+    forged.EffectSequence = 1u;
     REQUIRE_FALSE(forged.IsAuthorized());
 
     Capability forgedReserve{};
@@ -310,6 +314,7 @@ TEST_CASE(
     forgedReserve.BoundGeneration = 1u;
     forgedReserve.ObservedGeneration = 1u;
     forgedReserve.RuntimeFingerprint = kFingerprint;
+    forgedReserve.EffectSequence = 1u;
     REQUIRE_FALSE(forgedReserve.IsAuthorized());
 }
 
@@ -367,6 +372,57 @@ TEST_CASE(
         authorized.Capability.AuthorizesExactReserve(tailOnlyDifference));
 
     REQUIRE_FALSE(authorized.Capability.AuthorizesExactReserve(Identity{}));
+}
+
+TEST_CASE(
+    "Call capability rejects a stale Plan instance even when Reserve identity repeats",
+    "[quest.party-state][native-load-call-capability][plan-sequence][aba]")
+{
+    Owner owner;
+    const auto identity = MakeIdentity(27u);
+    BindOwner(owner, 4u);
+
+    const auto firstPlan = owner.Plan(ReserveCommand(identity));
+    const auto firstCapability = RequireCapability(
+        owner,
+        firstPlan,
+        EffectKind::Reserve,
+        Authority::CurrentGeneration,
+        0u,
+        &identity);
+    const uint64_t firstSequence = firstCapability.EffectSequence;
+
+    REQUIRE(owner.ApplyForeignOutcome(
+        ReserveSuccess(1u, identity)).Code == ResultCode::Reserved);
+
+    const auto cancel =
+        owner.Plan(NonceCommand(CommandKind::Cancel, 1u));
+    RequireCapability(
+        owner,
+        cancel,
+        EffectKind::Cancel,
+        Authority::CurrentGeneration,
+        1u);
+    REQUIRE(owner.ApplyForeignOutcome(
+        ReturnedOutcome(EffectKind::Cancel, Status::Cancelled)).Code ==
+        ResultCode::Cancelled);
+
+    const auto secondPlan = owner.Plan(ReserveCommand(identity));
+    REQUIRE(secondPlan.Effect.Sequence != firstSequence);
+    REQUIRE(owner.Snapshot().PendingEffectSequence ==
+        secondPlan.Effect.Sequence);
+
+    const auto stale =
+        Policy::Authorize(owner.Snapshot(), firstPlan);
+    REQUIRE(stale.Status == CapabilityStatus::StateMismatch);
+    REQUIRE_FALSE(stale.IsAuthorized());
+    REQUIRE(stale.HasCapability == 0u);
+
+    const auto current = Policy::Authorize(owner.Snapshot(), secondPlan);
+    REQUIRE(current.IsAuthorized());
+    REQUIRE(current.Capability.EffectSequence ==
+        secondPlan.Effect.Sequence);
+    REQUIRE(current.Capability.AuthorizesExactReserve(identity));
 }
 
 TEST_CASE(

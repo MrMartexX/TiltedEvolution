@@ -112,6 +112,7 @@ struct PartyQuestNativeLoadBridgeOwnerEffect final
         PartyQuestNativeLoadBridgeOwnerEffectKind::None};
     uint8_t Reserved[7]{};
 
+    uint64_t Sequence{};
     uint64_t AttemptNonce{};
     PartyQuestNativeLoadBridgeReserveRequestV1 ReserveRequest;
 };
@@ -158,6 +159,7 @@ struct PartyQuestNativeLoadBridgeOwnerSnapshot final
     uint8_t HasCachedCompletion{};
     uint8_t Reserved[3]{};
 
+    uint64_t PendingEffectSequence{};
     uint64_t CurrentGeneration{};
     uint64_t BoundGeneration{};
     uint64_t RuntimeFingerprint{};
@@ -280,6 +282,7 @@ private:
         PartyQuestNativeLoadBridgeOwnerRequestPhase::None};
     uint8_t m_capabilityRetained{};
 
+    uint64_t m_nextEffectSequence{};
     uint64_t m_currentGeneration{};
     uint64_t m_boundGeneration{};
     uint64_t m_runtimeFingerprint{};
@@ -317,14 +320,16 @@ static_assert(offsetof(
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeOwnerCommand, Identity) == 32u);
 
-static_assert(sizeof(PartyQuestNativeLoadBridgeOwnerEffect) == 288u);
+static_assert(sizeof(PartyQuestNativeLoadBridgeOwnerEffect) == 296u);
 static_assert(alignof(PartyQuestNativeLoadBridgeOwnerEffect) == 8u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeOwnerEffect, Kind) == 0u);
 static_assert(offsetof(
-    PartyQuestNativeLoadBridgeOwnerEffect, AttemptNonce) == 8u);
+    PartyQuestNativeLoadBridgeOwnerEffect, Sequence) == 8u);
 static_assert(offsetof(
-    PartyQuestNativeLoadBridgeOwnerEffect, ReserveRequest) == 16u);
+    PartyQuestNativeLoadBridgeOwnerEffect, AttemptNonce) == 16u);
+static_assert(offsetof(
+    PartyQuestNativeLoadBridgeOwnerEffect, ReserveRequest) == 24u);
 
 static_assert(sizeof(PartyQuestNativeLoadBridgeOwnerForeignOutcome) == 592u);
 static_assert(alignof(PartyQuestNativeLoadBridgeOwnerForeignOutcome) == 8u);
@@ -339,25 +344,27 @@ static_assert(offsetof(
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeOwnerForeignOutcome, Completion) == 296u);
 
-static_assert(sizeof(PartyQuestNativeLoadBridgeOwnerResult) == 592u);
+static_assert(sizeof(PartyQuestNativeLoadBridgeOwnerResult) == 600u);
 static_assert(alignof(PartyQuestNativeLoadBridgeOwnerResult) == 8u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeOwnerResult, Code) == 0u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeOwnerResult, Effect) == 8u);
 static_assert(offsetof(
-    PartyQuestNativeLoadBridgeOwnerResult, Completion) == 296u);
+    PartyQuestNativeLoadBridgeOwnerResult, Completion) == 304u);
 
-static_assert(sizeof(PartyQuestNativeLoadBridgeOwnerSnapshot) == 616u);
+static_assert(sizeof(PartyQuestNativeLoadBridgeOwnerSnapshot) == 624u);
 static_assert(alignof(PartyQuestNativeLoadBridgeOwnerSnapshot) == 8u);
 static_assert(offsetof(
     PartyQuestNativeLoadBridgeOwnerSnapshot, Phase) == 0u);
 static_assert(offsetof(
-    PartyQuestNativeLoadBridgeOwnerSnapshot, CurrentGeneration) == 8u);
+    PartyQuestNativeLoadBridgeOwnerSnapshot, PendingEffectSequence) == 8u);
 static_assert(offsetof(
-    PartyQuestNativeLoadBridgeOwnerSnapshot, ActiveIdentity) == 56u);
+    PartyQuestNativeLoadBridgeOwnerSnapshot, CurrentGeneration) == 16u);
 static_assert(offsetof(
-    PartyQuestNativeLoadBridgeOwnerSnapshot, CachedCompletion) == 320u);
+    PartyQuestNativeLoadBridgeOwnerSnapshot, ActiveIdentity) == 64u);
+static_assert(offsetof(
+    PartyQuestNativeLoadBridgeOwnerSnapshot, CachedCompletion) == 328u);
 
 static_assert(std::is_standard_layout_v<
     PartyQuestNativeLoadBridgeOwnerCommand>);

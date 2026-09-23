@@ -248,6 +248,7 @@ void RequireEffect(
     REQUIRE(acResult.ReleaseCapability == 0u);
     REQUIRE(acResult.HasCompletion == 0u);
     REQUIRE(acResult.Effect.Kind == aKind);
+    REQUIRE(acResult.Effect.Sequence != 0u);
     REQUIRE(acResult.Effect.AttemptNonce == aNonce);
 }
 
@@ -331,7 +332,14 @@ void RequireSnapshotInvariant(const Snapshot& acSnapshot)
     }
 
     if (acSnapshot.PendingEffect != EffectKind::None)
+    {
         REQUIRE(acSnapshot.CapabilityRetained == 1u);
+        REQUIRE(acSnapshot.PendingEffectSequence != 0u);
+    }
+    else
+    {
+        REQUIRE(acSnapshot.PendingEffectSequence == 0u);
+    }
 }
 
 void RequireReleaseSafe(
@@ -1979,6 +1987,43 @@ TEST_CASE("Native load bridge owner deterministic model trace preserves ownershi
     RequireSnapshotInvariant(finalSnapshot);
 }
 
+TEST_CASE("Native load bridge owner effect sequence binds each published Plan instance",
+          "[quest.party-state][native-load-owner][effect-sequence]")
+{
+    Owner owner;
+    BindOwner(owner, 1u);
+
+    const auto firstReserve = owner.Plan(ReserveCommand(MakeIdentity(4u, 0x31u)));
+    RequireEffect(firstReserve, EffectKind::Reserve);
+    const uint64_t firstSequence = firstReserve.Effect.Sequence;
+    REQUIRE(owner.Snapshot().PendingEffectSequence == firstSequence);
+
+    REQUIRE(owner.ApplyForeignOutcome(
+        ReserveSuccess(1u, MakeIdentity(4u, 0x31u))).Code ==
+        ResultCode::Reserved);
+    REQUIRE(owner.Snapshot().PendingEffectSequence == 0u);
+
+    const auto cancel =
+        owner.Plan(NonceCommand(CommandKind::Cancel, 1u));
+    RequireEffect(cancel, EffectKind::Cancel, 1u);
+    REQUIRE(cancel.Effect.Sequence > firstSequence);
+    REQUIRE(owner.Snapshot().PendingEffectSequence ==
+        cancel.Effect.Sequence);
+
+    REQUIRE(owner.ApplyForeignOutcome(
+        ReturnedOutcome(EffectKind::Cancel, Status::Cancelled)).Code ==
+        ResultCode::Cancelled);
+    REQUIRE(owner.Snapshot().PendingEffectSequence == 0u);
+
+    const auto secondReserve =
+        owner.Plan(ReserveCommand(MakeIdentity(4u, 0x41u)));
+    RequireEffect(secondReserve, EffectKind::Reserve);
+    REQUIRE(secondReserve.Effect.Sequence > cancel.Effect.Sequence);
+    REQUIRE(secondReserve.Effect.Sequence != firstSequence);
+    REQUIRE(owner.Snapshot().PendingEffectSequence ==
+        secondReserve.Effect.Sequence);
+}
+
 TEST_CASE("Native load bridge owner fixed POD layouts and noexcept surface are stable",
           "[quest.party-state][native-load-owner][abi]")
 {
@@ -2063,11 +2108,12 @@ TEST_CASE("Native load bridge owner fixed POD layouts and noexcept surface are s
     STATIC_REQUIRE(offsetof(Command, AttemptNonce) == 24u);
     STATIC_REQUIRE(offsetof(Command, Identity) == 32u);
 
-    STATIC_REQUIRE(sizeof(Effect) == 288u);
+    STATIC_REQUIRE(sizeof(Effect) == 296u);
     STATIC_REQUIRE(alignof(Effect) == 8u);
     STATIC_REQUIRE(offsetof(Effect, Kind) == 0u);
-    STATIC_REQUIRE(offsetof(Effect, AttemptNonce) == 8u);
-    STATIC_REQUIRE(offsetof(Effect, ReserveRequest) == 16u);
+    STATIC_REQUIRE(offsetof(Effect, Sequence) == 8u);
+    STATIC_REQUIRE(offsetof(Effect, AttemptNonce) == 16u);
+    STATIC_REQUIRE(offsetof(Effect, ReserveRequest) == 24u);
 
     STATIC_REQUIRE(sizeof(Outcome) == 592u);
     STATIC_REQUIRE(alignof(Outcome) == 8u);
@@ -2077,18 +2123,19 @@ TEST_CASE("Native load bridge owner fixed POD layouts and noexcept surface are s
     STATIC_REQUIRE(offsetof(Outcome, Reservation) == 16u);
     STATIC_REQUIRE(offsetof(Outcome, Completion) == 296u);
 
-    STATIC_REQUIRE(sizeof(Result) == 592u);
+    STATIC_REQUIRE(sizeof(Result) == 600u);
     STATIC_REQUIRE(alignof(Result) == 8u);
     STATIC_REQUIRE(offsetof(Result, Code) == 0u);
     STATIC_REQUIRE(offsetof(Result, Effect) == 8u);
-    STATIC_REQUIRE(offsetof(Result, Completion) == 296u);
+    STATIC_REQUIRE(offsetof(Result, Completion) == 304u);
 
-    STATIC_REQUIRE(sizeof(Snapshot) == 616u);
+    STATIC_REQUIRE(sizeof(Snapshot) == 624u);
     STATIC_REQUIRE(alignof(Snapshot) == 8u);
     STATIC_REQUIRE(offsetof(Snapshot, Phase) == 0u);
-    STATIC_REQUIRE(offsetof(Snapshot, CurrentGeneration) == 8u);
-    STATIC_REQUIRE(offsetof(Snapshot, ActiveIdentity) == 56u);
-    STATIC_REQUIRE(offsetof(Snapshot, CachedCompletion) == 320u);
+    STATIC_REQUIRE(offsetof(Snapshot, PendingEffectSequence) == 8u);
+    STATIC_REQUIRE(offsetof(Snapshot, CurrentGeneration) == 16u);
+    STATIC_REQUIRE(offsetof(Snapshot, ActiveIdentity) == 64u);
+    STATIC_REQUIRE(offsetof(Snapshot, CachedCompletion) == 328u);
 
     STATIC_REQUIRE(std::is_standard_layout_v<Command>);
     STATIC_REQUIRE(std::is_trivially_copyable_v<Command>);

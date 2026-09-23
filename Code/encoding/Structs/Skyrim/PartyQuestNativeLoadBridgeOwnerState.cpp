@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestNativeLoadBridgeOwnerState.h>
 
 #include <cstring>
+#include <limits>
 
 bool PartyQuestNativeLoadBridgeOwnerState::AreZero(
     const uint8_t* apBytes,
@@ -174,6 +175,10 @@ PartyQuestNativeLoadBridgeOwnerResult
 PartyQuestNativeLoadBridgeOwnerState::PublishEffect(
     PartyQuestNativeLoadBridgeOwnerEffect aEffect) noexcept
 {
+    if (m_nextEffectSequence == std::numeric_limits<uint64_t>::max())
+        return Poison();
+
+    aEffect.Sequence = ++m_nextEffectSequence;
     m_pendingEffect = aEffect;
 
     auto result = MakeResult(
@@ -842,6 +847,7 @@ PartyQuestNativeLoadBridgeOwnerState::Snapshot() const noexcept
     result.CurrentGeneration = m_currentGeneration;
     result.BoundGeneration = m_boundGeneration;
     result.RuntimeFingerprint = m_runtimeFingerprint;
+    result.PendingEffectSequence = m_pendingEffect.Sequence;
 
     result.ActiveAttemptNonce = m_activeAttemptNonce;
     result.LastAttemptNonce = m_lastAttemptNonce;
