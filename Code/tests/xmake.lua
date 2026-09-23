@@ -9,7 +9,8 @@ target("TPTests")
     if is_plat("windows") then
         add_files(
             "TPTests.rc",
-            "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeModuleLease.cpp")
+            "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeModuleLease.cpp",
+            "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeOwner.cpp")
         add_syslinks("kernel32")
     end
     add_deps("SkyrimEncoding")
