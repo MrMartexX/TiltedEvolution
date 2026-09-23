@@ -46,6 +46,16 @@ template <class T>
 }
 
 template <class T>
+[[nodiscard]] bool ProcessImageAccepts(
+    PartyQuestSkyrimNativeLoadBridgeImageAddressValidator apValidator,
+    T apFunction) noexcept
+{
+    return apValidator != nullptr &&
+        apFunction != nullptr &&
+        apValidator(reinterpret_cast<const uint8_t*>(apFunction));
+}
+
+template <class T>
 [[nodiscard]] bool ExportBelongsToModule(
     HMODULE aModule,
     T apExport) noexcept
@@ -269,6 +279,7 @@ PartyQuestSkyrimNativeLoadBridgeModuleLease::
     , m_retire(aOther.m_retire)
     , m_boundGeneration(aOther.m_boundGeneration)
     , m_runtimeFingerprint(aOther.m_runtimeFingerprint)
+    , m_lifetimeKind(aOther.m_lifetimeKind)
     , m_poisoned(aOther.m_poisoned)
 {
     aOther.ResetMovedFrom();
@@ -353,6 +364,79 @@ PartyQuestSkyrimNativeLoadBridgeModuleLease::CreateAuthenticated(
     result.m_retire = apRetire;
     result.m_boundGeneration = aBoundGeneration;
     result.m_runtimeFingerprint = aRuntimeFingerprint;
+    result.m_lifetimeKind =
+        PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::
+            ExternalPinnedModule;
+    aStatus =
+        PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus::Ready;
+    return result;
+}
+
+PartyQuestSkyrimNativeLoadBridgeModuleLease
+PartyQuestSkyrimNativeLoadBridgeModuleLease::
+    CreateProcessImageAuthenticated(
+        uint64_t aBoundGeneration,
+        uint64_t aRuntimeFingerprint,
+        PartyQuestSkyrimNativeLoadBridgeImageAddressValidator apValidator,
+        PartyQuestNativeLoadBridgeGetDescriptorExport apGetDescriptor,
+        PartyQuestNativeLoadBridgeReserveExport apReserve,
+        PartyQuestNativeLoadBridgeCancelExport apCancel,
+        PartyQuestNativeLoadBridgePollExport apPoll,
+        PartyQuestNativeLoadBridgeRetireExport apRetire,
+        PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus&
+            aStatus) noexcept
+{
+    PartyQuestSkyrimNativeLoadBridgeModuleLease result;
+    aStatus =
+        PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus::
+            InvalidArgument;
+
+    if (aBoundGeneration == 0u ||
+        aRuntimeFingerprint == 0u ||
+        !apValidator ||
+        !apGetDescriptor ||
+        !apReserve ||
+        !apCancel ||
+        !apPoll ||
+        !apRetire)
+    {
+        return result;
+    }
+
+    if (!ProcessImageAccepts(apValidator, apGetDescriptor) ||
+        !ProcessImageAccepts(apValidator, apReserve) ||
+        !ProcessImageAccepts(apValidator, apCancel) ||
+        !ProcessImageAccepts(apValidator, apPoll) ||
+        !ProcessImageAccepts(apValidator, apRetire))
+    {
+        aStatus =
+            PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus::
+                ProcessImageRejected;
+        return result;
+    }
+
+    // The immersive launcher and the manually-mapped Skyrim runtime share the
+    // process main-module base. Lifetime is therefore process lifetime, not
+    // FreeLibrary ownership. The trusted pre-remap image predicate above is the
+    // code-origin proof; HMODULE is retained only as lifetime identity.
+    HMODULE processModule = ::GetModuleHandleW(nullptr);
+    if (!processModule)
+    {
+        aStatus =
+            PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus::
+                ModuleReferenceFailed;
+        return result;
+    }
+
+    result.m_module = processModule;
+    result.m_reserve = apReserve;
+    result.m_cancel = apCancel;
+    result.m_poll = apPoll;
+    result.m_retire = apRetire;
+    result.m_boundGeneration = aBoundGeneration;
+    result.m_runtimeFingerprint = aRuntimeFingerprint;
+    result.m_lifetimeKind =
+        PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::ProcessImage;
     aStatus =
         PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus::Ready;
     return result;
@@ -525,5 +609,7 @@ void PartyQuestSkyrimNativeLoadBridgeModuleLease::ResetMovedFrom() noexcept
     m_retire = nullptr;
     m_boundGeneration = 0u;
     m_runtimeFingerprint = 0u;
+    m_lifetimeKind =
+        PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::None;
     m_poisoned = 0u;
 }

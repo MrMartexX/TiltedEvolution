@@ -18,6 +18,8 @@ namespace
 using Lease = PartyQuestSkyrimNativeLoadBridgeModuleLease;
 using CreateStatus =
     PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus;
+using LifetimeKind =
+    PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind;
 using Owner = PartyQuestNativeLoadBridgeOwnerState;
 using Policy = PartyQuestNativeLoadBridgeCallCapabilityPolicy;
 using Command = PartyQuestNativeLoadBridgeOwnerCommand;
@@ -190,6 +192,18 @@ void* ModuleFor(T apFunction) noexcept
     return module;
 }
 
+bool AcceptAllTestImageAddresses(const uint8_t* apAddress) noexcept
+{
+    return apAddress != nullptr;
+}
+
+const uint8_t* g_rejectedAddress{};
+
+bool RejectOneTestImageAddress(const uint8_t* apAddress) noexcept
+{
+    return apAddress != nullptr && apAddress != g_rejectedAddress;
+}
+
 Command BindCommand(uint64_t aGeneration) noexcept
 {
     Command command{};
@@ -268,6 +282,32 @@ public:
                 aStatus);
     }
 
+    static PartyQuestSkyrimNativeLoadBridgeModuleLease
+    CreateProcessImage(
+        uint64_t aGeneration,
+        uint64_t aFingerprint,
+        PartyQuestSkyrimNativeLoadBridgeImageAddressValidator apValidator,
+        PartyQuestNativeLoadBridgeGetDescriptorExport apGetDescriptor,
+        PartyQuestNativeLoadBridgeReserveExport apReserve,
+        PartyQuestNativeLoadBridgeCancelExport apCancel,
+        PartyQuestNativeLoadBridgePollExport apPoll,
+        PartyQuestNativeLoadBridgeRetireExport apRetire,
+        PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus&
+            aStatus) noexcept
+    {
+        return PartyQuestSkyrimNativeLoadBridgeModuleLease::
+            CreateProcessImageAuthenticated(
+                aGeneration,
+                aFingerprint,
+                apValidator,
+                apGetDescriptor,
+                apReserve,
+                apCancel,
+                apPoll,
+                apRetire,
+                aStatus);
+    }
+
     static PartyQuestNativeLoadBridgeOwnerForeignOutcome Execute(
         PartyQuestSkyrimNativeLoadBridgeModuleLease& aLease,
         const PartyQuestNativeLoadBridgeCallCapability& acCapability,
@@ -326,6 +366,9 @@ TEST_CASE(
     REQUIRE(status == CreateStatus::Ready);
     REQUIRE(lease.IsPinned());
     REQUIRE(lease.IsCallable());
+    REQUIRE(
+        lease.GetLifetimeKind() ==
+        LifetimeKind::ExternalPinnedModule);
     REQUIRE_FALSE(lease.IsPoisoned());
     REQUIRE(lease.GetBoundGeneration() == 10u);
     REQUIRE(lease.GetRuntimeFingerprint() == kFingerprint);
@@ -364,6 +407,90 @@ TEST_CASE(
             &FakePoll,
             &FakeRetire,
             invalidStatus);
+    REQUIRE(invalidStatus == CreateStatus::InvalidArgument);
+    REQUIRE_FALSE(invalid.IsPinned());
+}
+
+TEST_CASE(
+    "Native load module lease accepts trusted process-image call targets without PE revalidation",
+    "[quest.party-state][native-load-module-lease][process-image]")
+{
+    ResetFake();
+
+    CreateStatus status{};
+    auto lease =
+        PartyQuestSkyrimNativeLoadBridgeModuleLeaseTestAccess::
+            CreateProcessImage(
+                15u,
+                kFingerprint,
+                &AcceptAllTestImageAddresses,
+                &FakeGetDescriptor,
+                &FakeReserve,
+                &FakeCancel,
+                &FakePoll,
+                &FakeRetire,
+                status);
+
+    REQUIRE(status == CreateStatus::Ready);
+    REQUIRE(lease.IsPinned());
+    REQUIRE(lease.IsCallable());
+    REQUIRE_FALSE(lease.IsPoisoned());
+    REQUIRE(
+        lease.GetLifetimeKind() == LifetimeKind::ProcessImage);
+    REQUIRE(lease.GetBoundGeneration() == 15u);
+    REQUIRE(lease.GetRuntimeFingerprint() == kFingerprint);
+
+    auto moved = std::move(lease);
+    REQUIRE_FALSE(lease.IsPinned());
+    REQUIRE(
+        lease.GetLifetimeKind() == LifetimeKind::None);
+    REQUIRE(moved.IsPinned());
+    REQUIRE(
+        moved.GetLifetimeKind() == LifetimeKind::ProcessImage);
+}
+
+TEST_CASE(
+    "Native load process-image lease requires every exact call target to pass trusted image predicate",
+    "[quest.party-state][native-load-module-lease][process-image][origin]")
+{
+    ResetFake();
+
+    g_rejectedAddress =
+        reinterpret_cast<const uint8_t*>(&FakePoll);
+    CreateStatus status{};
+    auto rejected =
+        PartyQuestSkyrimNativeLoadBridgeModuleLeaseTestAccess::
+            CreateProcessImage(
+                16u,
+                kFingerprint,
+                &RejectOneTestImageAddress,
+                &FakeGetDescriptor,
+                &FakeReserve,
+                &FakeCancel,
+                &FakePoll,
+                &FakeRetire,
+                status);
+    g_rejectedAddress = nullptr;
+
+    REQUIRE(status == CreateStatus::ProcessImageRejected);
+    REQUIRE_FALSE(rejected.IsPinned());
+    REQUIRE_FALSE(rejected.IsCallable());
+    REQUIRE(
+        rejected.GetLifetimeKind() == LifetimeKind::None);
+
+    CreateStatus invalidStatus{};
+    auto invalid =
+        PartyQuestSkyrimNativeLoadBridgeModuleLeaseTestAccess::
+            CreateProcessImage(
+                16u,
+                kFingerprint,
+                nullptr,
+                &FakeGetDescriptor,
+                &FakeReserve,
+                &FakeCancel,
+                &FakePoll,
+                &FakeRetire,
+                invalidStatus);
     REQUIRE(invalidStatus == CreateStatus::InvalidArgument);
     REQUIRE_FALSE(invalid.IsPinned());
 }

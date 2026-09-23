@@ -16,17 +16,37 @@ enum class PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus : uint8_t
     InvalidArgument = 2u,
     ModuleReferenceFailed = 3u,
     ExportModuleMismatch = 4u,
-    ModulePinFailed = 5u
+    ModulePinFailed = 5u,
+    ProcessImageRejected = 6u
 };
+
+enum class PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind : uint8_t
+{
+    None = 0u,
+    ExternalPinnedModule = 1u,
+    ProcessImage = 2u
+};
+
+using PartyQuestSkyrimNativeLoadBridgeImageAddressValidator =
+    bool (*)(const uint8_t*) noexcept;
 
 /**
  * Move-only physical call lease for one already-authenticated native LoadGame
  * bridge binding.
  *
- * This type is deliberately not a resolver. Only the future trusted resolver
- * (and tests) may construct it. Construction proves that all five accepted
- * exports belong to one already-loaded executable image and permanently pins
- * that image for process lifetime before publishing the lease.
+ * This type is deliberately not a resolver. Only a trusted resolver (and
+ * tests) may construct it. There are two disjoint lifetime proofs:
+ *
+ * - ExternalPinnedModule: all five call targets belong to one ordinary loaded
+ *   PE image and GetModuleHandleEx(...PIN) permanently pins it.
+ * - ProcessImage: all five direct call targets pass the launcher's trusted
+ *   pre-remap STR-image address predicate. The main executable is intrinsically
+ *   process-lifetime and cannot be unloaded independently.
+ *
+ * ProcessImage exists because the immersive launcher manual-maps Skyrim over
+ * the main module's PE headers after preserving the original STR image range.
+ * Re-validating those addresses with the post-remap PE SizeOfImage would test
+ * the wrong image boundary.
  *
  * The lease is bound to the resolver-authenticated runtime generation and
  * runtime fingerprint. It does not turn those values into runtime authority:
@@ -60,7 +80,15 @@ public:
 
     [[nodiscard]] bool IsPinned() const noexcept
     {
-        return m_module != nullptr;
+        return m_lifetimeKind !=
+                PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::None &&
+            m_module != nullptr;
+    }
+
+    [[nodiscard]] PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind
+    GetLifetimeKind() const noexcept
+    {
+        return m_lifetimeKind;
     }
 
     [[nodiscard]] bool IsCallable() const noexcept
@@ -111,6 +139,19 @@ private:
         PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus&
             aStatus) noexcept;
 
+    [[nodiscard]] static PartyQuestSkyrimNativeLoadBridgeModuleLease
+    CreateProcessImageAuthenticated(
+        uint64_t aBoundGeneration,
+        uint64_t aRuntimeFingerprint,
+        PartyQuestSkyrimNativeLoadBridgeImageAddressValidator apValidator,
+        PartyQuestNativeLoadBridgeGetDescriptorExport apGetDescriptor,
+        PartyQuestNativeLoadBridgeReserveExport apReserve,
+        PartyQuestNativeLoadBridgeCancelExport apCancel,
+        PartyQuestNativeLoadBridgePollExport apPoll,
+        PartyQuestNativeLoadBridgeRetireExport apRetire,
+        PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus&
+            aStatus) noexcept;
+
     [[nodiscard]] bool Matches(
         const PartyQuestNativeLoadBridgeCallCapability& acCapability,
         const PartyQuestNativeLoadBridgeOwnerEffect& acEffect) const noexcept;
@@ -128,11 +169,15 @@ private:
 
     uint64_t m_boundGeneration{};
     uint64_t m_runtimeFingerprint{};
+    PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind m_lifetimeKind{
+        PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::None};
     uint8_t m_poisoned{};
 };
 
 static_assert(sizeof(
     PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus) == 1u);
+static_assert(sizeof(
+    PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind) == 1u);
 static_assert(!std::is_default_constructible_v<
     PartyQuestSkyrimNativeLoadBridgeModuleLease>);
 static_assert(!std::is_copy_constructible_v<
