@@ -29,19 +29,25 @@ enum class PartyQuestSkyrimNativeLoadBridgeResolveStatus : uint8_t
     DescriptorCallFailed = 14u,
     DescriptorRejected = 15u,
     ModuleLeaseRejected = 16u,
-    UnexpectedFailure = 17u
+    UnexpectedFailure = 17u,
+    SourceKindMismatch = 18u,
+    ProcessImageAddressRejected = 19u
 };
 
 /**
  * Reviewed source evidence for one exact native LoadGame bridge artifact.
  *
- * This is intentionally stronger than a descriptor fingerprint: it binds the
- * bridge contract to one exact Skyrim runtime/executable identity, one relative
- * loaded-module path, one SHA-256 file identity and one expected runtime
- * fingerprint returned by the bridge descriptor.
+ * This is intentionally stronger than a descriptor fingerprint. It binds one
+ * exact Skyrim runtime/executable identity and runtime fingerprint to one of
+ * two disjoint reviewed code origins:
+ *
+ * - ExternalPinnedModule: exact relative module path plus SHA-256.
+ * - ProcessImage: exact trusted pre-remap STR-image predicate plus exact direct
+ *   descriptor/Reserve/Cancel/Poll/Retire call targets.
  *
  * Production callers cannot mint this capability. The production registry is
- * deliberately empty until a native artifact has been source/live-reviewed.
+ * deliberately empty until the concrete native provider surface has been
+ * source/live-reviewed.
  */
 class PartyQuestSkyrimNativeLoadBridgeSourceAuthorization final
 {
@@ -58,33 +64,81 @@ public:
                 m_runtimeVersion.Patch != 1170u ||
                 m_runtimeVersion.Build != 0u ||
                 !m_executableIdentity.IsValid() ||
-                m_relativeModulePath.empty() ||
-                m_relativeModulePath.is_absolute() ||
-                m_relativeModulePath.has_root_name() ||
-                m_relativeModulePath.has_root_directory() ||
                 m_runtimeFingerprint == 0u)
             {
                 return false;
             }
 
-            for (const auto& component : m_relativeModulePath)
+            switch (m_lifetimeKind)
             {
-                if (component == std::filesystem::path(".") ||
-                    component == std::filesystem::path(".."))
+            case PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::
+                ExternalPinnedModule:
+            {
+                if (m_imageValidator ||
+                    m_getDescriptor ||
+                    m_reserve ||
+                    m_cancel ||
+                    m_poll ||
+                    m_retire ||
+                    m_relativeModulePath.empty() ||
+                    m_relativeModulePath.is_absolute() ||
+                    m_relativeModulePath.has_root_name() ||
+                    m_relativeModulePath.has_root_directory())
                 {
                     return false;
                 }
+
+                for (const auto& component : m_relativeModulePath)
+                {
+                    if (component == std::filesystem::path(".") ||
+                        component == std::filesystem::path(".."))
+                    {
+                        return false;
+                    }
+                }
+
+                bool hashNonzero = false;
+                for (const auto value : m_moduleSha256)
+                    hashNonzero = hashNonzero || value != 0u;
+                return hashNonzero;
             }
 
-            bool hashNonzero = false;
-            for (const auto value : m_moduleSha256)
-                hashNonzero = hashNonzero || value != 0u;
-            return hashNonzero;
+            case PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::
+                ProcessImage:
+            {
+                if (!m_relativeModulePath.empty())
+                    return false;
+
+                for (const auto value : m_moduleSha256)
+                {
+                    if (value != 0u)
+                        return false;
+                }
+
+                return m_imageValidator &&
+                    m_getDescriptor &&
+                    m_reserve &&
+                    m_cancel &&
+                    m_poll &&
+                    m_retire;
+            }
+
+            case PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::None:
+                return false;
+            }
+
+            return false;
         }
         catch (...)
         {
             return false;
         }
+    }
+
+    [[nodiscard]] PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind
+    GetLifetimeKind() const noexcept
+    {
+        return m_lifetimeKind;
     }
 
     [[nodiscard]] const PartyQuestSkyrimRuntimeVersion&
@@ -116,6 +170,42 @@ public:
         return m_runtimeFingerprint;
     }
 
+    [[nodiscard]] PartyQuestSkyrimNativeLoadBridgeImageAddressValidator
+    GetProcessImageValidator() const noexcept
+    {
+        return m_imageValidator;
+    }
+
+    [[nodiscard]] PartyQuestNativeLoadBridgeGetDescriptorExport
+    GetProcessImageDescriptor() const noexcept
+    {
+        return m_getDescriptor;
+    }
+
+    [[nodiscard]] PartyQuestNativeLoadBridgeReserveExport
+    GetProcessImageReserve() const noexcept
+    {
+        return m_reserve;
+    }
+
+    [[nodiscard]] PartyQuestNativeLoadBridgeCancelExport
+    GetProcessImageCancel() const noexcept
+    {
+        return m_cancel;
+    }
+
+    [[nodiscard]] PartyQuestNativeLoadBridgePollExport
+    GetProcessImagePoll() const noexcept
+    {
+        return m_poll;
+    }
+
+    [[nodiscard]] PartyQuestNativeLoadBridgeRetireExport
+    GetProcessImageRetire() const noexcept
+    {
+        return m_retire;
+    }
+
 private:
     friend class PartyQuestSkyrimNativeLoadBridgeSourceRegistry;
     friend class PartyQuestSkyrimNativeLoadBridgeResolverTestAccess;
@@ -132,6 +222,36 @@ private:
         , m_relativeModulePath(std::move(aRelativeModulePath))
         , m_moduleSha256(aModuleSha256)
         , m_runtimeFingerprint(aRuntimeFingerprint)
+        , m_lifetimeKind(
+              PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::
+                  ExternalPinnedModule)
+        , m_reviewed(aReviewed)
+    {
+    }
+
+    PartyQuestSkyrimNativeLoadBridgeSourceAuthorization(
+        PartyQuestSkyrimRuntimeVersion aRuntimeVersion,
+        PartyQuestSkyrimExecutableIdentity aExecutableIdentity,
+        uint64_t aRuntimeFingerprint,
+        PartyQuestSkyrimNativeLoadBridgeImageAddressValidator apImageValidator,
+        PartyQuestNativeLoadBridgeGetDescriptorExport apGetDescriptor,
+        PartyQuestNativeLoadBridgeReserveExport apReserve,
+        PartyQuestNativeLoadBridgeCancelExport apCancel,
+        PartyQuestNativeLoadBridgePollExport apPoll,
+        PartyQuestNativeLoadBridgeRetireExport apRetire,
+        bool aReviewed) noexcept
+        : m_runtimeVersion(aRuntimeVersion)
+        , m_executableIdentity(aExecutableIdentity)
+        , m_runtimeFingerprint(aRuntimeFingerprint)
+        , m_lifetimeKind(
+              PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::
+                  ProcessImage)
+        , m_imageValidator(apImageValidator)
+        , m_getDescriptor(apGetDescriptor)
+        , m_reserve(apReserve)
+        , m_cancel(apCancel)
+        , m_poll(apPoll)
+        , m_retire(apRetire)
         , m_reviewed(aReviewed)
     {
     }
@@ -141,6 +261,16 @@ private:
     std::filesystem::path m_relativeModulePath;
     std::array<uint8_t, 32> m_moduleSha256{};
     uint64_t m_runtimeFingerprint{};
+    PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind m_lifetimeKind{
+        PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::None};
+
+    PartyQuestSkyrimNativeLoadBridgeImageAddressValidator m_imageValidator{};
+    PartyQuestNativeLoadBridgeGetDescriptorExport m_getDescriptor{};
+    PartyQuestNativeLoadBridgeReserveExport m_reserve{};
+    PartyQuestNativeLoadBridgeCancelExport m_cancel{};
+    PartyQuestNativeLoadBridgePollExport m_poll{};
+    PartyQuestNativeLoadBridgeRetireExport m_retire{};
+
     bool m_reviewed{};
 };
 
@@ -148,8 +278,9 @@ private:
  * Production registry of reviewed native LoadGame bridge artifacts.
  *
  * No entry is intentionally published yet. Returning an invalid authorization
- * is the executable form of the current blocker: repository evidence does not
- * establish a trusted module artifact/hash/runtime fingerprint for the bridge.
+ * is the executable form of the current blocker: repository evidence has not
+ * yet published one reviewed concrete provider surface (external module or
+ * process image) with its exact runtime fingerprint.
  */
 class PartyQuestSkyrimNativeLoadBridgeSourceRegistry final
 {
@@ -221,25 +352,21 @@ struct PartyQuestSkyrimNativeLoadBridgeBindResult final
 };
 
 /**
- * Authenticates and pins one already-loaded native LoadGame bridge.
+ * Authenticates one native LoadGame bridge and turns it into an exact physical
+ * call lease.
  *
- * Trust is conjunctive:
- * - verified launcher/VersionDb runtime identity;
- * - reviewed source authorization for the exact runtime/executable/module hash;
- * - exact final path, FILE_ID_INFO and reviewed SHA-256 under the caller's
- *   trusted game root;
- * - every required export belongs to that same executable image;
- * - exact process generation execution lease;
- * - SEH-contained descriptor call and exact descriptor/fingerprint policy.
+ * Both origins require verified launcher/VersionDb runtime identity, reviewed
+ * source authorization, exact process-generation execution authority,
+ * SEH-contained descriptor validation and the exact runtime fingerprint.
+ *
+ * ExternalPinnedModule additionally requires exact path/FILE_ID/SHA-256 and
+ * pins the loaded PE image. ProcessImage instead requires the reviewed
+ * pre-remap STR-image address predicate to accept every exact direct call
+ * target; the process image is intrinsically process-lifetime.
  *
  * The resolver never LoadLibrary()s a candidate and never invents module names,
- * hashes or runtime fingerprints. It performs no LoadGame hook/service wiring.
- *
- * The disk-file SHA-256 is reviewed backing-file evidence, not mapped-page
- * attestation. Source/live review must still establish that the accepted native
- * artifact cannot be replaced after load in a way that invalidates that
- * assumption. The permanent module pin only proves code lifetime after
- * acceptance.
+ * hashes, direct targets or runtime fingerprints. It performs no LoadGame hook
+ * or service wiring.
  */
 class PartyQuestSkyrimNativeLoadBridgeResolver final
 {
@@ -269,12 +396,35 @@ public:
         uint64_t aExpectedGeneration,
         PartyQuestSkyrimNativeLoadBridgeOwner& aOwner) noexcept;
 
+    /**
+     * Bind one reviewed in-process STR provider surface. Direct call targets
+     * are part of acSource authorization; callers cannot substitute them.
+     */
+    [[nodiscard]] static PartyQuestSkyrimNativeLoadBridgeBindResult
+    ResolveProcessImageAndBind(
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+        const PartyQuestSkyrimNativeLoadBridgeSourceAuthorization& acSource,
+        uint64_t aExpectedGeneration,
+        PartyQuestSkyrimNativeLoadBridgeOwner& aOwner) noexcept;
+
+    [[nodiscard]] static PartyQuestSkyrimNativeLoadBridgeBindResult
+    ResolveReviewedProcessImageAndBind(
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+        uint64_t aExpectedGeneration,
+        PartyQuestSkyrimNativeLoadBridgeOwner& aOwner) noexcept;
+
 private:
     friend class PartyQuestSkyrimNativeLoadBridgeResolverTestAccess;
 
     [[nodiscard]] static PartyQuestSkyrimNativeLoadBridgeResolveResult
     ResolveAndPin(
         const std::filesystem::path& acTrustedGameDirectory,
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+        const PartyQuestSkyrimNativeLoadBridgeSourceAuthorization& acSource,
+        uint64_t aExpectedGeneration) noexcept;
+
+    [[nodiscard]] static PartyQuestSkyrimNativeLoadBridgeResolveResult
+    ResolveProcessImageAndPin(
         const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
         const PartyQuestSkyrimNativeLoadBridgeSourceAuthorization& acSource,
         uint64_t aExpectedGeneration) noexcept;

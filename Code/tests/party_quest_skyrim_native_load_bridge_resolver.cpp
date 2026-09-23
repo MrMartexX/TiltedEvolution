@@ -33,6 +33,8 @@ using RuntimeVersion = PartyQuestSkyrimRuntimeVersion;
 using ExecutableIdentity = PartyQuestSkyrimExecutableIdentity;
 using DescriptorResult = PartyQuestNativeLoadBridgeDescriptorResult;
 using BridgeStatus = PartyQuestNativeLoadBridgeStatus;
+using LifetimeKind =
+    PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind;
 
 constexpr RuntimeVersion kRuntime{1u, 6u, 1170u, 0u};
 constexpr uint64_t kRuntimeFingerprint = 0x4C4F414452455331ull;
@@ -47,6 +49,7 @@ enum class FakeDescriptorMode : uint8_t
 };
 
 FakeDescriptorMode g_descriptorMode{FakeDescriptorMode::Valid};
+uint32_t g_descriptorCalls{};
 
 PartyQuestNativeLoadBridgeDescriptorV1 MakeDescriptor() noexcept
 {
@@ -102,6 +105,7 @@ std::filesystem::path GetCurrentExecutablePath()
 void ResetFake() noexcept
 {
     g_descriptorMode = FakeDescriptorMode::Valid;
+    g_descriptorCalls = 0u;
 }
 } // namespace
 
@@ -110,6 +114,7 @@ PartyQuestSKSE_GetLoadBridgeDescriptor(
     PartyQuestNativeLoadBridgeDescriptorV1* apDescriptor,
     uint32_t aDescriptorSize)
 {
+    ++g_descriptorCalls;
     switch (g_descriptorMode)
     {
     case FakeDescriptorMode::ThrowCpp:
@@ -176,6 +181,28 @@ PartyQuestSKSE_RetireLoad(uint64_t)
     return static_cast<uint32_t>(BridgeStatus::Retired);
 }
 
+namespace
+{
+const uint8_t* g_rejectedProcessImageAddress{};
+
+bool AcceptResolverProcessImageAddress(const uint8_t* apAddress) noexcept
+{
+    return apAddress != nullptr;
+}
+
+bool RejectOneResolverProcessImageAddress(const uint8_t* apAddress) noexcept
+{
+    return apAddress != nullptr &&
+        apAddress != g_rejectedProcessImageAddress;
+}
+
+bool RaiseSehResolverProcessImageAddress(const uint8_t*) noexcept
+{
+    ::RaiseException(0xE0425153u, 0u, 0u, nullptr);
+    return false;
+}
+} // namespace
+
 class PartyQuestSkyrimNativeLoadBridgeResolverTestAccess final
 {
 public:
@@ -208,6 +235,31 @@ public:
             aReviewed);
     }
 
+    static SourceAuthorization MakeProcessImageSourceAuthorization(
+        RuntimeVersion aVersion,
+        ExecutableIdentity aExecutableIdentity,
+        uint64_t aRuntimeFingerprint,
+        PartyQuestSkyrimNativeLoadBridgeImageAddressValidator apValidator,
+        PartyQuestNativeLoadBridgeGetDescriptorExport apGetDescriptor,
+        PartyQuestNativeLoadBridgeReserveExport apReserve,
+        PartyQuestNativeLoadBridgeCancelExport apCancel,
+        PartyQuestNativeLoadBridgePollExport apPoll,
+        PartyQuestNativeLoadBridgeRetireExport apRetire,
+        bool aReviewed = true) noexcept
+    {
+        return SourceAuthorization(
+            aVersion,
+            aExecutableIdentity,
+            aRuntimeFingerprint,
+            apValidator,
+            apGetDescriptor,
+            apReserve,
+            apCancel,
+            apPoll,
+            apRetire,
+            aReviewed);
+    }
+
     static bool HashFile(
         const std::filesystem::path& acPath,
         std::array<uint8_t, 32>& aHash) noexcept
@@ -228,6 +280,18 @@ public:
             acRuntimeIdentity,
             acSource,
             aExpectedGeneration);
+    }
+
+    static ResolveResult ResolveProcessImageAndPin(
+        const RuntimeAuthorization& acRuntimeIdentity,
+        const SourceAuthorization& acSource,
+        uint64_t aExpectedGeneration) noexcept
+    {
+        return PartyQuestSkyrimNativeLoadBridgeResolver::
+            ResolveProcessImageAndPin(
+                acRuntimeIdentity,
+                acSource,
+                aExpectedGeneration);
     }
 
     static BindResult BindResolved(
@@ -298,6 +362,37 @@ ResolveResult Resolve(const TrustedFixture& acFixture)
         acFixture.Runtime,
         acFixture.Source,
         acFixture.Generation);
+}
+
+SourceAuthorization MakeProcessImageSource(
+    const TrustedFixture& acFixture,
+    PartyQuestSkyrimNativeLoadBridgeImageAddressValidator apValidator =
+        &AcceptResolverProcessImageAddress,
+    bool aReviewed = true)
+{
+    return PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::
+        MakeProcessImageSourceAuthorization(
+            kRuntime,
+            acFixture.SkyrimExecutableIdentity,
+            kRuntimeFingerprint,
+            apValidator,
+            &PartyQuestSKSE_GetLoadBridgeDescriptor,
+            &PartyQuestSKSE_ReserveLoad,
+            &PartyQuestSKSE_CancelLoad,
+            &PartyQuestSKSE_PollLoad,
+            &PartyQuestSKSE_RetireLoad,
+            aReviewed);
+}
+
+ResolveResult ResolveProcessImage(
+    const TrustedFixture& acFixture,
+    const SourceAuthorization& acSource)
+{
+    return PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::
+        ResolveProcessImageAndPin(
+            acFixture.Runtime,
+            acSource,
+            acFixture.Generation);
 }
 } // namespace
 #endif
@@ -400,6 +495,69 @@ TEST_CASE(
                 hash,
                 0u);
     REQUIRE_FALSE(noFingerprint.IsVerified());
+}
+
+TEST_CASE(
+    "Native load bridge process-image authorization binds exact reviewed call surface",
+    "[quest.party-state][native-load-resolver][process-image][authorization]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+
+    const auto source = MakeProcessImageSource(fixture);
+    REQUIRE(source.IsVerified());
+    REQUIRE(
+        source.GetLifetimeKind() == LifetimeKind::ProcessImage);
+    REQUIRE(source.GetRelativeModulePath().empty());
+    for (const auto value : source.GetModuleSha256())
+        REQUIRE(value == 0u);
+    REQUIRE(source.GetProcessImageValidator() ==
+        &AcceptResolverProcessImageAddress);
+    REQUIRE(source.GetProcessImageDescriptor() ==
+        &PartyQuestSKSE_GetLoadBridgeDescriptor);
+    REQUIRE(source.GetProcessImageReserve() ==
+        &PartyQuestSKSE_ReserveLoad);
+    REQUIRE(source.GetProcessImageCancel() ==
+        &PartyQuestSKSE_CancelLoad);
+    REQUIRE(source.GetProcessImagePoll() ==
+        &PartyQuestSKSE_PollLoad);
+    REQUIRE(source.GetProcessImageRetire() ==
+        &PartyQuestSKSE_RetireLoad);
+
+    const auto unreviewed =
+        MakeProcessImageSource(
+            fixture,
+            &AcceptResolverProcessImageAddress,
+            false);
+    REQUIRE_FALSE(unreviewed.IsVerified());
+
+    const auto missingValidator =
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::
+            MakeProcessImageSourceAuthorization(
+                kRuntime,
+                fixture.SkyrimExecutableIdentity,
+                kRuntimeFingerprint,
+                nullptr,
+                &PartyQuestSKSE_GetLoadBridgeDescriptor,
+                &PartyQuestSKSE_ReserveLoad,
+                &PartyQuestSKSE_CancelLoad,
+                &PartyQuestSKSE_PollLoad,
+                &PartyQuestSKSE_RetireLoad);
+    REQUIRE_FALSE(missingValidator.IsVerified());
+
+    const auto missingPoll =
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::
+            MakeProcessImageSourceAuthorization(
+                kRuntime,
+                fixture.SkyrimExecutableIdentity,
+                kRuntimeFingerprint,
+                &AcceptResolverProcessImageAddress,
+                &PartyQuestSKSE_GetLoadBridgeDescriptor,
+                &PartyQuestSKSE_ReserveLoad,
+                &PartyQuestSKSE_CancelLoad,
+                nullptr,
+                &PartyQuestSKSE_RetireLoad);
+    REQUIRE_FALSE(missingPoll.IsVerified());
 }
 
 TEST_CASE(
@@ -634,6 +792,175 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Native load bridge resolver authenticates reviewed process-image surface",
+    "[quest.party-state][native-load-resolver][process-image][resolve]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+    const auto source = MakeProcessImageSource(fixture);
+
+    const auto resolved = ResolveProcessImage(fixture, source);
+    REQUIRE(resolved.Status == ResolveStatus::Resolved);
+    REQUIRE(resolved.IsResolved());
+    REQUIRE(resolved.Lease);
+    REQUIRE(resolved.Lease->IsPinned());
+    REQUIRE(resolved.Lease->IsCallable());
+    REQUIRE(
+        resolved.Lease->GetLifetimeKind() ==
+        LifetimeKind::ProcessImage);
+    REQUIRE(resolved.Lease->GetBoundGeneration() ==
+        fixture.Generation);
+    REQUIRE(resolved.Lease->GetRuntimeFingerprint() ==
+        kRuntimeFingerprint);
+}
+
+TEST_CASE(
+    "Native load bridge resolver rejects source-kind substitution",
+    "[quest.party-state][native-load-resolver][process-image][kind]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+
+    const auto externalOnProcess =
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::
+            ResolveProcessImageAndPin(
+                fixture.Runtime,
+                fixture.Source,
+                fixture.Generation);
+    REQUIRE(
+        externalOnProcess.Status ==
+        ResolveStatus::SourceKindMismatch);
+    REQUIRE_FALSE(externalOnProcess.IsResolved());
+
+    const auto processSource = MakeProcessImageSource(fixture);
+    const auto processOnExternal =
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
+            fixture.TrustedDirectory,
+            fixture.Runtime,
+            processSource,
+            fixture.Generation);
+    REQUIRE(
+        processOnExternal.Status ==
+        ResolveStatus::SourceKindMismatch);
+    REQUIRE_FALSE(processOnExternal.IsResolved());
+}
+
+TEST_CASE(
+    "Native load bridge resolver rejects process-image address predicate failure before descriptor call",
+    "[quest.party-state][native-load-resolver][process-image][origin]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+
+    g_rejectedProcessImageAddress =
+        reinterpret_cast<const uint8_t*>(
+            &PartyQuestSKSE_PollLoad);
+    const auto source =
+        MakeProcessImageSource(
+            fixture,
+            &RejectOneResolverProcessImageAddress);
+
+    const auto rejected = ResolveProcessImage(fixture, source);
+    g_rejectedProcessImageAddress = nullptr;
+
+    REQUIRE(
+        rejected.Status ==
+        ResolveStatus::ProcessImageAddressRejected);
+    REQUIRE_FALSE(rejected.IsResolved());
+    REQUIRE(g_descriptorCalls == 0u);
+
+    const auto sehSource =
+        MakeProcessImageSource(
+            fixture,
+            &RaiseSehResolverProcessImageAddress);
+    const auto sehRejected =
+        ResolveProcessImage(fixture, sehSource);
+    REQUIRE(
+        sehRejected.Status ==
+        ResolveStatus::ProcessImageAddressRejected);
+    REQUIRE_FALSE(sehRejected.IsResolved());
+    REQUIRE(g_descriptorCalls == 0u);
+}
+
+TEST_CASE(
+    "Native load bridge resolver applies exact descriptor policy to process-image surface",
+    "[quest.party-state][native-load-resolver][process-image][descriptor]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+    const auto source = MakeProcessImageSource(fixture);
+
+    g_descriptorMode = FakeDescriptorMode::BadFingerprint;
+    const auto rejected = ResolveProcessImage(fixture, source);
+    REQUIRE(rejected.Status == ResolveStatus::DescriptorRejected);
+    REQUIRE_FALSE(rejected.IsResolved());
+
+    g_descriptorMode = FakeDescriptorMode::RaiseSeh;
+    const auto faulted = ResolveProcessImage(fixture, source);
+    REQUIRE(faulted.Status == ResolveStatus::DescriptorCallFailed);
+    REQUIRE_FALSE(faulted.IsResolved());
+
+    ResetFake();
+}
+
+TEST_CASE(
+    "Native load process-image resolver hands exact lease directly to owner",
+    "[quest.party-state][native-load-resolver][process-image][owner-handoff]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+    const auto source = MakeProcessImageSource(fixture);
+    Owner owner;
+
+    const auto bound =
+        PartyQuestSkyrimNativeLoadBridgeResolver::
+            ResolveProcessImageAndBind(
+                fixture.Runtime,
+                source,
+                fixture.Generation,
+                owner);
+
+    REQUIRE(bound.Status == BindStatus::Bound);
+    REQUIRE(bound.IsBound());
+    REQUIRE(bound.ResolverStatus == ResolveStatus::Resolved);
+    REQUIRE(bound.Owner.Status == OwnerStatus::Applied);
+    REQUIRE(bound.Owner.State.Code == OwnerStateCode::Bound);
+    REQUIRE(owner.Snapshot().Phase == OwnerPhase::Bound);
+    REQUIRE(owner.Snapshot().BoundGeneration ==
+        fixture.Generation);
+
+    const auto shutdown = owner.Shutdown();
+    REQUIRE(shutdown.Status == OwnerStatus::Applied);
+    REQUIRE(
+        shutdown.State.Code ==
+        OwnerStateCode::ShutdownComplete);
+    REQUIRE(shutdown.State.ReleaseCapability == 1u);
+}
+
+TEST_CASE(
+    "Production reviewed process-image resolver remains closed while source registry is empty",
+    "[quest.party-state][native-load-resolver][process-image][registry]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+    Owner owner;
+
+    const auto rejected =
+        PartyQuestSkyrimNativeLoadBridgeResolver::
+            ResolveReviewedProcessImageAndBind(
+                fixture.Runtime,
+                fixture.Generation,
+                owner);
+
+    REQUIRE(rejected.Status == BindStatus::ResolveRejected);
+    REQUIRE_FALSE(rejected.IsBound());
+    REQUIRE(
+        rejected.ResolverStatus ==
+        ResolveStatus::SourceAuthorizationRejected);
+    REQUIRE(owner.Snapshot().Phase == OwnerPhase::Unbound);
+}
+
+TEST_CASE(
     "Native load resolver hands authenticated lease directly to owner",
     "[quest.party-state][native-load-resolver][owner-handoff]")
 {
@@ -726,6 +1053,30 @@ TEST_CASE(
     REQUIRE(rejected.Owner.Status == OwnerStatus::GenerationUnavailable);
     REQUIRE(owner.Snapshot().Phase == OwnerPhase::Unbound);
     REQUIRE(owner.Snapshot().CapabilityRetained == 0u);
+}
+
+TEST_CASE(
+    "Native load process-image resolver cannot bind while generation transition is pending",
+    "[quest.party-state][native-load-resolver][process-image][generation]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+    const auto source = MakeProcessImageSource(fixture);
+
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const auto ticket = fence.BeginLifecycleTransition();
+    REQUIRE(ticket.IsValid());
+
+    const auto result =
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::
+            ResolveProcessImageAndPin(
+                fixture.Runtime,
+                source,
+                ticket.Generation);
+    REQUIRE(result.Status == ResolveStatus::GenerationUnavailable);
+    REQUIRE_FALSE(result.IsResolved());
+
+    REQUIRE(fence.CompleteLifecycleTransition(ticket));
 }
 
 TEST_CASE(

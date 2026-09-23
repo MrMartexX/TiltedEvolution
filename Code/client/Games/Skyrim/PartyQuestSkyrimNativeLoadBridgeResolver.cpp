@@ -284,6 +284,40 @@ template <class T>
         acRuntime.Patch == acDescriptor.RuntimePatch &&
         acRuntime.Build == acDescriptor.RuntimeBuild;
 }
+
+template <class T>
+[[nodiscard]] bool ProcessImageAddressAcceptedCpp(
+    PartyQuestSkyrimNativeLoadBridgeImageAddressValidator apValidator,
+    T apFunction) noexcept
+{
+    try
+    {
+        return apValidator &&
+            apFunction &&
+            apValidator(reinterpret_cast<const uint8_t*>(apFunction));
+    }
+    catch (...)
+    {
+        return false;
+    }
+}
+
+template <class T>
+[[nodiscard]] bool ProcessImageAddressAccepted(
+    PartyQuestSkyrimNativeLoadBridgeImageAddressValidator apValidator,
+    T apFunction) noexcept
+{
+    __try
+    {
+        return ProcessImageAddressAcceptedCpp(
+            apValidator,
+            apFunction);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        return false;
+    }
+}
 } // namespace
 
 bool PartyQuestSkyrimNativeLoadBridgeResolver::HashFileSha256(
@@ -436,6 +470,38 @@ PartyQuestSkyrimNativeLoadBridgeResolver::ResolveReviewedAndBind(
 }
 
 PartyQuestSkyrimNativeLoadBridgeBindResult
+PartyQuestSkyrimNativeLoadBridgeResolver::ResolveProcessImageAndBind(
+    const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+    const PartyQuestSkyrimNativeLoadBridgeSourceAuthorization& acSource,
+    uint64_t aExpectedGeneration,
+    PartyQuestSkyrimNativeLoadBridgeOwner& aOwner) noexcept
+{
+    return BindResolved(
+        aOwner,
+        ResolveProcessImageAndPin(
+            acRuntimeIdentity,
+            acSource,
+            aExpectedGeneration));
+}
+
+PartyQuestSkyrimNativeLoadBridgeBindResult
+PartyQuestSkyrimNativeLoadBridgeResolver::
+    ResolveReviewedProcessImageAndBind(
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+        uint64_t aExpectedGeneration,
+        PartyQuestSkyrimNativeLoadBridgeOwner& aOwner) noexcept
+{
+    const auto source =
+        PartyQuestSkyrimNativeLoadBridgeSourceRegistry::Resolve(
+            acRuntimeIdentity);
+    return ResolveProcessImageAndBind(
+        acRuntimeIdentity,
+        source,
+        aExpectedGeneration,
+        aOwner);
+}
+
+PartyQuestSkyrimNativeLoadBridgeBindResult
 PartyQuestSkyrimNativeLoadBridgeResolver::BindResolved(
     PartyQuestSkyrimNativeLoadBridgeOwner& aOwner,
     PartyQuestSkyrimNativeLoadBridgeResolveResult&& aResolved) noexcept
@@ -466,6 +532,171 @@ PartyQuestSkyrimNativeLoadBridgeResolver::BindResolved(
 
     result.Status =
         PartyQuestSkyrimNativeLoadBridgeBindStatus::OwnerRejected;
+    return result;
+}
+
+PartyQuestSkyrimNativeLoadBridgeResolveResult
+PartyQuestSkyrimNativeLoadBridgeResolver::ResolveProcessImageAndPin(
+    const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+    const PartyQuestSkyrimNativeLoadBridgeSourceAuthorization& acSource,
+    uint64_t aExpectedGeneration) noexcept
+try
+{
+    PartyQuestSkyrimNativeLoadBridgeResolveResult result;
+
+    if (!acRuntimeIdentity.IsVerified())
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                RuntimeIdentityRejected;
+        return result;
+    }
+
+    if (!acSource.IsVerified())
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                SourceAuthorizationRejected;
+        return result;
+    }
+
+    if (acSource.GetLifetimeKind() !=
+        PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::ProcessImage)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                SourceKindMismatch;
+        return result;
+    }
+
+    if (!acRuntimeIdentity.GetRuntimeVersion().Matches(
+            acSource.GetRuntimeVersion()))
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                RuntimeMismatch;
+        return result;
+    }
+
+    if (!acRuntimeIdentity.GetExecutableIdentity().Matches(
+            acSource.GetExecutableIdentity()))
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                ExecutableIdentityMismatch;
+        return result;
+    }
+
+    if (aExpectedGeneration == 0u)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                GenerationUnavailable;
+        return result;
+    }
+
+    auto generationLease =
+        PartyQuestRuntimeGenerationFence::GetProcessFence().TryAcquire(
+            aExpectedGeneration);
+    if (!generationLease || !generationLease->IsValid())
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                GenerationUnavailable;
+        return result;
+    }
+
+    const auto validator = acSource.GetProcessImageValidator();
+    const auto getDescriptor = acSource.GetProcessImageDescriptor();
+    const auto reserve = acSource.GetProcessImageReserve();
+    const auto cancel = acSource.GetProcessImageCancel();
+    const auto poll = acSource.GetProcessImagePoll();
+    const auto retire = acSource.GetProcessImageRetire();
+
+    if (!ProcessImageAddressAccepted(validator, getDescriptor) ||
+        !ProcessImageAddressAccepted(validator, reserve) ||
+        !ProcessImageAddressAccepted(validator, cancel) ||
+        !ProcessImageAddressAccepted(validator, poll) ||
+        !ProcessImageAddressAccepted(validator, retire))
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                ProcessImageAddressRejected;
+        return result;
+    }
+
+    uint32_t rawDescriptorResult =
+        static_cast<uint32_t>(
+            PartyQuestNativeLoadBridgeDescriptorResult::Unavailable);
+    PartyQuestNativeLoadBridgeDescriptorV1 descriptor{};
+    if (!ReadDescriptorSafely(
+            getDescriptor,
+            descriptor,
+            rawDescriptorResult))
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                DescriptorCallFailed;
+        return result;
+    }
+
+    if (!PartyQuestNativeLoadBridgePolicy::IsKnownDescriptorResult(
+            rawDescriptorResult) ||
+        rawDescriptorResult !=
+            static_cast<uint32_t>(
+                PartyQuestNativeLoadBridgeDescriptorResult::Available) ||
+        !PartyQuestNativeLoadBridgePolicy::IsApprovedDescriptor(
+            descriptor,
+            acSource.GetRuntimeFingerprint()) ||
+        !RuntimeMatches(
+            acSource.GetRuntimeVersion(),
+            descriptor))
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                DescriptorRejected;
+        return result;
+    }
+
+    result.Descriptor = descriptor;
+
+    auto processLease =
+        PartyQuestSkyrimNativeLoadBridgeModuleLease::
+            CreateProcessImageAuthenticated(
+                aExpectedGeneration,
+                acSource.GetRuntimeFingerprint(),
+                validator,
+                getDescriptor,
+                reserve,
+                cancel,
+                poll,
+                retire,
+                result.LeaseStatus);
+
+    if (result.LeaseStatus !=
+            PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus::
+                Ready ||
+        !processLease.IsCallable() ||
+        processLease.GetLifetimeKind() !=
+            PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::ProcessImage)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                ModuleLeaseRejected;
+        return result;
+    }
+
+    result.Lease.emplace(std::move(processLease));
+    result.Status =
+        PartyQuestSkyrimNativeLoadBridgeResolveStatus::Resolved;
+    return result;
+}
+catch (...)
+{
+    PartyQuestSkyrimNativeLoadBridgeResolveResult result;
+    result.Status =
+        PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+            UnexpectedFailure;
     return result;
 }
 
@@ -501,6 +732,16 @@ try
         result.Status =
             PartyQuestSkyrimNativeLoadBridgeResolveStatus::
                 SourceAuthorizationRejected;
+        return result;
+    }
+
+    if (acSource.GetLifetimeKind() !=
+        PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind::
+            ExternalPinnedModule)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeResolveStatus::
+                SourceKindMismatch;
         return result;
     }
 
