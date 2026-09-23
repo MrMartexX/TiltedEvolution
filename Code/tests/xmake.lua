@@ -10,8 +10,9 @@ target("TPTests")
         add_files(
             "TPTests.rc",
             "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeModuleLease.cpp",
-            "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeOwner.cpp")
-        add_syslinks("kernel32")
+            "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeOwner.cpp",
+            "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeResolver.cpp")
+        add_syslinks("kernel32", "bcrypt")
     end
     add_deps("SkyrimEncoding")
     add_packages(
