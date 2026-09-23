@@ -462,7 +462,7 @@ try
                 m_shutdownDriverThread == std::this_thread::get_id()
                 ? ShutdownDrainStatus::LifecycleDeferred
                 : ShutdownDrainStatus::UnexpectedOwnerState;
-            last.Code = StateResultCode::OperationInFlight;
+            last.State.Code = StateResultCode::OperationInFlight;
             alreadyActiveSnapshot = m_state.Snapshot();
         }
         else
@@ -723,7 +723,7 @@ PartyQuestSkyrimNativeLoadBridgeOwner::ExecutePlannedEffectLocked(
         aForeignCallAttempted);
 }
 
-PartyQuestSkyrimNativeLoadBridgeOwnerResult
+PartyQuestNativeLoadBridgeOwnerResult
 PartyQuestSkyrimNativeLoadBridgeOwner::PoisonPendingEffectLocked(
     PartyQuestNativeLoadBridgeOwnerResult aPlan) noexcept
 {

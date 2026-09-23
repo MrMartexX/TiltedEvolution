@@ -237,7 +237,7 @@ private:
         const PartyQuestNativeLoadBridgeCallCapability& acCapability,
         bool aForeignCallAttempted);
 
-    [[nodiscard]] PartyQuestSkyrimNativeLoadBridgeOwnerResult
+    [[nodiscard]] PartyQuestNativeLoadBridgeOwnerResult
     PoisonPendingEffectLocked(
         PartyQuestNativeLoadBridgeOwnerResult aPlan) noexcept;
 
