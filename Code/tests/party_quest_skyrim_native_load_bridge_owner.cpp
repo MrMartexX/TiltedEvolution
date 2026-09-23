@@ -760,7 +760,7 @@ TEST_CASE(
     // The load bridge drain does not complete or mint lifecycle authority.
     REQUIRE(
         PartyQuestRuntimeGenerationFence::GetProcessFence().
-            HasPendingLifecycleTransition());
+            IsLifecycleTransitionPending());
     REQUIRE(fence.CompleteLifecycleTransition(ticket));
 }
 
