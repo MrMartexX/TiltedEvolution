@@ -18,6 +18,8 @@ namespace
 using Owner = PartyQuestSkyrimNativeLoadBridgeOwner;
 using OwnerStatus = PartyQuestSkyrimNativeLoadBridgeOwnerStatus;
 using OwnerResult = PartyQuestSkyrimNativeLoadBridgeOwnerResult;
+using ShutdownDrainStatus =
+    PartyQuestSkyrimNativeLoadBridgeShutdownDrainStatus;
 using Lease = PartyQuestSkyrimNativeLoadBridgeModuleLease;
 using LeaseCreateStatus =
     PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus;
@@ -48,17 +50,21 @@ struct FakeState final
 
     Status CancelStatus{Status::Cancelled};
     Status PollStatus{Status::Pending};
+    bool CancelRaiseSeh{};
     Status RetireStatus{Status::Retired};
     uint8_t CompletionResult{1u};
 
     Identity ReservedIdentity;
 
     Owner* ReentrantOwner{};
+    Owner* ReentrantCancelDrainOwner{};
     uint64_t ReentrantGeneration{};
     OwnerStatus ReentrantShutdownStatus{
         OwnerStatus::SynchronizationFailed};
     OwnerStatus ReentrantObserveStatus{
         OwnerStatus::SynchronizationFailed};
+    ShutdownDrainStatus ReentrantCancelDrainStatus{
+        ShutdownDrainStatus::UnexpectedOwnerState};
 };
 
 FakeState g_fake;
@@ -156,6 +162,17 @@ uint32_t FakeReserve(
 uint32_t FakeCancel(uint64_t)
 {
     ++g_fake.CancelCalls;
+    if (g_fake.ReentrantCancelDrainOwner)
+    {
+        g_fake.ReentrantCancelDrainStatus =
+            g_fake.ReentrantCancelDrainOwner->DrainShutdown(0u).Status;
+    }
+
+    if (g_fake.CancelRaiseSeh)
+    {
+        ::RaiseException(0xE0425154u, 0u, 0u, nullptr);
+        return static_cast<uint32_t>(Status::InternalFailure);
+    }
     g_fake.CancelSawGenerationLease =
         PartyQuestRuntimeGenerationFence::GetProcessFence().
             IsExecutionLeaseHeldByCurrentThread();
@@ -307,10 +324,17 @@ TEST_CASE(
     using Owner = PartyQuestSkyrimNativeLoadBridgeOwner;
     using Status = PartyQuestSkyrimNativeLoadBridgeOwnerStatus;
     using Result = PartyQuestSkyrimNativeLoadBridgeOwnerResult;
+    using DrainStatus =
+        PartyQuestSkyrimNativeLoadBridgeShutdownDrainStatus;
+    using DrainResult =
+        PartyQuestSkyrimNativeLoadBridgeShutdownDrainResult;
 
     STATIC_REQUIRE(sizeof(Status) == 1u);
+    STATIC_REQUIRE(sizeof(DrainStatus) == 1u);
     STATIC_REQUIRE(std::is_standard_layout_v<Result>);
     STATIC_REQUIRE(std::is_trivially_copyable_v<Result>);
+    STATIC_REQUIRE(std::is_standard_layout_v<DrainResult>);
+    STATIC_REQUIRE(std::is_trivially_copyable_v<DrainResult>);
     STATIC_REQUIRE_FALSE(std::is_copy_constructible_v<Owner>);
     STATIC_REQUIRE_FALSE(std::is_copy_assignable_v<Owner>);
     STATIC_REQUIRE_FALSE(std::is_move_constructible_v<Owner>);
@@ -550,6 +574,250 @@ TEST_CASE(
     REQUIRE(duplicateShutdown.State.Code == StateCode::ShutdownComplete);
     REQUIRE(duplicateShutdown.State.ReleaseCapability == 0u);
     REQUIRE(duplicateShutdown.ForeignCallAttempted == 0u);
+}
+
+TEST_CASE(
+    "Shutdown drain driver completes immediate cancel and releases capability exactly once",
+    "[quest.party-state][native-load-owner-core][shutdown][driver][cancel]")
+{
+    ResetFake();
+    Owner owner;
+    BindCurrent(owner);
+
+    REQUIRE(
+        owner.Reserve(MakeIdentity("DrainImmediate.ess")).State.Code ==
+        StateCode::Reserved);
+
+    g_fake.CancelStatus = Status::Cancelled;
+    const auto drained = owner.DrainShutdown(0u);
+
+    REQUIRE(drained.Status == ShutdownDrainStatus::Completed);
+    REQUIRE(drained.IsSafeToTeardown());
+    REQUIRE_FALSE(drained.MustRetainCapability());
+    REQUIRE(drained.PollCalls == 0u);
+    REQUIRE(drained.KnownPendingPolls == 0u);
+    REQUIRE(drained.FinalPhase == Phase::ShutdownComplete);
+    REQUIRE(drained.FinalRequestPhase == RequestPhase::None);
+    REQUIRE(g_fake.CancelCalls == 1u);
+    REQUIRE(g_fake.PollCalls == 0u);
+    REQUIRE(g_fake.RetireCalls == 0u);
+
+    const auto duplicate = owner.DrainShutdown(8u);
+    REQUIRE(duplicate.Status == ShutdownDrainStatus::Completed);
+    REQUIRE(duplicate.IsSafeToTeardown());
+    REQUIRE(g_fake.CancelCalls == 1u);
+    REQUIRE(g_fake.PollCalls == 0u);
+    REQUIRE(g_fake.RetireCalls == 0u);
+}
+
+TEST_CASE(
+    "Shutdown drain zero poll budget closes admission but retains claimed request",
+    "[quest.party-state][native-load-owner-core][shutdown][driver][budget-zero]")
+{
+    ResetFake();
+    Owner owner;
+    BindCurrent(owner);
+
+    REQUIRE(
+        owner.Reserve(MakeIdentity("DrainZero.ess")).State.Code ==
+        StateCode::Reserved);
+
+    g_fake.CancelStatus = Status::InvalidState;
+    const auto exhausted = owner.DrainShutdown(0u);
+
+    REQUIRE(
+        exhausted.Status ==
+        ShutdownDrainStatus::KnownPendingBudgetExhausted);
+    REQUIRE_FALSE(exhausted.IsSafeToTeardown());
+    REQUIRE(exhausted.MustRetainCapability());
+    REQUIRE(exhausted.PollCalls == 0u);
+    REQUIRE(exhausted.KnownPendingPolls == 0u);
+    REQUIRE(exhausted.FinalPhase == Phase::ShutdownDrain);
+    REQUIRE(exhausted.FinalRequestPhase == RequestPhase::Active);
+    REQUIRE(g_fake.CancelCalls == 1u);
+    REQUIRE(g_fake.PollCalls == 0u);
+    REQUIRE(owner.IsShutdownRequested());
+    REQUIRE(owner.Reserve(MakeIdentity("blocked.ess")).Status ==
+        OwnerStatus::AdmissionClosed);
+}
+
+TEST_CASE(
+    "Shutdown drain known Pending budget exhausts without poisoning or releasing capability",
+    "[quest.party-state][native-load-owner-core][shutdown][driver][budget]")
+{
+    ResetFake();
+    Owner owner;
+    BindCurrent(owner);
+
+    REQUIRE(
+        owner.Reserve(MakeIdentity("DrainPending.ess")).State.Code ==
+        StateCode::Reserved);
+
+    g_fake.CancelStatus = Status::InvalidState;
+    g_fake.PollStatus = Status::Pending;
+
+    const auto exhausted = owner.DrainShutdown(3u);
+    REQUIRE(
+        exhausted.Status ==
+        ShutdownDrainStatus::KnownPendingBudgetExhausted);
+    REQUIRE_FALSE(exhausted.IsSafeToTeardown());
+    REQUIRE(exhausted.MustRetainCapability());
+    REQUIRE(exhausted.PollCalls == 3u);
+    REQUIRE(exhausted.KnownPendingPolls == 3u);
+    REQUIRE(exhausted.FinalPhase == Phase::ShutdownDrain);
+    REQUIRE(exhausted.FinalRequestPhase == RequestPhase::Active);
+    REQUIRE(g_fake.CancelCalls == 1u);
+    REQUIRE(g_fake.PollCalls == 3u);
+    REQUIRE(g_fake.RetireCalls == 0u);
+
+    // A later process policy may continue the same exact retained request.
+    g_fake.PollStatus = Status::CompletionAvailable;
+    g_fake.CompletionResult = 0u;
+    const auto resumed = owner.DrainShutdown(1u);
+    REQUIRE(resumed.Status == ShutdownDrainStatus::Completed);
+    REQUIRE(resumed.IsSafeToTeardown());
+    REQUIRE_FALSE(resumed.MustRetainCapability());
+    REQUIRE(resumed.PollCalls == 1u);
+    REQUIRE(resumed.KnownPendingPolls == 0u);
+    REQUIRE(resumed.Last.State.Code == StateCode::Retired);
+    REQUIRE(g_fake.CancelCalls == 1u);
+    REQUIRE(g_fake.PollCalls == 4u);
+    REQUIRE(g_fake.RetireCalls == 1u);
+}
+
+TEST_CASE(
+    "Shutdown drain completion retires exact request without old generation lease",
+    "[quest.party-state][native-load-owner-core][shutdown][driver][retire]")
+{
+    ResetFake();
+    Owner owner;
+    BindCurrent(owner);
+
+    REQUIRE(
+        owner.Reserve(MakeIdentity("DrainRetire.ess")).State.Code ==
+        StateCode::Reserved);
+
+    g_fake.CancelStatus = Status::InvalidState;
+    g_fake.PollStatus = Status::CompletionAvailable;
+
+    const auto drained = owner.DrainShutdown(1u);
+    REQUIRE(drained.Status == ShutdownDrainStatus::Completed);
+    REQUIRE(drained.IsSafeToTeardown());
+    REQUIRE(drained.PollCalls == 1u);
+    REQUIRE(drained.KnownPendingPolls == 0u);
+    REQUIRE(drained.Last.State.Code == StateCode::Retired);
+    REQUIRE(g_fake.CancelCalls == 1u);
+    REQUIRE_FALSE(g_fake.CancelSawGenerationLease);
+    REQUIRE(g_fake.PollCalls == 1u);
+    REQUIRE_FALSE(g_fake.PollSawGenerationLease);
+    REQUIRE(g_fake.RetireCalls == 1u);
+    REQUIRE_FALSE(g_fake.RetireSawGenerationLease);
+}
+
+TEST_CASE(
+    "Shutdown drain completes retained old request while lifecycle generation ticket is still pending",
+    "[quest.party-state][native-load-owner-core][shutdown][driver][generation]")
+{
+    ResetFake();
+    Owner owner;
+    BindCurrent(owner);
+
+    REQUIRE(
+        owner.Reserve(MakeIdentity("DrainGeneration.ess")).State.Code ==
+        StateCode::Reserved);
+    const auto before = owner.Snapshot();
+    REQUIRE(before.Phase == Phase::Bound);
+    const uint64_t oldGeneration = before.BoundGeneration;
+
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const auto ticket = fence.BeginLifecycleTransition();
+    REQUIRE(ticket.IsValid());
+    REQUIRE(ticket.Generation != oldGeneration);
+
+    const auto observed = owner.ObserveGeneration(ticket.Generation);
+    REQUIRE(observed.Status == OwnerStatus::Applied);
+    REQUIRE(observed.State.Code == StateCode::DrainPending);
+    REQUIRE(owner.Snapshot().Phase == Phase::DrainOnly);
+    REQUIRE(owner.Snapshot().BoundGeneration == oldGeneration);
+    REQUIRE(owner.Snapshot().CurrentGeneration == ticket.Generation);
+
+    g_fake.CancelStatus = Status::InvalidState;
+    g_fake.PollStatus = Status::CompletionAvailable;
+    const auto drained = owner.DrainShutdown(1u);
+
+    REQUIRE(drained.Status == ShutdownDrainStatus::Completed);
+    REQUIRE(drained.IsSafeToTeardown());
+    REQUIRE_FALSE(drained.MustRetainCapability());
+    REQUIRE(drained.Last.State.Code == StateCode::Retired);
+    REQUIRE(drained.FinalPhase == Phase::ShutdownComplete);
+    REQUIRE(g_fake.CancelCalls == 1u);
+    REQUIRE_FALSE(g_fake.CancelSawGenerationLease);
+    REQUIRE(g_fake.PollCalls == 1u);
+    REQUIRE_FALSE(g_fake.PollSawGenerationLease);
+    REQUIRE(g_fake.RetireCalls == 1u);
+    REQUIRE_FALSE(g_fake.RetireSawGenerationLease);
+
+    // The load bridge drain does not complete or mint lifecycle authority.
+    REQUIRE(
+        PartyQuestRuntimeGenerationFence::GetProcessFence().
+            HasPendingLifecycleTransition());
+    REQUIRE(fence.CompleteLifecycleTransition(ticket));
+}
+
+TEST_CASE(
+    "Shutdown drain unknown SEH outcome is terminal unsafe and retains capability",
+    "[quest.party-state][native-load-owner-core][shutdown][driver][seh]")
+{
+    ResetFake();
+    Owner owner;
+    BindCurrent(owner);
+
+    REQUIRE(
+        owner.Reserve(MakeIdentity("DrainSeh.ess")).State.Code ==
+        StateCode::Reserved);
+
+    g_fake.CancelRaiseSeh = true;
+    const auto failed = owner.DrainShutdown(4u);
+
+    REQUIRE(
+        failed.Status ==
+        ShutdownDrainStatus::PoisonedUnsafeToUnload);
+    REQUIRE_FALSE(failed.IsSafeToTeardown());
+    REQUIRE(failed.MustRetainCapability());
+    REQUIRE(failed.PollCalls == 0u);
+    REQUIRE(failed.KnownPendingPolls == 0u);
+    REQUIRE(failed.FinalPhase == Phase::PoisonedUnsafeToUnload);
+    REQUIRE(failed.FinalRequestPhase == RequestPhase::Active);
+    REQUIRE(failed.Last.State.Code ==
+        StateCode::PoisonedUnsafeToUnload);
+    REQUIRE(g_fake.CancelCalls == 1u);
+    REQUIRE(g_fake.PollCalls == 0u);
+    REQUIRE(g_fake.RetireCalls == 0u);
+}
+
+TEST_CASE(
+    "Shutdown drain rejects same-thread nested driver reentry without deadlock",
+    "[quest.party-state][native-load-owner-core][shutdown][driver][reentrant]")
+{
+    ResetFake();
+    Owner owner;
+    BindCurrent(owner);
+
+    REQUIRE(
+        owner.Reserve(MakeIdentity("DrainReentrant.ess")).State.Code ==
+        StateCode::Reserved);
+
+    g_fake.CancelStatus = Status::Cancelled;
+    g_fake.ReentrantCancelDrainOwner = &owner;
+    const auto drained = owner.DrainShutdown(1u);
+    g_fake.ReentrantCancelDrainOwner = nullptr;
+
+    REQUIRE(
+        g_fake.ReentrantCancelDrainStatus ==
+        ShutdownDrainStatus::LifecycleDeferred);
+    REQUIRE(drained.Status == ShutdownDrainStatus::Completed);
+    REQUIRE(drained.IsSafeToTeardown());
+    REQUIRE(g_fake.CancelCalls == 1u);
 }
 
 TEST_CASE(

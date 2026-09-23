@@ -39,6 +39,51 @@ struct PartyQuestSkyrimNativeLoadBridgeOwnerResult final
     }
 };
 
+enum class PartyQuestSkyrimNativeLoadBridgeShutdownDrainStatus : uint8_t
+{
+    Completed = 1u,
+    KnownPendingBudgetExhausted = 2u,
+    LifecycleDeferred = 3u,
+    PoisonedUnsafeToUnload = 4u,
+    ContractViolation = 5u,
+    SynchronizationFailed = 6u,
+    UnexpectedOwnerState = 7u
+};
+
+struct PartyQuestSkyrimNativeLoadBridgeShutdownDrainResult final
+{
+    PartyQuestSkyrimNativeLoadBridgeShutdownDrainStatus Status{
+        PartyQuestSkyrimNativeLoadBridgeShutdownDrainStatus::
+            UnexpectedOwnerState};
+    PartyQuestNativeLoadBridgeOwnerPhase FinalPhase{
+        PartyQuestNativeLoadBridgeOwnerPhase::Unbound};
+    PartyQuestNativeLoadBridgeOwnerRequestPhase FinalRequestPhase{
+        PartyQuestNativeLoadBridgeOwnerRequestPhase::None};
+    uint8_t CapabilityRetained{};
+    uint8_t Reserved[4]{};
+
+    uint32_t PollCalls{};
+    uint32_t KnownPendingPolls{};
+    PartyQuestSkyrimNativeLoadBridgeOwnerResult Last;
+
+    [[nodiscard]] bool IsSafeToTeardown() const noexcept
+    {
+        return Status ==
+                PartyQuestSkyrimNativeLoadBridgeShutdownDrainStatus::
+                    Completed &&
+            FinalPhase ==
+                PartyQuestNativeLoadBridgeOwnerPhase::ShutdownComplete &&
+            FinalRequestPhase ==
+                PartyQuestNativeLoadBridgeOwnerRequestPhase::None &&
+            CapabilityRetained == 0u;
+    }
+
+    [[nodiscard]] bool MustRetainCapability() const noexcept
+    {
+        return CapabilityRetained != 0u;
+    }
+};
+
 /**
  * Windows-side serialization owner for one authenticated native LoadGame bridge
  * binding.
@@ -145,6 +190,23 @@ public:
     [[nodiscard]] PartyQuestSkyrimNativeLoadBridgeOwnerResult
     Shutdown() noexcept;
 
+    /**
+     * Deterministically drive shutdown through Cancel/Poll/Retire.
+     *
+     * aMaxKnownPendingPolls bounds only Poll calls that return the valid
+     * Pending status. It is deliberately not a wall-clock timeout and cannot
+     * interrupt one hung foreign call; the current ABI has no safe cancellation
+     * primitive for an in-flight call.
+     *
+     * Budget exhaustion is not reducer poison. It leaves ShutdownDrain intact,
+     * admission closed and the exact capability retained for process-terminal
+     * policy or a later drain continuation. Unknown/SEH/impossible foreign
+     * outcomes remain reducer-terminal PoisonedUnsafeToUnload and also retain
+     * capability ownership.
+     */
+    [[nodiscard]] PartyQuestSkyrimNativeLoadBridgeShutdownDrainResult
+    DrainShutdown(uint32_t aMaxKnownPendingPolls) noexcept;
+
     [[nodiscard]] PartyQuestNativeLoadBridgeOwnerSnapshot Snapshot()
         const noexcept;
 
@@ -184,6 +246,14 @@ private:
 
     void FinishOperationLocked() noexcept;
 
+    [[nodiscard]] PartyQuestSkyrimNativeLoadBridgeShutdownDrainResult
+    MakeShutdownDrainResult(
+        PartyQuestSkyrimNativeLoadBridgeShutdownDrainStatus aStatus,
+        uint32_t aPollCalls,
+        uint32_t aKnownPendingPolls,
+        const PartyQuestSkyrimNativeLoadBridgeOwnerResult& acLast,
+        const PartyQuestNativeLoadBridgeOwnerSnapshot& acSnapshot) noexcept;
+
     [[nodiscard]] static PartyQuestNativeLoadBridgeOwnerCommand
     MakeNonceCommand(
         PartyQuestNativeLoadBridgeOwnerCommandKind aKind,
@@ -203,15 +273,23 @@ private:
 
     bool m_operationActive{};
     bool m_shutdownRequested{};
+    bool m_shutdownDriverActive{};
     std::thread::id m_operationThread{};
+    std::thread::id m_shutdownDriverThread{};
     uint64_t m_activeEffectSequence{};
 };
 
 static_assert(sizeof(PartyQuestSkyrimNativeLoadBridgeOwnerStatus) == 1u);
+static_assert(sizeof(
+    PartyQuestSkyrimNativeLoadBridgeShutdownDrainStatus) == 1u);
 static_assert(std::is_standard_layout_v<
     PartyQuestSkyrimNativeLoadBridgeOwnerResult>);
 static_assert(std::is_trivially_copyable_v<
     PartyQuestSkyrimNativeLoadBridgeOwnerResult>);
+static_assert(std::is_standard_layout_v<
+    PartyQuestSkyrimNativeLoadBridgeShutdownDrainResult>);
+static_assert(std::is_trivially_copyable_v<
+    PartyQuestSkyrimNativeLoadBridgeShutdownDrainResult>);
 static_assert(!std::is_copy_constructible_v<
     PartyQuestSkyrimNativeLoadBridgeOwner>);
 static_assert(!std::is_copy_assignable_v<

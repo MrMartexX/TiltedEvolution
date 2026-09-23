@@ -9,6 +9,8 @@ using StateResult = PartyQuestNativeLoadBridgeOwnerResult;
 using StateResultCode = PartyQuestNativeLoadBridgeOwnerResultCode;
 using Phase = PartyQuestNativeLoadBridgeOwnerPhase;
 using Authority = PartyQuestNativeLoadBridgeCallAuthority;
+using ShutdownDrainStatus =
+    PartyQuestSkyrimNativeLoadBridgeShutdownDrainStatus;
 
 [[nodiscard]] PartyQuestNativeLoadBridgeOwnerForeignOutcome
 UnknownOutcome(
@@ -80,7 +82,7 @@ try
     if (m_shutdownRequested)
         return MakeOwnerResult(OwnerStatus::AdmissionClosed);
 
-    if (m_operationActive || m_lease)
+    if (m_operationActive || m_shutdownDriverActive || m_lease)
         return MakeOwnerResult(OwnerStatus::OperationInFlight);
 
     PartyQuestNativeLoadBridgeOwnerCommand command{};
@@ -159,8 +161,12 @@ try
     bool requiresGenerationLease = false;
     {
         std::lock_guard lock(m_mutex);
-        if (m_operationActive)
+        if (m_operationActive ||
+            (m_shutdownDriverActive &&
+             m_shutdownDriverThread != std::this_thread::get_id()))
+        {
             return MakeOwnerResult(OwnerStatus::OperationInFlight);
+        }
 
         if (m_shutdownRequested &&
             acCommand.Kind ==
@@ -192,8 +198,12 @@ try
     }
 
     std::unique_lock lock(m_mutex);
-    if (m_operationActive)
+    if (m_operationActive ||
+        (m_shutdownDriverActive &&
+         m_shutdownDriverThread != std::this_thread::get_id()))
+    {
         return MakeOwnerResult(OwnerStatus::OperationInFlight);
+    }
 
     if (m_shutdownRequested &&
         acCommand.Kind ==
@@ -341,6 +351,11 @@ try
     // Do not call GetGeneration()/TryAcquire here. The existing synchronous
     // lifecycle path may still own the fence's exclusive InvalidationLease.
     std::unique_lock lock(m_mutex);
+    if (m_shutdownDriverActive)
+    {
+        return MakeOwnerResult(OwnerStatus::LifecycleDeferred);
+    }
+
     if (m_operationActive)
     {
         if (m_operationThread == std::this_thread::get_id())
@@ -375,6 +390,12 @@ try
 {
     std::unique_lock lock(m_mutex);
     m_shutdownRequested = true;
+
+    if (m_shutdownDriverActive &&
+        m_shutdownDriverThread != std::this_thread::get_id())
+    {
+        return MakeOwnerResult(OwnerStatus::OperationInFlight);
+    }
 
     if (m_operationActive)
     {
@@ -417,6 +438,219 @@ catch (...)
     {
     }
     return MakeOwnerResult(OwnerStatus::SynchronizationFailed);
+}
+
+PartyQuestSkyrimNativeLoadBridgeShutdownDrainResult
+PartyQuestSkyrimNativeLoadBridgeOwner::DrainShutdown(
+    uint32_t aMaxKnownPendingPolls) noexcept
+try
+{
+    uint32_t pollCalls = 0u;
+    uint32_t knownPendingPolls = 0u;
+    PartyQuestSkyrimNativeLoadBridgeOwnerResult last{};
+    PartyQuestNativeLoadBridgeOwnerSnapshot alreadyActiveSnapshot{};
+
+    bool driverAlreadyActive = false;
+    ShutdownDrainStatus alreadyActiveStatus =
+        ShutdownDrainStatus::UnexpectedOwnerState;
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_shutdownDriverActive)
+        {
+            driverAlreadyActive = true;
+            alreadyActiveStatus =
+                m_shutdownDriverThread == std::this_thread::get_id()
+                ? ShutdownDrainStatus::LifecycleDeferred
+                : ShutdownDrainStatus::UnexpectedOwnerState;
+            last.Code = StateResultCode::OperationInFlight;
+            alreadyActiveSnapshot = m_state.Snapshot();
+        }
+        else
+        {
+            m_shutdownDriverActive = true;
+            m_shutdownDriverThread = std::this_thread::get_id();
+        }
+    }
+
+    if (driverAlreadyActive)
+    {
+        return MakeShutdownDrainResult(
+            alreadyActiveStatus,
+            pollCalls,
+            knownPendingPolls,
+            last,
+            alreadyActiveSnapshot);
+    }
+
+    const auto finish =
+        [this, &pollCalls, &knownPendingPolls, &last](
+            ShutdownDrainStatus aStatus) noexcept
+        {
+            PartyQuestNativeLoadBridgeOwnerSnapshot finalSnapshot{};
+            try
+            {
+                std::lock_guard lock(m_mutex);
+                finalSnapshot = m_state.Snapshot();
+                if (m_shutdownDriverActive &&
+                    m_shutdownDriverThread ==
+                        std::this_thread::get_id())
+                {
+                    m_shutdownDriverActive = false;
+                    m_shutdownDriverThread = {};
+                }
+            }
+            catch (...)
+            {
+                aStatus = ShutdownDrainStatus::SynchronizationFailed;
+                finalSnapshot = {};
+                finalSnapshot.Phase =
+                    Phase::PoisonedUnsafeToUnload;
+                finalSnapshot.CapabilityRetained = 1u;
+            }
+
+            m_operationDrained.notify_all();
+            return MakeShutdownDrainResult(
+                aStatus,
+                pollCalls,
+                knownPendingPolls,
+                last,
+                finalSnapshot);
+        };
+
+    last = Shutdown();
+
+    for (;;)
+    {
+        const auto snapshot = Snapshot();
+
+        if (snapshot.Phase == Phase::PoisonedUnsafeToUnload ||
+            last.State.Code ==
+                StateResultCode::PoisonedUnsafeToUnload)
+        {
+            return finish(
+                ShutdownDrainStatus::PoisonedUnsafeToUnload);
+        }
+
+        if (snapshot.Phase == Phase::ShutdownComplete)
+        {
+            if (snapshot.RequestPhase !=
+                    PartyQuestNativeLoadBridgeOwnerRequestPhase::None ||
+                snapshot.CapabilityRetained != 0u)
+            {
+                return finish(
+                    ShutdownDrainStatus::ContractViolation);
+            }
+
+            return finish(ShutdownDrainStatus::Completed);
+        }
+
+        switch (last.Status)
+        {
+        case OwnerStatus::LifecycleDeferred:
+            return finish(ShutdownDrainStatus::LifecycleDeferred);
+
+        case OwnerStatus::ContractViolation:
+            return finish(ShutdownDrainStatus::ContractViolation);
+
+        case OwnerStatus::SynchronizationFailed:
+            return finish(ShutdownDrainStatus::SynchronizationFailed);
+
+        case OwnerStatus::Applied:
+            break;
+
+        case OwnerStatus::AdmissionClosed:
+        case OwnerStatus::GenerationUnavailable:
+        case OwnerStatus::OperationInFlight:
+        case OwnerStatus::InvalidAuthenticatedLease:
+            return finish(ShutdownDrainStatus::UnexpectedOwnerState);
+        }
+
+        if (snapshot.Phase != Phase::ShutdownDrain ||
+            snapshot.CapabilityRetained == 0u)
+        {
+            return finish(ShutdownDrainStatus::ContractViolation);
+        }
+
+        if (snapshot.RequestPhase ==
+            PartyQuestNativeLoadBridgeOwnerRequestPhase::CompletionCached)
+        {
+            // Shutdown publishes exact Retire for the cached completion.
+            last = Shutdown();
+            continue;
+        }
+
+        if (snapshot.RequestPhase !=
+                PartyQuestNativeLoadBridgeOwnerRequestPhase::Active ||
+            snapshot.ActiveAttemptNonce == 0u)
+        {
+            return finish(ShutdownDrainStatus::ContractViolation);
+        }
+
+        if (knownPendingPolls >= aMaxKnownPendingPolls)
+        {
+            return finish(
+                ShutdownDrainStatus::KnownPendingBudgetExhausted);
+        }
+
+        last = Poll(snapshot.ActiveAttemptNonce);
+        ++pollCalls;
+
+        if (last.Status != OwnerStatus::Applied)
+            continue;
+
+        if (last.State.Code == StateResultCode::Pending)
+        {
+            ++knownPendingPolls;
+            continue;
+        }
+
+        if (last.State.Code ==
+            StateResultCode::CompletionAvailable)
+        {
+            // Next loop observes CompletionCached and publishes Retire.
+            continue;
+        }
+
+        if (last.State.Code ==
+            StateResultCode::PoisonedUnsafeToUnload)
+        {
+            continue;
+        }
+
+        // A Poll in ShutdownDrain may only prove Pending, exact completion, or
+        // terminal poison. Anything else violates the reducer/owner contract.
+        return finish(ShutdownDrainStatus::ContractViolation);
+    }
+}
+catch (...)
+{
+    PartyQuestSkyrimNativeLoadBridgeOwnerResult last{};
+    PartyQuestNativeLoadBridgeOwnerSnapshot finalSnapshot{};
+    try
+    {
+        std::lock_guard lock(m_mutex);
+        finalSnapshot = m_state.Snapshot();
+        if (m_shutdownDriverActive &&
+            m_shutdownDriverThread == std::this_thread::get_id())
+        {
+            m_shutdownDriverActive = false;
+            m_shutdownDriverThread = {};
+        }
+    }
+    catch (...)
+    {
+        finalSnapshot = {};
+        finalSnapshot.Phase = Phase::PoisonedUnsafeToUnload;
+        finalSnapshot.CapabilityRetained = 1u;
+    }
+
+    m_operationDrained.notify_all();
+    return MakeShutdownDrainResult(
+        ShutdownDrainStatus::SynchronizationFailed,
+        0u,
+        0u,
+        last,
+        finalSnapshot);
 }
 
 PartyQuestSkyrimNativeLoadBridgeOwnerResult
@@ -518,6 +752,25 @@ void PartyQuestSkyrimNativeLoadBridgeOwner::FinishOperationLocked() noexcept
     m_operationThread = {};
     m_activeEffectSequence = 0u;
     m_operationDrained.notify_all();
+}
+
+PartyQuestSkyrimNativeLoadBridgeShutdownDrainResult
+PartyQuestSkyrimNativeLoadBridgeOwner::MakeShutdownDrainResult(
+    PartyQuestSkyrimNativeLoadBridgeShutdownDrainStatus aStatus,
+    uint32_t aPollCalls,
+    uint32_t aKnownPendingPolls,
+    const PartyQuestSkyrimNativeLoadBridgeOwnerResult& acLast,
+    const PartyQuestNativeLoadBridgeOwnerSnapshot& acSnapshot) noexcept
+{
+    PartyQuestSkyrimNativeLoadBridgeShutdownDrainResult result{};
+    result.Status = aStatus;
+    result.PollCalls = aPollCalls;
+    result.KnownPendingPolls = aKnownPendingPolls;
+    result.Last = acLast;
+    result.FinalPhase = acSnapshot.Phase;
+    result.FinalRequestPhase = acSnapshot.RequestPhase;
+    result.CapabilityRetained = acSnapshot.CapabilityRetained;
+    return result;
 }
 
 PartyQuestNativeLoadBridgeOwnerCommand
