@@ -285,6 +285,21 @@ void CompleteTransition(
 } // namespace
 #endif
 
+#if defined(_WIN32)
+TEST_CASE(
+    "Native load bridge process owner has one stable process lifetime identity",
+    "[quest.party-state][native-load-owner-core][process-owner]")
+{
+    auto& first =
+        PartyQuestSkyrimNativeLoadBridgeOwner::GetProcessOwner();
+    auto& second =
+        PartyQuestSkyrimNativeLoadBridgeOwner::GetProcessOwner();
+
+    REQUIRE(&first == &second);
+}
+
+#endif
+
 TEST_CASE(
     "Native load bridge owner is one non-movable serialization domain",
     "[quest.party-state][native-load-owner-core][abi]")

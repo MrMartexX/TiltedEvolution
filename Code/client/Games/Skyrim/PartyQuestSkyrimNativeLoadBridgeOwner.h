@@ -82,6 +82,19 @@ public:
     PartyQuestSkyrimNativeLoadBridgeOwner() noexcept = default;
     ~PartyQuestSkyrimNativeLoadBridgeOwner() noexcept = default;
 
+    /**
+     * Production process-lifetime ownership domain.
+     *
+     * Runtime generations may advance and World may be recreated, but native
+     * attempt/completion/effect monotonic history must not reset. Production
+     * lifecycle/service code must therefore use this owner rather than create a
+     * World-scoped instance. Public construction remains available for isolated
+     * deterministic tests, matching the existing RuntimeGenerationFence test
+     * pattern.
+     */
+    [[nodiscard]] static PartyQuestSkyrimNativeLoadBridgeOwner&
+    GetProcessOwner() noexcept;
+
     PartyQuestSkyrimNativeLoadBridgeOwner(
         const PartyQuestSkyrimNativeLoadBridgeOwner&) = delete;
     PartyQuestSkyrimNativeLoadBridgeOwner& operator=(

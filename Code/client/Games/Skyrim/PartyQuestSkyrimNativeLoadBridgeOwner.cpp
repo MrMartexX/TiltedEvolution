@@ -43,6 +43,17 @@ UnknownOutcome(
 }
 } // namespace
 
+PartyQuestSkyrimNativeLoadBridgeOwner&
+PartyQuestSkyrimNativeLoadBridgeOwner::GetProcessOwner() noexcept
+{
+    // Establish fence lifetime before the process owner, mirroring
+    // PartyQuestRuntimeOwner. Explicit application shutdown is still required;
+    // the static destructor deliberately performs no foreign/native calls.
+    (void)PartyQuestRuntimeGenerationFence::GetProcessFence();
+    static PartyQuestSkyrimNativeLoadBridgeOwner s_owner;
+    return s_owner;
+}
+
 PartyQuestSkyrimNativeLoadBridgeOwnerResult
 PartyQuestSkyrimNativeLoadBridgeOwner::BindAuthenticated(
     PartyQuestSkyrimNativeLoadBridgeModuleLease&& aLease) noexcept
