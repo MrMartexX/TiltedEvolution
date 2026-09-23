@@ -23,6 +23,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -47,14 +48,15 @@ void RunDiagnostic(TCallable&& aCallable) noexcept
         std::forward<TCallable>(aCallable));
 }
 
-std::string EscapeJson(const char* apText)
+std::string EscapeJson(const char* apText, size_t aLength)
 {
-    if (!apText)
+    if (!apText || aLength == 0u)
         return {};
 
     std::ostringstream out;
-    for (const unsigned char ch : std::string(apText))
+    for (size_t index = 0u; index < aLength; ++index)
     {
+        const auto ch = static_cast<unsigned char>(apText[index]);
         switch (ch)
         {
         case '"': out << "\\\""; break;
@@ -67,7 +69,8 @@ std::string EscapeJson(const char* apText)
         default:
             if (ch < 0x20)
             {
-                out << "\\u00" << std::hex << std::setw(2) << std::setfill('0')
+                out << "\\u00" << std::hex << std::setw(2)
+                    << std::setfill('0')
                     << static_cast<uint32_t>(ch) << std::dec;
             }
             else
@@ -78,6 +81,33 @@ std::string EscapeJson(const char* apText)
         }
     }
     return out.str();
+}
+
+std::string EscapeJson(const char* apText)
+{
+    if (!apText)
+        return {};
+
+    return EscapeJson(apText, std::strlen(apText));
+}
+
+const char* NativeLoadIdentityCaptureStatusName(
+    PartyQuestNativeLoadIdentityCaptureStatus aStatus) noexcept
+{
+    switch (aStatus)
+    {
+    case PartyQuestNativeLoadIdentityCaptureStatus::Captured:
+        return "captured";
+    case PartyQuestNativeLoadIdentityCaptureStatus::NullInput:
+        return "null-input";
+    case PartyQuestNativeLoadIdentityCaptureStatus::Empty:
+        return "empty";
+    case PartyQuestNativeLoadIdentityCaptureStatus::
+        TerminatorNotFoundWithinBound:
+        return "terminator-not-found-within-bound";
+    }
+
+    return "unknown";
 }
 
 bool ParseBool(const std::string& acValue) noexcept
@@ -533,6 +563,97 @@ void PartyQuestP0LiveDiagnostics::RecordEngineSave(
             else
                 fields << ",\"result\":{\"available\":false,\"reason\":\"original-engine-call-not-returned-yet\"}";
             WriteEvent("skyrim_save_pipeline", fields.str());
+        });
+}
+
+void PartyQuestP0LiveDiagnostics::RecordEngineLoad(
+    const char* acPhase,
+    uint64_t aObservationId,
+    const PartyQuestNativeLoadIdentityCaptureResult& acIdentity,
+    bool aIdentityProbeFaulted,
+    uint64_t aLoadTicket,
+    uint64_t aGenerationTicket,
+    uint64_t aAdmittedGeneration,
+    int32_t aDeviceId,
+    uint32_t aOutputStats,
+    bool aCheckForMods,
+    bool aPairedLifecycle,
+    bool aResultKnown,
+    bool aResult) noexcept
+{
+    if (!IsEnabled())
+        return;
+
+    RunDiagnostic(
+        [&]()
+        {
+            const bool identityCaptured =
+                !aIdentityProbeFaulted &&
+                acIdentity.Status ==
+                    PartyQuestNativeLoadIdentityCaptureStatus::Captured &&
+                acIdentity.Identity.Length != 0u &&
+                acIdentity.Identity.Length <=
+                    PartyQuestNativeLoadIdentity::kCapacity;
+
+            std::ostringstream fields;
+            fields << "\"phase\":\""
+                   << EscapeJson(acPhase ? acPhase : "unknown") << "\""
+                   << ",\"observation_id\":" << aObservationId
+                   << ",\"paired_lifecycle\":"
+                   << (aPairedLifecycle ? "true" : "false")
+                   << ",\"identity_probe_faulted\":"
+                   << (aIdentityProbeFaulted ? "true" : "false")
+                   << ",\"identity_capture_status\":\""
+                   << (aIdentityProbeFaulted
+                           ? "probe-fault"
+                           : NativeLoadIdentityCaptureStatusName(
+                                 acIdentity.Status))
+                   << "\""
+                   << ",\"load_identity_length\":"
+                   << (identityCaptured
+                           ? acIdentity.Identity.Length
+                           : 0u);
+
+            if (identityCaptured)
+            {
+                fields << ",\"load_identity\":\""
+                       << EscapeJson(
+                              acIdentity.Identity.Bytes,
+                              acIdentity.Identity.Length)
+                       << "\"";
+            }
+            else
+            {
+                fields << ",\"load_identity\":{\"available\":false}";
+            }
+
+            fields << ",\"address_library_ae_id\":35728"
+                   << ",\"load_ticket\":" << aLoadTicket
+                   << ",\"generation_ticket\":" << aGenerationTicket
+                   << ",\"admitted_generation\":" << aAdmittedGeneration
+                   << ",\"current_generation\":"
+                   << PartyQuestRuntimeGenerationFence::GetProcessFence().
+                          GetGeneration()
+                   << ",\"device_id\":" << aDeviceId
+                   << ",\"output_stats\":" << aOutputStats
+                   << ",\"check_for_mods\":"
+                   << (aCheckForMods ? "true" : "false")
+                   << ",\"verified_load_hook\":"
+                   << (PartyQuestRuntimeLifecycleIntegrationPolicy::
+                               HasVerifiedPreTransitionHook(
+                                   PartyQuestRuntimeLifecycleEvent::LoadGame)
+                           ? "true"
+                           : "false");
+
+            if (aResultKnown)
+                fields << ",\"result\":" << (aResult ? "true" : "false");
+            else
+                fields << ",\"result\":{\"available\":false}";
+
+            fields << ",\"authoritative\":false"
+                   << ",\"grants_runtime_authority\":false"
+                   << ",\"native_load_provider_enabled\":false";
+            WriteEvent("skyrim_load_pipeline", fields.str());
         });
 }
 

@@ -5,6 +5,7 @@
 #include <SaveLoad.h>
 #include <Structs/Skyrim/PartyQuestExceptionBoundary.h>
 #include <Structs/Skyrim/PartyQuestExternalSinkLifetime.h>
+#include <Structs/Skyrim/PartyQuestNativeLoadIdentityCapture.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeLifecycleIntegration.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
@@ -53,14 +54,52 @@ struct PartyQuestPendingLoadTransition
 {
     PartyQuestEngineLoadTicket SaveGuardTicket;
     PartyQuestRuntimeGenerationFence::LifecycleTransitionTicket GenerationTicket;
+    uint64_t ObservationId{};
+    PartyQuestNativeLoadIdentityCaptureResult Identity;
+    uint8_t IdentityProbeFaulted{};
+    uint8_t CheckForMods{};
+    uint8_t Reserved[6]{};
+    int32_t DeviceId{};
+    uint32_t OutputStats{};
 };
 
+std::atomic<uint64_t> s_partyQuestLoadObservationSequence{0};
 std::mutex s_partyQuestPendingLoadMutex;
 std::optional<PartyQuestPendingLoadTransition> s_partyQuestPendingLoad;
 std::mutex s_partyQuestLoadSinkMutex;
 EventDispatcher<TESLoadGameEvent>* s_pPartyQuestLoadDispatcher = nullptr;
 std::atomic_bool s_partyQuestSaveHookInstalled{false};
 std::atomic_bool s_partyQuestLoadCompletionSinkInstalled{false};
+
+PartyQuestNativeLoadIdentityCaptureResult
+CapturePartyQuestLoadIdentitySafely(
+    const char* apInput,
+    bool& aProbeFaulted) noexcept
+{
+    PartyQuestNativeLoadIdentityCaptureResult result{};
+    aProbeFaulted = false;
+
+    __try
+    {
+        result = PartyQuestNativeLoadIdentityCapture::Capture(apInput);
+    }
+    __except (EXCEPTION_EXECUTE_HANDLER)
+    {
+        aProbeFaulted = true;
+        result = {};
+    }
+
+    return result;
+}
+
+uint64_t NextPartyQuestLoadObservationId() noexcept
+{
+    const uint64_t previous = s_partyQuestLoadObservationSequence.fetch_add(
+        1u,
+        std::memory_order_relaxed);
+    const uint64_t next = previous + 1u;
+    return next != 0u ? next : 1u;
+}
 
 bool CompletePendingPartyQuestLoad(const char* acReason) noexcept
 {
@@ -80,6 +119,21 @@ bool CompletePendingPartyQuestLoad(const char* acReason) noexcept
 
             auto& guard = PartyQuestSaveGuard::GetProcessGuard();
             auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+
+            PartyQuestP0LiveDiagnostics::RecordEngineLoad(
+                acReason ? acReason : "lifecycle-completion",
+                pending->ObservationId,
+                pending->Identity,
+                pending->IdentityProbeFaulted != 0u,
+                pending->SaveGuardTicket.Value,
+                pending->GenerationTicket.Ticket,
+                pending->GenerationTicket.Generation,
+                pending->DeviceId,
+                pending->OutputStats,
+                pending->CheckForMods != 0u,
+                true,
+                false,
+                false);
 
             // Clear the SaveGuard admission ticket first. Dispatch is still
             // blocked by the generation lifecycle ticket until the second exact
@@ -139,6 +193,22 @@ public:
             {
                 if (!CompletePendingPartyQuestLoad("tes-load-game-event"))
                 {
+                    PartyQuestNativeLoadIdentityCaptureResult noIdentity{};
+                    PartyQuestP0LiveDiagnostics::RecordEngineLoad(
+                        "tes-load-game-event-unpaired",
+                        0u,
+                        noIdentity,
+                        false,
+                        0u,
+                        0u,
+                        0u,
+                        0,
+                        0u,
+                        false,
+                        false,
+                        false,
+                        false);
+
                     // An unpaired load-complete event still invalidates all
                     // observed runtime evidence. It cannot establish the missing
                     // pre-load barrier and therefore grants no authority.
@@ -520,6 +590,17 @@ bool TP_MAKE_THISCALL(
                 return false;
             }
 
+            bool identityProbeFaulted = false;
+            PartyQuestNativeLoadIdentityCaptureResult loadIdentity{};
+            uint64_t observationId = 0u;
+            if (PartyQuestP0LiveDiagnostics::IsEnabled())
+            {
+                loadIdentity = CapturePartyQuestLoadIdentitySafely(
+                    acFileName,
+                    identityProbeFaulted);
+                observationId = NextPartyQuestLoadObservationId();
+            }
+
             // Before the pending transition is published, the engine has not
             // been called. Therefore a local synchronization exception can
             // safely roll back both exact tickets. After publication, any later
@@ -546,7 +627,14 @@ bool TP_MAKE_THISCALL(
 
                 s_partyQuestPendingLoad = PartyQuestPendingLoadTransition{
                     loadTicket,
-                    generationTicket};
+                    generationTicket,
+                    observationId,
+                    loadIdentity,
+                    identityProbeFaulted ? 1u : 0u,
+                    aCheckForMods ? 1u : 0u,
+                    {},
+                    aDeviceId,
+                    aOutputStats};
             }
             catch (...)
             {
@@ -570,6 +658,21 @@ bool TP_MAKE_THISCALL(
                 return false;
             }
 
+            PartyQuestP0LiveDiagnostics::RecordEngineLoad(
+                "target-enter",
+                observationId,
+                loadIdentity,
+                identityProbeFaulted,
+                loadTicket.Value,
+                generationTicket.Ticket,
+                generationTicket.Generation,
+                aDeviceId,
+                aOutputStats,
+                aCheckForMods,
+                true,
+                false,
+                false);
+
             const bool result = TiltedPhoques::ThisCall(
                 RealBGSSaveLoadManager_LoadImpl,
                 apThis,
@@ -577,6 +680,21 @@ bool TP_MAKE_THISCALL(
                 aDeviceId,
                 aOutputStats,
                 aCheckForMods);
+
+            PartyQuestP0LiveDiagnostics::RecordEngineLoad(
+                "target-return",
+                observationId,
+                loadIdentity,
+                identityProbeFaulted,
+                loadTicket.Value,
+                generationTicket.Ticket,
+                generationTicket.Generation,
+                aDeviceId,
+                aOutputStats,
+                aCheckForMods,
+                true,
+                true,
+                result);
 
             if (!result)
             {
