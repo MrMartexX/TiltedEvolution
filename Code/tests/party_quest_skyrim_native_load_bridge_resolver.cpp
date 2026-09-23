@@ -19,6 +19,12 @@ namespace
 {
 using ResolveStatus = PartyQuestSkyrimNativeLoadBridgeResolveStatus;
 using ResolveResult = PartyQuestSkyrimNativeLoadBridgeResolveResult;
+using BindResult = PartyQuestSkyrimNativeLoadBridgeBindResult;
+using BindStatus = PartyQuestSkyrimNativeLoadBridgeBindStatus;
+using Owner = PartyQuestSkyrimNativeLoadBridgeOwner;
+using OwnerStatus = PartyQuestSkyrimNativeLoadBridgeOwnerStatus;
+using OwnerPhase = PartyQuestNativeLoadBridgeOwnerPhase;
+using OwnerStateCode = PartyQuestNativeLoadBridgeOwnerResultCode;
 using SourceAuthorization =
     PartyQuestSkyrimNativeLoadBridgeSourceAuthorization;
 using RuntimeAuthorization =
@@ -210,6 +216,28 @@ public:
             acPath,
             aHash);
     }
+
+    static ResolveResult ResolveAndPin(
+        const std::filesystem::path& acTrustedGameDirectory,
+        const RuntimeAuthorization& acRuntimeIdentity,
+        const SourceAuthorization& acSource,
+        uint64_t aExpectedGeneration) noexcept
+    {
+        return PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+            acTrustedGameDirectory,
+            acRuntimeIdentity,
+            acSource,
+            aExpectedGeneration);
+    }
+
+    static BindResult BindResolved(
+        Owner& aOwner,
+        ResolveResult&& aResolved) noexcept
+    {
+        return PartyQuestSkyrimNativeLoadBridgeResolver::BindResolved(
+            aOwner,
+            std::move(aResolved));
+    }
 };
 
 namespace
@@ -265,7 +293,7 @@ struct TrustedFixture final
 
 ResolveResult Resolve(const TrustedFixture& acFixture)
 {
-    return PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+    return PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
         acFixture.TrustedDirectory,
         acFixture.Runtime,
         acFixture.Source,
@@ -384,7 +412,7 @@ TEST_CASE(
     SECTION("relative trusted root")
     {
         const auto result =
-            PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+            PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
                 std::filesystem::path(L"."),
                 fixture.Runtime,
                 fixture.Source,
@@ -397,7 +425,7 @@ TEST_CASE(
     {
         const RuntimeAuthorization invalidRuntime;
         const auto result =
-            PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+            PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
                 fixture.TrustedDirectory,
                 invalidRuntime,
                 fixture.Source,
@@ -410,7 +438,7 @@ TEST_CASE(
     {
         const SourceAuthorization invalidSource;
         const auto result =
-            PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+            PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
                 fixture.TrustedDirectory,
                 fixture.Runtime,
                 invalidSource,
@@ -422,7 +450,7 @@ TEST_CASE(
     SECTION("zero generation")
     {
         const auto result =
-            PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+            PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
                 fixture.TrustedDirectory,
                 fixture.Runtime,
                 fixture.Source,
@@ -475,7 +503,7 @@ TEST_CASE(
         REQUIRE(runtime.IsVerified());
 
         const auto result =
-            PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+            PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
                 fixture.TrustedDirectory,
                 runtime,
                 fixture.Source,
@@ -495,7 +523,7 @@ TEST_CASE(
         REQUIRE(runtime.IsVerified());
 
         const auto result =
-            PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+            PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
                 fixture.TrustedDirectory,
                 runtime,
                 fixture.Source,
@@ -527,7 +555,7 @@ TEST_CASE(
     REQUIRE(source.IsVerified());
 
     const auto result =
-        PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
             fixture.TrustedDirectory,
             fixture.Runtime,
             source,
@@ -554,7 +582,7 @@ TEST_CASE(
     REQUIRE(source.IsVerified());
 
     const auto result =
-        PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
             fixture.TrustedDirectory,
             fixture.Runtime,
             source,
@@ -606,6 +634,101 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Native load resolver hands authenticated lease directly to owner",
+    "[quest.party-state][native-load-resolver][owner-handoff]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+    Owner owner;
+
+    const auto bound =
+        PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndBind(
+            fixture.TrustedDirectory,
+            fixture.Runtime,
+            fixture.Source,
+            fixture.Generation,
+            owner);
+
+    REQUIRE(bound.Status == BindStatus::Bound);
+    REQUIRE(bound.IsBound());
+    REQUIRE(bound.ResolverStatus == ResolveStatus::Resolved);
+    REQUIRE(bound.LeaseStatus ==
+        PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus::Ready);
+    REQUIRE(bound.Owner.Status == OwnerStatus::Applied);
+    REQUIRE(bound.Owner.State.Code == OwnerStateCode::Bound);
+    REQUIRE(owner.Snapshot().Phase == OwnerPhase::Bound);
+    REQUIRE(owner.Snapshot().BoundGeneration == fixture.Generation);
+    REQUIRE(owner.Snapshot().RuntimeFingerprint ==
+        kRuntimeFingerprint);
+
+    const auto shutdown = owner.Shutdown();
+    REQUIRE(shutdown.Status == OwnerStatus::Applied);
+    REQUIRE(shutdown.State.Code == OwnerStateCode::ShutdownComplete);
+    REQUIRE(shutdown.State.ReleaseCapability == 1u);
+}
+
+TEST_CASE(
+    "Production reviewed resolver path remains closed while source registry is empty",
+    "[quest.party-state][native-load-resolver][owner-handoff][registry]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+    Owner owner;
+
+    const auto rejected =
+        PartyQuestSkyrimNativeLoadBridgeResolver::ResolveReviewedAndBind(
+            fixture.TrustedDirectory,
+            fixture.Runtime,
+            fixture.Generation,
+            owner);
+
+    REQUIRE(rejected.Status == BindStatus::ResolveRejected);
+    REQUIRE_FALSE(rejected.IsBound());
+    REQUIRE(
+        rejected.ResolverStatus ==
+        ResolveStatus::SourceAuthorizationRejected);
+    REQUIRE(owner.Snapshot().Phase == OwnerPhase::Unbound);
+    REQUIRE(owner.Snapshot().CapabilityRetained == 0u);
+}
+
+TEST_CASE(
+    "Resolved pinned lease cannot cross a generation transition before owner bind",
+    "[quest.party-state][native-load-resolver][owner-handoff][generation]")
+{
+    ResetFake();
+    TrustedFixture fixture;
+    Owner owner;
+
+    auto resolved =
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
+            fixture.TrustedDirectory,
+            fixture.Runtime,
+            fixture.Source,
+            fixture.Generation);
+    REQUIRE(resolved.IsResolved());
+    REQUIRE(resolved.Lease);
+    REQUIRE(resolved.Lease->IsPinned());
+
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const auto ticket = fence.BeginLifecycleTransition();
+    REQUIRE(ticket.IsValid());
+    REQUIRE(ticket.Generation != fixture.Generation);
+    REQUIRE(fence.CompleteLifecycleTransition(ticket));
+
+    const auto rejected =
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::BindResolved(
+            owner,
+            std::move(resolved));
+
+    REQUIRE(rejected.Status == BindStatus::OwnerRejected);
+    REQUIRE_FALSE(rejected.IsBound());
+    REQUIRE(rejected.ResolverStatus == ResolveStatus::Resolved);
+    REQUIRE(rejected.Owner.Status == OwnerStatus::GenerationUnavailable);
+    REQUIRE(owner.Snapshot().Phase == OwnerPhase::Unbound);
+    REQUIRE(owner.Snapshot().CapabilityRetained == 0u);
+}
+
+TEST_CASE(
     "Native load bridge resolver cannot bind while process generation transition is pending",
     "[quest.party-state][native-load-resolver][generation]")
 {
@@ -619,7 +742,7 @@ TEST_CASE(
     // Resolve against the exact newly published generation. TryAcquire still
     // fails while the asynchronous lifecycle ticket is pending.
     const auto result =
-        PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
             fixture.TrustedDirectory,
             fixture.Runtime,
             fixture.Source,
@@ -645,7 +768,7 @@ TEST_CASE(
     REQUIRE(fence.CompleteLifecycleTransition(ticket));
 
     const auto result =
-        PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::ResolveAndPin(
             fixture.TrustedDirectory,
             fixture.Runtime,
             fixture.Source,

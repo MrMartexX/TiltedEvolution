@@ -1,6 +1,6 @@
 #pragma once
 
-#include <Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeModuleLease.h>
+#include <Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeOwner.h>
 #include <Structs/Skyrim/PartyQuestSkyrimPapyrusRuntimeProfileResolver.h>
 
 #include <array>
@@ -183,6 +183,43 @@ struct PartyQuestSkyrimNativeLoadBridgeResolveResult final
     }
 };
 
+enum class PartyQuestSkyrimNativeLoadBridgeBindStatus : uint8_t
+{
+    Bound = 1u,
+    ResolveRejected = 2u,
+    OwnerRejected = 3u
+};
+
+struct PartyQuestSkyrimNativeLoadBridgeBindResult final
+{
+    PartyQuestSkyrimNativeLoadBridgeBindStatus Status{
+        PartyQuestSkyrimNativeLoadBridgeBindStatus::ResolveRejected};
+    PartyQuestSkyrimNativeLoadBridgeResolveStatus ResolverStatus{
+        PartyQuestSkyrimNativeLoadBridgeResolveStatus::UnexpectedFailure};
+    PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus LeaseStatus{
+        PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus::
+            InvalidArgument};
+    uint8_t Reserved[5]{};
+
+    PartyQuestNativeLoadBridgeDescriptorV1 Descriptor;
+    PartyQuestSkyrimNativeLoadBridgeOwnerResult Owner;
+
+    [[nodiscard]] bool IsBound() const noexcept
+    {
+        return Status ==
+                PartyQuestSkyrimNativeLoadBridgeBindStatus::Bound &&
+            ResolverStatus ==
+                PartyQuestSkyrimNativeLoadBridgeResolveStatus::Resolved &&
+            LeaseStatus ==
+                PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus::
+                    Ready &&
+            Owner.Status ==
+                PartyQuestSkyrimNativeLoadBridgeOwnerStatus::Applied &&
+            Owner.State.Code ==
+                PartyQuestNativeLoadBridgeOwnerResultCode::Bound;
+    }
+};
+
 /**
  * Authenticates and pins one already-loaded native LoadGame bridge.
  *
@@ -207,6 +244,34 @@ struct PartyQuestSkyrimNativeLoadBridgeResolveResult final
 class PartyQuestSkyrimNativeLoadBridgeResolver final
 {
 public:
+    /**
+     * Production handoff. No raw/pinned lease leaves the resolver boundary.
+     * The owner independently reacquires exact generation authority before it
+     * accepts the authenticated module lease.
+     */
+    [[nodiscard]] static PartyQuestSkyrimNativeLoadBridgeBindResult
+    ResolveAndBind(
+        const std::filesystem::path& acTrustedGameDirectory,
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+        const PartyQuestSkyrimNativeLoadBridgeSourceAuthorization& acSource,
+        uint64_t aExpectedGeneration,
+        PartyQuestSkyrimNativeLoadBridgeOwner& aOwner) noexcept;
+
+    /**
+     * Production registry entrypoint. Until a reviewed native artifact is
+     * published, the empty source registry makes this fail closed before any
+     * module lookup.
+     */
+    [[nodiscard]] static PartyQuestSkyrimNativeLoadBridgeBindResult
+    ResolveReviewedAndBind(
+        const std::filesystem::path& acTrustedGameDirectory,
+        const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+        uint64_t aExpectedGeneration,
+        PartyQuestSkyrimNativeLoadBridgeOwner& aOwner) noexcept;
+
+private:
+    friend class PartyQuestSkyrimNativeLoadBridgeResolverTestAccess;
+
     [[nodiscard]] static PartyQuestSkyrimNativeLoadBridgeResolveResult
     ResolveAndPin(
         const std::filesystem::path& acTrustedGameDirectory,
@@ -214,8 +279,10 @@ public:
         const PartyQuestSkyrimNativeLoadBridgeSourceAuthorization& acSource,
         uint64_t aExpectedGeneration) noexcept;
 
-private:
-    friend class PartyQuestSkyrimNativeLoadBridgeResolverTestAccess;
+    [[nodiscard]] static PartyQuestSkyrimNativeLoadBridgeBindResult
+    BindResolved(
+        PartyQuestSkyrimNativeLoadBridgeOwner& aOwner,
+        PartyQuestSkyrimNativeLoadBridgeResolveResult&& aResolved) noexcept;
 
     [[nodiscard]] static bool HashFileSha256(
         const std::filesystem::path& acPath,
@@ -223,3 +290,4 @@ private:
 };
 
 static_assert(sizeof(PartyQuestSkyrimNativeLoadBridgeResolveStatus) == 1u);
+static_assert(sizeof(PartyQuestSkyrimNativeLoadBridgeBindStatus) == 1u);

@@ -400,6 +400,75 @@ bool PartyQuestSkyrimNativeLoadBridgeResolver::HashFileSha256(
     }
 }
 
+PartyQuestSkyrimNativeLoadBridgeBindResult
+PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndBind(
+    const std::filesystem::path& acTrustedGameDirectory,
+    const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+    const PartyQuestSkyrimNativeLoadBridgeSourceAuthorization& acSource,
+    uint64_t aExpectedGeneration,
+    PartyQuestSkyrimNativeLoadBridgeOwner& aOwner) noexcept
+{
+    return BindResolved(
+        aOwner,
+        ResolveAndPin(
+            acTrustedGameDirectory,
+            acRuntimeIdentity,
+            acSource,
+            aExpectedGeneration));
+}
+
+PartyQuestSkyrimNativeLoadBridgeBindResult
+PartyQuestSkyrimNativeLoadBridgeResolver::ResolveReviewedAndBind(
+    const std::filesystem::path& acTrustedGameDirectory,
+    const PartyQuestSkyrimRuntimeIdentityAuthorization& acRuntimeIdentity,
+    uint64_t aExpectedGeneration,
+    PartyQuestSkyrimNativeLoadBridgeOwner& aOwner) noexcept
+{
+    const auto source =
+        PartyQuestSkyrimNativeLoadBridgeSourceRegistry::Resolve(
+            acRuntimeIdentity);
+    return ResolveAndBind(
+        acTrustedGameDirectory,
+        acRuntimeIdentity,
+        source,
+        aExpectedGeneration,
+        aOwner);
+}
+
+PartyQuestSkyrimNativeLoadBridgeBindResult
+PartyQuestSkyrimNativeLoadBridgeResolver::BindResolved(
+    PartyQuestSkyrimNativeLoadBridgeOwner& aOwner,
+    PartyQuestSkyrimNativeLoadBridgeResolveResult&& aResolved) noexcept
+{
+    PartyQuestSkyrimNativeLoadBridgeBindResult result{};
+    result.ResolverStatus = aResolved.Status;
+    result.LeaseStatus = aResolved.LeaseStatus;
+    result.Descriptor = aResolved.Descriptor;
+
+    if (!aResolved.IsResolved() || !aResolved.Lease)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeBindStatus::ResolveRejected;
+        return result;
+    }
+
+    result.Owner =
+        aOwner.BindAuthenticated(std::move(*aResolved.Lease));
+    if (result.Owner.Status ==
+            PartyQuestSkyrimNativeLoadBridgeOwnerStatus::Applied &&
+        result.Owner.State.Code ==
+            PartyQuestNativeLoadBridgeOwnerResultCode::Bound)
+    {
+        result.Status =
+            PartyQuestSkyrimNativeLoadBridgeBindStatus::Bound;
+        return result;
+    }
+
+    result.Status =
+        PartyQuestSkyrimNativeLoadBridgeBindStatus::OwnerRejected;
+    return result;
+}
+
 PartyQuestSkyrimNativeLoadBridgeResolveResult
 PartyQuestSkyrimNativeLoadBridgeResolver::ResolveAndPin(
     const std::filesystem::path& acTrustedGameDirectory,
