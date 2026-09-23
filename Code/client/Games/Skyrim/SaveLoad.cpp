@@ -630,8 +630,10 @@ bool TP_MAKE_THISCALL(
                     generationTicket,
                     observationId,
                     loadIdentity,
-                    identityProbeFaulted ? 1u : 0u,
-                    aCheckForMods ? 1u : 0u,
+                    static_cast<uint8_t>(
+                        identityProbeFaulted ? 1u : 0u),
+                    static_cast<uint8_t>(
+                        aCheckForMods ? 1u : 0u),
                     {},
                     aDeviceId,
                     aOutputStats};
