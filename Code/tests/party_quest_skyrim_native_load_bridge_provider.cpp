@@ -318,6 +318,76 @@ TEST_CASE(
 }
 
 TEST_CASE(
+    "Process native load provider ABI rejects ranges crossing inaccessible pages",
+    "[quest.party-state][native-load-provider][abi][memory-range]")
+{
+    SYSTEM_INFO systemInfo{};
+    ::GetSystemInfo(&systemInfo);
+    REQUIRE(systemInfo.dwPageSize >= sizeof(Request));
+    REQUIRE(systemInfo.dwPageSize >= sizeof(Reservation));
+
+    const size_t allocationSize =
+        static_cast<size_t>(systemInfo.dwPageSize) * 2u;
+    auto* allocation = static_cast<uint8_t*>(
+        ::VirtualAlloc(
+            nullptr,
+            allocationSize,
+            MEM_RESERVE | MEM_COMMIT,
+            PAGE_READWRITE));
+    REQUIRE(allocation != nullptr);
+
+    DWORD oldProtection = 0u;
+    REQUIRE(
+        ::VirtualProtect(
+            allocation + systemInfo.dwPageSize,
+            systemInfo.dwPageSize,
+            PAGE_NOACCESS,
+            &oldProtection) != FALSE);
+
+    Provider provider;
+    REQUIRE(provider.PublishReady(kFingerprint));
+
+    auto* crossingRequest =
+        reinterpret_cast<const Request*>(
+            allocation + systemInfo.dwPageSize -
+            (sizeof(Request) / 2u));
+    Reservation reservation{};
+    REQUIRE(
+        static_cast<BridgeStatus>(
+            ProviderAbi::Reserve(
+                provider,
+                crossingRequest,
+                sizeof(Request),
+                &reservation,
+                sizeof(reservation))) ==
+        BridgeStatus::InvalidArgument);
+    REQUIRE(provider.GetActiveAttemptNonce() == 0u);
+
+    const auto validRequest =
+        MakeRequest(MakeBridgeIdentity("SaveRange_TEST"));
+    auto* crossingReservation =
+        reinterpret_cast<Reservation*>(
+            allocation + systemInfo.dwPageSize -
+            (sizeof(Reservation) / 2u));
+    REQUIRE(
+        static_cast<BridgeStatus>(
+            ProviderAbi::Reserve(
+                provider,
+                &validRequest,
+                sizeof(validRequest),
+                crossingReservation,
+                sizeof(Reservation))) ==
+        BridgeStatus::InvalidArgument);
+    REQUIRE(provider.GetActiveAttemptNonce() == 0u);
+
+    REQUIRE(
+        ::VirtualFree(
+            allocation,
+            0u,
+            MEM_RELEASE) != FALSE);
+}
+
+TEST_CASE(
     "Process native load provider ABI contains invalid foreign pointers",
     "[quest.party-state][native-load-provider][abi][seh]")
 {

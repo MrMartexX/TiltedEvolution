@@ -1,7 +1,9 @@
 #include <Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeProvider.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
+#include <limits>
 
 namespace
 {
@@ -26,12 +28,109 @@ private:
     SRWLOCK& m_lock;
 };
 
+[[nodiscard]] bool IsReadableProtection(DWORD aProtection) noexcept
+{
+    switch (aProtection & 0xFFu)
+    {
+    case PAGE_READONLY:
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READ:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        return true;
+
+    case PAGE_NOACCESS:
+    case PAGE_EXECUTE:
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool IsWritableProtection(DWORD aProtection) noexcept
+{
+    switch (aProtection & 0xFFu)
+    {
+    case PAGE_READWRITE:
+    case PAGE_WRITECOPY:
+    case PAGE_EXECUTE_READWRITE:
+    case PAGE_EXECUTE_WRITECOPY:
+        return true;
+
+    case PAGE_NOACCESS:
+    case PAGE_READONLY:
+    case PAGE_EXECUTE:
+    case PAGE_EXECUTE_READ:
+    default:
+        return false;
+    }
+}
+
+[[nodiscard]] bool RangeHasAccess(
+    const void* apAddress,
+    size_t aSize,
+    bool aRequireWrite) noexcept
+{
+    if (!apAddress || aSize == 0u)
+        return false;
+
+    const auto start =
+        reinterpret_cast<uintptr_t>(apAddress);
+    const auto size = static_cast<uintptr_t>(aSize);
+    if (size == 0u ||
+        start >
+            std::numeric_limits<uintptr_t>::max() - size)
+    {
+        return false;
+    }
+
+    const uintptr_t end = start + size;
+    uintptr_t current = start;
+
+    while (current < end)
+    {
+        MEMORY_BASIC_INFORMATION memory{};
+        if (::VirtualQuery(
+                reinterpret_cast<LPCVOID>(current),
+                &memory,
+                sizeof(memory)) != sizeof(memory) ||
+            memory.State != MEM_COMMIT ||
+            (memory.Protect & PAGE_GUARD) != 0u ||
+            (aRequireWrite
+                 ? !IsWritableProtection(memory.Protect)
+                 : !IsReadableProtection(memory.Protect)))
+        {
+            return false;
+        }
+
+        const uintptr_t regionBase =
+            reinterpret_cast<uintptr_t>(memory.BaseAddress);
+        if (memory.RegionSize == 0u ||
+            regionBase >
+                std::numeric_limits<uintptr_t>::max() -
+                    static_cast<uintptr_t>(memory.RegionSize))
+        {
+            return false;
+        }
+
+        const uintptr_t regionEnd =
+            regionBase +
+            static_cast<uintptr_t>(memory.RegionSize);
+        if (regionEnd <= current)
+            return false;
+
+        current = regionEnd < end ? regionEnd : end;
+    }
+
+    return true;
+}
+
 template <class T>
 [[nodiscard]] bool CopyFromForeign(
     const T* apSource,
     T& aDestination) noexcept
 {
-    if (!apSource)
+    if (!RangeHasAccess(apSource, sizeof(T), false))
         return false;
 
     __try
@@ -51,7 +150,7 @@ template <class T>
     T* apDestination,
     const T& acSource) noexcept
 {
-    if (!apDestination)
+    if (!RangeHasAccess(apDestination, sizeof(T), true))
         return false;
 
     __try
