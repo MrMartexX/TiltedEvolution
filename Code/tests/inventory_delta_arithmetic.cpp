@@ -20,12 +20,18 @@ TEST_CASE("Inventory delta creates only positive absent entries", "[inventory.de
 {
     Inventory inventory;
 
+    REQUIRE_FALSE(inventory.AddOrRemoveEntry(MakeEntry(0)));
+    REQUIRE_FALSE(inventory.AddOrRemoveEntry(MakeEntry(-1)));
+    REQUIRE(inventory.Entries.empty());
+
     REQUIRE(inventory.AddOrRemoveEntry(MakeEntry(3)));
     REQUIRE(inventory.Entries.size() == 1);
     REQUIRE(inventory.Entries[0].Count == 3);
 
     REQUIRE_FALSE(inventory.AddOrRemoveEntry(MakeEntry(0)));
-    REQUIRE_FALSE(inventory.AddOrRemoveEntry(MakeEntry(-1)));
+    auto absent = MakeEntry(-1);
+    absent.BaseId = GameId(1, 0x5678);
+    REQUIRE_FALSE(inventory.AddOrRemoveEntry(absent));
     REQUIRE(inventory.Entries.size() == 1);
     REQUIRE(inventory.Entries[0].Count == 3);
 }
