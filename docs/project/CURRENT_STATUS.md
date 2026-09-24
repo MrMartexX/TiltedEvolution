@@ -1,16 +1,34 @@
 # Current project status
 
-Status: consolidation candidate; P0 NOT CLOSED
+Status: consolidated integration; P0 NOT CLOSED
 
 Last verified: **2026-09-24**
 
-## Consolidation in progress (supersedes historical snapshot below)
+## Consolidation accepted (supersedes historical snapshot below)
 
-The consolidation branch `codex/consolidate-2026-09-24` combines the load-bridge
-stack through `311e5322`, PR #10 inventory recreation safety, PR #12 checked
-inventory arithmetic, PR #8 ecosystem documentation, and additional runtime
-owner quiescence tests. Required CI must pass on the combined candidate before
-integration. The sections below retain historical acceptance evidence only.
+PR #18 merged the load-bridge stack through `311e5322`, PR #10 inventory
+recreation safety, PR #12 checked inventory arithmetic, PR #8 ecosystem
+documentation, PR #9 research evidence, and additional runtime owner quiescence
+tests into `feature/equal-party-quest-poc`.
+
+- Tested candidate: `ac0ae93a5c8a90c02cab1d220293d02cc0ea6160`.
+- Integration merge: `a75903ab65e4e17dd6c11b1875742d12ab23f953`.
+- The merge tree was verified identical to the tested candidate tree.
+- This subsequent status update changes documentation only; it does not claim
+  fresh four-job acceptance for a later documentation commit.
+
+| Validation on the tested candidate | Result | Exact TPTests evidence |
+|---|---|---|
+| Build Linux, run 36044892449 | Success; actual build executed | Not a test-run job |
+| Build Windows, run 36044892796 | Success; client/UI built and packaged | Not a test-run job |
+| Diagnostics Linux, run 36044887056 | Success | 283511 assertions / 888 cases |
+| Diagnostics Windows, run 36044887056 | Success | 284284 assertions / 929 cases |
+
+Local MSVC release TPTests also passed: 284273 assertions / 929 cases. Two
+existing symlink tests reported unavailable local symlink-creation privilege;
+the hosted Windows result above is separate evidence.
+
+The sections below retain historical acceptance evidence only.
 
 Before consolidation the integration HEAD was `d8f1344b`, and the last verified
 load-bridge baseline with all required workflows successful was `5001c8b2`.
@@ -20,15 +38,25 @@ Canonical mutation remains disabled. Load diagnostics and tested ownership
 primitives do not establish complete engine save/load, recovery, durability,
 or two-client live acceptance. Task 07/08 and P0 remain open.
 
-Do not delete `chat/task07-load-bridge-process-provider` while parallel work is
-active. Remove other branches only after ancestry or patch-equivalence review;
-retain unique unreviewed work. The pre-consolidation local reserve-capability
-patch is preserved in Git stash `preserved-before-2026-09-24-consolidation`.
+The only unaccepted follow-up is preserved in
+`codex/task07-load-bridge-followup` at
+`4c85e2098bd8f78872e951781cb567da3be018b5`. Its Windows CI failed two
+`PartyQuestSkyrimNativeLoadBridgeCoordinator` cancellation regressions (reserved
+request cancellation and stale-attempt isolation after cancellation). It is not
+part of the accepted consolidation and requires correction and independent
+validation before integration. Intermediate branches were removed only after
+ancestry/patch-equivalence review or verification that their sole unique change
+was a temporary CI trigger.
+
+Keep `dev` as the upstream base and `feature/equal-party-quest-poc` as the main
+working branch. PR #1 remains draft. The pre-consolidation local reserve patch
+is preserved in Git stash `preserved-before-2026-09-24-consolidation`; complete
+pre-cleanup Git bundles are retained outside the checkout on drive D.
 
 This is the only project-wide status source. Re-check GitHub and the local
 checkout before changing code; no SHA in this file is permanent.
 
-## Accepted integration baseline
+## Historical accepted integration baseline
 
 - Repository: `MrMartexX/TiltedEvolution`
 - Pull request: `#1`
@@ -51,7 +79,7 @@ The integration HEAD changed only by merging the documentation organization
 slice in PR #7. All four checks above completed successfully on the exact merge
 HEAD.
 
-## Ordered task status
+## Historical ordered task status
 
 | Task | State | Evidence or next gate |
 |---:|---|---|
