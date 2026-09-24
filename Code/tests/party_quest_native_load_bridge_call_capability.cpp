@@ -284,6 +284,23 @@ void EnterCompletion(
 }
 } // namespace
 
+TEST_CASE("Call capability rejects corrupted reserved fields",
+          "[quest.party-state][native-load-call-capability]")
+{
+    Owner owner;
+    BindOwner(owner, 3u);
+    const auto plan = owner.Plan(ReserveCommand());
+    const auto authorized = Policy::Authorize(owner.Snapshot(), plan);
+    REQUIRE(authorized.IsAuthorized());
+    for (size_t index = 0u; index < sizeof(authorized.Capability.Reserved); ++index)
+    {
+        auto corrupted = authorized.Capability;
+        corrupted.Reserved[index] = 1u;
+        REQUIRE_FALSE(corrupted.IsAuthorized());
+        REQUIRE_FALSE(corrupted.AuthorizesExactReserve(plan.Effect.ReserveRequest.Identity));
+    }
+}
+
 TEST_CASE(
     "Native load bridge call capability is fixed portable POD authority",
     "[quest.party-state][native-load-call-capability][abi]")
