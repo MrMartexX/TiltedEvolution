@@ -1,8 +1,29 @@
 # Current project status
 
-Status: live-verified snapshot
+Status: consolidation candidate; P0 NOT CLOSED
 
-Last verified: **2026-09-13**
+Last verified: **2026-09-24**
+
+## Consolidation in progress (supersedes historical snapshot below)
+
+The consolidation branch `codex/consolidate-2026-09-24` combines the load-bridge
+stack through `311e5322`, PR #10 inventory recreation safety, PR #12 checked
+inventory arithmetic, PR #8 ecosystem documentation, and additional runtime
+owner quiescence tests. Required CI must pass on the combined candidate before
+integration. The sections below retain historical acceptance evidence only.
+
+Before consolidation the integration HEAD was `d8f1344b`, and the last verified
+load-bridge baseline with all required workflows successful was `5001c8b2`.
+The playable artifact at `311e5322` alone is not proof of all four CI gates.
+
+Canonical mutation remains disabled. Load diagnostics and tested ownership
+primitives do not establish complete engine save/load, recovery, durability,
+or two-client live acceptance. Task 07/08 and P0 remain open.
+
+Do not delete `chat/task07-load-bridge-process-provider` while parallel work is
+active. Remove other branches only after ancestry or patch-equivalence review;
+retain unique unreviewed work. The pre-consolidation local reserve-capability
+patch is preserved in Git stash `preserved-before-2026-09-24-consolidation`.
 
 This is the only project-wide status source. Re-check GitHub and the local
 checkout before changing code; no SHA in this file is permanent.

@@ -8,7 +8,6 @@ on:
   push:
     branches:
       - master
-      - chat/task07-load-bridge-live-diagnostics-playable-ci
     tags:
       - 'v[0-9]+\.[0-9]+\.[0-9]+'
 

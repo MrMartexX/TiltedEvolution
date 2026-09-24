@@ -112,6 +112,12 @@ struct PartyQuestNativeLoadBridgeCallCapability final
 
     [[nodiscard]] constexpr bool IsAuthorized() const noexcept
     {
+        for (const auto value : Reserved)
+        {
+            if (value != 0u)
+                return false;
+        }
+
         if (PinnedModuleRequired != 1u ||
             BoundGeneration == 0u ||
             ObservedGeneration == 0u ||
