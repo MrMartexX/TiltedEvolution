@@ -16,6 +16,8 @@ material for the Skyrim Together Reborn fork.
    status labels and update rules.
 5. [Equal-party quest sync index](equal-party-quest-sync/README.md) — detailed
    P0 specifications, task package and validation evidence.
+6. [External research index](research/README.md) — dated reviews of upstream
+   issues, pull requests, forks and add-ons, with explicit intake decisions.
 
 ## Project areas
 
@@ -26,6 +28,8 @@ material for the Skyrim Together Reborn fork.
   authority; see the [concept index](concepts/README.md).
 - `diagnostics/` — diagnostic plans and preserved incident evidence; see the
   [diagnostics index](diagnostics/README.md).
+- `research/` — immutable, dated external evidence and adopt/adapt/reject
+  decisions; it does not make external code accepted.
 - `samples/` — deterministic test/analyzer fixtures.
 
 Documents outside these areas predate this index. They remain valid for their

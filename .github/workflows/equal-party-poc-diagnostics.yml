@@ -39,6 +39,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Install protobuf generator
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y protobuf-compiler
+
       - name: Checkout submodules
         run: |
           git submodule sync --recursive

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Structs/Skyrim/QuestSnapshot.h>
+#include <Structs/Skyrim/PartyQuestNativeLoadIdentityCapture.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -59,6 +60,29 @@ public:
         int32_t aDeviceId,
         uint32_t aOutputStats,
         bool aPermitted,
+        bool aResultKnown,
+        bool aResult) noexcept;
+
+    /**
+     * Record one read-only Load_Impl observation from copied bounded evidence.
+     *
+     * acIdentity is already detached from the engine-owned C string. The
+     * diagnostics implementation never dereferences a borrowed Skyrim pointer.
+     * aObservationId is correlation-only and grants no request/runtime
+     * authority.
+     */
+    static void RecordEngineLoad(
+        const char* acPhase,
+        uint64_t aObservationId,
+        const PartyQuestNativeLoadIdentityCaptureResult& acIdentity,
+        bool aIdentityProbeFaulted,
+        uint64_t aLoadTicket,
+        uint64_t aGenerationTicket,
+        uint64_t aAdmittedGeneration,
+        int32_t aDeviceId,
+        uint32_t aOutputStats,
+        bool aCheckForMods,
+        bool aPairedLifecycle,
         bool aResultKnown,
         bool aResult) noexcept;
 

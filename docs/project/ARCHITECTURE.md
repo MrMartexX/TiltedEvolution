@@ -177,6 +177,20 @@ campaign/party under a separate policy. Both use the same lease and inventory
 transaction foundations; neither is implemented through client-local ownership
 guessing.
 
+## Extension boundary
+
+First-party extensions use named, versioned capabilities over an authenticated,
+quota-limited transport. They receive stable player/object identities and
+explicit invalidation events; they never retain borrowed engine pointers across
+callbacks. Network callbacks may copy bounded data into a queue, but engine
+lookup and any permitted game-thread action still require current
+session/generation validation.
+
+Installing an extension does not grant canonical mutation authority. New
+canonical domains or operations require their own server validation, revision,
+idempotency, compatibility and recovery contract. Presentation-only extensions
+remain unable to alter quests, inventories or other durable campaign state.
+
 ## Error and exception boundary
 
 - Validation, observer, allocation, persistence and lookup failures leave the

@@ -23,6 +23,36 @@
 
 namespace
 {
+std::filesystem::path ResolveTrustedGameDirectory() noexcept
+{
+    try
+    {
+        std::wstring path(512u, L'\0');
+        for (;;)
+        {
+            const DWORD length = ::GetModuleFileNameW(
+                nullptr,
+                path.data(),
+                static_cast<DWORD>(path.size()));
+            if (length == 0u)
+                return {};
+            if (length < path.size() - 1u)
+            {
+                path.resize(length);
+                const std::filesystem::path executable(std::move(path));
+                return executable.parent_path();
+            }
+            if (path.size() >= 32768u)
+                return {};
+            path.resize(path.size() * 2u, L'\0');
+        }
+    }
+    catch (...)
+    {
+        return {};
+    }
+}
+
 std::filesystem::path ResolveCoopReplicaRoot() noexcept
 {
     wchar_t documents[MAX_PATH]{};
@@ -61,6 +91,22 @@ void LogLifecycleFailure(
         static_cast<uint32_t>(acResult.Status),
         acResult.TransactionId,
         acResult.GuardHeld);
+}
+
+[[nodiscard]] bool RevokeNativeSaveProvider(
+    PartyQuestSkyrimNativeSaveProviderOwner& aOwner,
+    const char* acBoundary) noexcept
+{
+    const auto status = aOwner.Invalidate();
+    if (status != PartyQuestSkyrimNativeSaveProviderOwnerStatus::Invalidated)
+    {
+        spdlog::error(
+            "PartyQuest native save provider revocation did not complete at {}: status={}",
+            acBoundary,
+            static_cast<uint32_t>(status));
+        return false;
+    }
+    return true;
 }
 
 [[nodiscard]] constexpr const char* BootstrapStatusName(
@@ -173,10 +219,17 @@ PartyQuestRuntimeOwnerService::PartyQuestRuntimeOwnerService(
 
 PartyQuestRuntimeOwnerService::~PartyQuestRuntimeOwnerService() noexcept
 {
+    m_updateConnection.release();
+    m_partyQuestRepairPlanConnection.release();
+    m_partyLeftConnection.release();
+    m_partyJoinedConnection.release();
+    m_disconnectedConnection.release();
+    m_connectedConnection.release();
     PartyQuestReleaseExternalSink(
         m_pLoadGameDispatcher,
         static_cast<BSTEventSink<TESLoadGameEvent>*>(this));
     m_bootstrapSignal.Reset();
+    m_nativeSaveProvider.Shutdown();
 
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     if (!owner.IsShutdown())
@@ -190,6 +243,8 @@ PartyQuestRuntimeOwnerService::~PartyQuestRuntimeOwnerService() noexcept
 
 void PartyQuestRuntimeOwnerService::OnConnected(const ConnectedEvent&) noexcept
 {
+    if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "connect"))
+        return;
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     const auto status = owner.ApplyClientBoundary(
         PartyQuestRuntimeOwner::ClientBoundary::Connected);
@@ -204,6 +259,8 @@ void PartyQuestRuntimeOwnerService::OnConnected(const ConnectedEvent&) noexcept
 void PartyQuestRuntimeOwnerService::OnDisconnected(const DisconnectedEvent&) noexcept
 {
     m_bootstrapSignal.Reset();
+    if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "disconnect"))
+        return;
 
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(
@@ -213,6 +270,8 @@ void PartyQuestRuntimeOwnerService::OnDisconnected(const DisconnectedEvent&) noe
 
 void PartyQuestRuntimeOwnerService::OnPartyJoined(const PartyJoinedEvent&) noexcept
 {
+    if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "party-join"))
+        return;
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     const auto status = owner.ApplyClientBoundary(
         PartyQuestRuntimeOwner::ClientBoundary::PartyJoined);
@@ -227,6 +286,8 @@ void PartyQuestRuntimeOwnerService::OnPartyJoined(const PartyJoinedEvent&) noexc
 void PartyQuestRuntimeOwnerService::OnPartyLeft(const PartyLeftEvent&) noexcept
 {
     m_bootstrapSignal.Reset();
+    if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "party-leave"))
+        return;
 
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(
@@ -253,6 +314,11 @@ BSTEventResult PartyQuestRuntimeOwnerService::OnEvent(
     const TESLoadGameEvent*,
     const EventDispatcher<TESLoadGameEvent>*)
 {
+    // The engine lifecycle hook has already advanced the generation. Revoke
+    // the old provider token before publishing a retry edge; a stale binding
+    // must never consume events from the newly loaded character.
+    if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "load-game"))
+        return BSTEventResult::kOk;
     // This event means the character-load lifecycle produced new evidence that
     // may include a freshly persisted SKSE lineage. It grants no authority by
     // itself; the resolver revalidates the bridge and generation on consumption.
@@ -294,6 +360,12 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
         const auto* pSession = sessionOwner.GetRuntimeSession();
         if (!pSession || pSession->GetCampaignId() != *campaign)
         {
+            if (!RevokeNativeSaveProvider(
+                    m_nativeSaveProvider,
+                    "campaign-switch-bootstrap"))
+            {
+                return;
+            }
             const auto switched = sessionOwner.PrepareAndRelease(
                 PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
             if (!switched.CanProceed())
@@ -351,6 +423,18 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
 
     if (aggregate.Status == PartyQuestRuntimeOwner::BootstrapStatus::Bound)
     {
+        const auto gameDirectory = ResolveTrustedGameDirectory();
+        const auto nativeProvider = m_nativeSaveProvider.Bind(
+            gameDirectory,
+            aggregate.RuntimeGeneration);
+        if (!nativeProvider.IsBound())
+        {
+            spdlog::debug(
+                "PartyQuestRuntimeOwner native save provider remains fail-closed: ownerStatus={} resolverStatus={} generation={}",
+                static_cast<uint32_t>(nativeProvider.Status),
+                static_cast<uint32_t>(nativeProvider.ResolveStatus),
+                aggregate.RuntimeGeneration);
+        }
         spdlog::info(
             "PartyQuestRuntimeOwner production bootstrap bound: campaign={:016X}{:016X} profile={:016X}{:016X} generation={}",
             campaign->High,

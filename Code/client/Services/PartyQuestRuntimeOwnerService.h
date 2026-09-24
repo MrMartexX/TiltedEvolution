@@ -2,6 +2,7 @@
 
 #include <Events/EventDispatcher.h>
 #include <Games/Events.h>
+#include <Games/Skyrim/PartyQuestSkyrimNativeSaveProviderOwner.h>
 #include <Structs/Skyrim/PartyQuestRuntimeBootstrapSignal.h>
 
 struct World;
@@ -45,6 +46,7 @@ private:
     void TryBootstrap() noexcept;
 
     World& m_world;
+    PartyQuestSkyrimNativeSaveProviderOwner m_nativeSaveProvider;
     PartyQuestRuntimeBootstrapSignal m_bootstrapSignal;
     EventDispatcher<TESLoadGameEvent>* m_pLoadGameDispatcher{};
 

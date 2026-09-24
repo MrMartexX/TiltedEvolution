@@ -70,7 +70,8 @@ target(name)
         "version",
         "dbghelp",
         "kernel32",
-        "shell32")
+        "shell32",
+        "bcrypt")
 end
 
 add_requires("tiltedcore")

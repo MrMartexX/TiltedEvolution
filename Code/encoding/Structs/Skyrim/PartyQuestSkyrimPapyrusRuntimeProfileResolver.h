@@ -10,6 +10,7 @@
 class PartyQuestSkyrimPapyrusGenerationSourceResolver;
 class PartyQuestSkyrimPapyrusSnapshotResolver;
 class PartyQuestPapyrusRuntimeObserverTestAccess;
+class PartyQuestSkyrimNativeLoadBridgeResolverTestAccess;
 
 /**
  * Exact executable-version identity carried by the trusted Skyrim startup
@@ -147,6 +148,7 @@ private:
     friend class PartyQuestSkyrimRuntimeIdentityResolver;
     friend class PartyQuestSkyrimPapyrusRuntimeProfileResolver;
     friend class PartyQuestPapyrusRuntimeObserverTestAccess;
+    friend class PartyQuestSkyrimNativeLoadBridgeResolverTestAccess;
 
     explicit PartyQuestSkyrimRuntimeIdentityAuthorization(
         PartyQuestSkyrimRuntimeVersion aRuntimeVersion,
@@ -187,6 +189,7 @@ public:
 
 private:
     friend class PartyQuestPapyrusRuntimeObserverTestAccess;
+    friend class PartyQuestSkyrimNativeLoadBridgeResolverTestAccess;
 
     [[nodiscard]] static PartyQuestSkyrimRuntimeIdentityAuthorization ResolveTrustedState(
         const PartyQuestSkyrimRuntimeVersion& acMappedExecutableVersion,
