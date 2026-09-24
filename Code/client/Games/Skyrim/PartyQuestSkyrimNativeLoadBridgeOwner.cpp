@@ -449,6 +449,7 @@ try
     uint32_t knownPendingPolls = 0u;
     PartyQuestSkyrimNativeLoadBridgeOwnerResult last{};
     PartyQuestNativeLoadBridgeOwnerSnapshot alreadyActiveSnapshot{};
+    PartyQuestNativeLoadBridgeOwnerSnapshot entrySnapshot{};
 
     bool driverAlreadyActive = false;
     ShutdownDrainStatus alreadyActiveStatus =
@@ -469,6 +470,7 @@ try
         {
             m_shutdownDriverActive = true;
             m_shutdownDriverThread = std::this_thread::get_id();
+            entrySnapshot = m_state.Snapshot();
         }
     }
 
@@ -517,7 +519,27 @@ try
                 finalSnapshot);
         };
 
-    last = Shutdown();
+    // A resumed driver already in ShutdownDrain must continue the exact
+    // retained request. Calling Shutdown() again would publish a second Cancel
+    // for an Active request. CompletionCached is retired by the loop below.
+    if (entrySnapshot.Phase ==
+            PartyQuestNativeLoadBridgeOwnerPhase::ShutdownDrain ||
+        entrySnapshot.Phase ==
+            PartyQuestNativeLoadBridgeOwnerPhase::ShutdownComplete ||
+        entrySnapshot.Phase ==
+            PartyQuestNativeLoadBridgeOwnerPhase::PoisonedUnsafeToUnload)
+    {
+        last.Status = OwnerStatus::Applied;
+        last.State.Code =
+            entrySnapshot.Phase ==
+                PartyQuestNativeLoadBridgeOwnerPhase::ShutdownComplete
+            ? StateResultCode::ShutdownComplete
+            : StateResultCode::DrainPending;
+    }
+    else
+    {
+        last = Shutdown();
+    }
 
     for (;;)
     {
