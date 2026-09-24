@@ -8,6 +8,7 @@
 class PartyQuestSkyrimNativeLoadBridgeResolver;
 class PartyQuestSkyrimNativeLoadBridgeOwner;
 class PartyQuestSkyrimNativeLoadBridgeOwnerTestAccess;
+class PartyQuestSkyrimNativeLoadBridgeCoordinatorTestAccess;
 class PartyQuestSkyrimNativeLoadBridgeModuleLeaseTestAccess;
 
 enum class PartyQuestSkyrimNativeLoadBridgeModuleLeaseCreateStatus : uint8_t
@@ -118,6 +119,7 @@ private:
     friend class PartyQuestSkyrimNativeLoadBridgeResolver;
     friend class PartyQuestSkyrimNativeLoadBridgeOwner;
     friend class PartyQuestSkyrimNativeLoadBridgeOwnerTestAccess;
+    friend class PartyQuestSkyrimNativeLoadBridgeCoordinatorTestAccess;
     friend class PartyQuestSkyrimNativeLoadBridgeModuleLeaseTestAccess;
 
     [[nodiscard]] PartyQuestNativeLoadBridgeOwnerForeignOutcome Execute(
