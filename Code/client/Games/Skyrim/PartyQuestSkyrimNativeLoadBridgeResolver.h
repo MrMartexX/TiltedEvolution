@@ -2,6 +2,7 @@
 
 #include <Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeOwner.h>
 #include <Structs/Skyrim/PartyQuestSkyrimPapyrusRuntimeProfileResolver.h>
+#include <Structs/Skyrim/PartyQuestNativeLoadBridgeRuntimeFingerprint.h>
 
 #include <array>
 #include <cstdint>
@@ -45,9 +46,13 @@ enum class PartyQuestSkyrimNativeLoadBridgeResolveStatus : uint8_t
  * - ProcessImage: exact trusted pre-remap STR-image predicate plus exact direct
  *   descriptor/Reserve/Cancel/Poll/Retire call targets.
  *
- * Production callers cannot mint this capability. The production registry is
- * deliberately empty until the concrete native provider surface has been
- * source/live-reviewed.
+ * Production callers cannot mint this capability. Its runtime fingerprint must
+ * equal the deterministic derivation from the exact runtime tuple and complete
+ * executable SHA-256; an arbitrary nonzero fingerprint is rejected. The full
+ * SHA-256 remains the identity proof.
+ *
+ * The production registry is deliberately empty until the concrete native
+ * provider surface has been source/live-reviewed.
  */
 class PartyQuestSkyrimNativeLoadBridgeSourceAuthorization final
 {
@@ -64,7 +69,12 @@ public:
                 m_runtimeVersion.Patch != 1170u ||
                 m_runtimeVersion.Build != 0u ||
                 !m_executableIdentity.IsValid() ||
-                m_runtimeFingerprint == 0u)
+                m_runtimeFingerprint == 0u ||
+                m_runtimeFingerprint !=
+                    PartyQuestNativeLoadBridgeRuntimeFingerprintPolicy::
+                        Derive(
+                            m_runtimeVersion,
+                            m_executableIdentity))
             {
                 return false;
             }
