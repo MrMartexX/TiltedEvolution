@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/str/party_quest_state.schema.json",
+  "title": "PartyQuestState",
+  "type": "object",
+  "required": ["partyId", "worldRevision", "quests", "interactionLeases"],
+  "properties": {
+    "partyId": { "type": "integer", "minimum": 0 },
+    "worldRevision": { "type": "integer", "minimum": 0 },
+    "quests": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "quest_snapshot.schema.json"
+      }
+    },
+    "interactionLeases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["actorServerId", "ownerPlayerId", "expiresAtTick"],
+        "properties": {
+          "actorServerId": { "type": "integer", "minimum": 0 },
+          "ownerPlayerId": { "type": "integer", "minimum": 0 },
+          "expiresAtTick": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

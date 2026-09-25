@@ -1,5 +1,8 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestModMappingIdentity.h>
+#include <Structs/Skyrim/PartyQuestModMappingPublication.h>
+
 struct Mods;
 struct GameId;
 
@@ -9,10 +12,11 @@ struct GameId;
 struct ModSystem
 {
     ModSystem(entt::dispatcher& aDispatcher) noexcept;
-    ~ModSystem() = default;
+    ~ModSystem() noexcept;
 
     TP_NOCOPYMOVE(ModSystem);
 
+    [[nodiscard]] bool IsReady() const noexcept;
     bool GetServerModId(uint32_t aGameId, uint32_t& aModId, uint32_t& aBaseId) const noexcept;
     bool GetServerModId(uint32_t aGameId, GameId& aServerId) const noexcept;
     uint32_t GetGameId(uint32_t aServerId, uint32_t aFormId) const noexcept;
@@ -29,7 +33,8 @@ private:
     };
 
     entt::scoped_connection m_modsConnection;
+    PartyQuestModMappingPublication m_mappingPublication;
     Map<uint16_t, uint32_t> m_liteToServer;
     Map<uint32_t, GameMod> m_serverToGame;
-    uint32_t m_standardToServer[0x100];
+    PartyQuestStandardModMapping m_standardToServer;
 };
