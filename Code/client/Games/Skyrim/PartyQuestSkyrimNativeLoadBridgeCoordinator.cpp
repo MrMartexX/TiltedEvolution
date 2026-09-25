@@ -312,14 +312,54 @@ try
 
     result.Owner = m_owner.Cancel(acAttempt.AttemptNonce);
     if (result.Owner.Status == OwnerStatus::Applied &&
-        result.Owner.State.Code == StateCode::Cancelled &&
-        result.Owner.State.ReleaseCapability == 1u &&
-        m_provider.GetActiveAttemptNonce() == 0u)
+        result.Owner.State.Code == StateCode::Cancelled)
     {
-        result.Status = CoordinatorStatus::Cancelled;
-        result.ProviderStatus =
-            PartyQuestNativeLoadBridgeStatus::Cancelled;
-        return result;
+        const auto snapshot = m_owner.Snapshot();
+        const auto providerState = m_provider.GetState();
+        const uint64_t providerNonce =
+            m_provider.GetActiveAttemptNonce();
+
+        // Cancelling a current-generation reservation retires only the request
+        // and deliberately keeps the authenticated callable capability. Once a
+        // generation transition has moved the owner to DrainOnly, cancellation
+        // must instead release that stale capability and leave the owner Unbound.
+        const bool retainedCurrentBinding =
+            result.Owner.State.ReleaseCapability == 0u &&
+            snapshot.Phase == OwnerPhase::Bound &&
+            snapshot.RequestPhase == RequestPhase::None &&
+            snapshot.CapabilityRetained == 1u &&
+            snapshot.ActiveAttemptNonce == 0u &&
+            snapshot.LastAttemptNonce == acAttempt.AttemptNonce &&
+            snapshot.BoundGeneration == acAttempt.ReservedGeneration &&
+            snapshot.CurrentGeneration == acAttempt.ReservedGeneration;
+
+        const bool releasedStaleBinding =
+            result.Owner.State.ReleaseCapability == 1u &&
+            snapshot.Phase == OwnerPhase::Unbound &&
+            snapshot.RequestPhase == RequestPhase::None &&
+            snapshot.CapabilityRetained == 0u &&
+            snapshot.ActiveAttemptNonce == 0u &&
+            snapshot.LastAttemptNonce == acAttempt.AttemptNonce &&
+            snapshot.BoundGeneration == 0u &&
+            snapshot.CurrentGeneration > acAttempt.ReservedGeneration;
+
+        const bool providerCancelled =
+            providerState ==
+                PartyQuestNativeLoadBridgeAdapterState::Ready &&
+            providerNonce == 0u;
+
+        if (providerCancelled &&
+            (retainedCurrentBinding || releasedStaleBinding))
+        {
+            result.Status = CoordinatorStatus::Cancelled;
+            result.ProviderStatus =
+                PartyQuestNativeLoadBridgeStatus::Cancelled;
+            return result;
+        }
+
+        return PropagateUnsafe(
+            acAttempt,
+            PartyQuestNativeLoadBridgeStatus::InternalFailure);
     }
 
     if (result.Owner.State.Code ==
@@ -361,10 +401,21 @@ bool PartyQuestSkyrimNativeLoadBridgeCoordinator::AttemptMatchesCurrent(
     const PartyQuestSkyrimNativeLoadBridgeAttempt& acAttempt) noexcept
 {
     const auto snapshot = m_owner.Snapshot();
+    const bool identityMatches =
+        snapshot.ActiveIdentity.Length == acAttempt.Identity.Length &&
+        snapshot.ActiveIdentity.Length != 0u &&
+        snapshot.ActiveIdentity.Length <=
+            PartyQuestNativeLoadIdentity::kCapacity &&
+        std::memcmp(
+            snapshot.ActiveIdentity.Bytes,
+            acAttempt.Identity.Bytes,
+            snapshot.ActiveIdentity.Length) == 0;
+
     return snapshot.RequestPhase == RequestPhase::Active &&
         snapshot.ActiveAttemptNonce == acAttempt.AttemptNonce &&
         snapshot.BoundGeneration == acAttempt.ReservedGeneration &&
         snapshot.CapabilityRetained != 0u &&
+        identityMatches &&
         m_provider.GetActiveAttemptNonce() == acAttempt.AttemptNonce;
 }
 

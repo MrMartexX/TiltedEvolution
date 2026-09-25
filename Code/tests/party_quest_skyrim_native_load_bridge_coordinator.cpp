@@ -364,10 +364,20 @@ TEST_CASE(
     REQUIRE(rejected.ProviderStatus == BridgeStatus::Cancelled);
     REQUIRE(rejected.Owner.State.Code == StateCode::Cancelled);
     REQUIRE(rejected.Owner.State.ReleaseCapability == 1u);
-    REQUIRE(owner.Snapshot().Phase == Phase::Unbound);
-    REQUIRE(owner.Snapshot().RequestPhase == RequestPhase::None);
-    REQUIRE(owner.Snapshot().CapabilityRetained == 0u);
+
+    const auto afterCancel = owner.Snapshot();
+    REQUIRE(afterCancel.Phase == Phase::Unbound);
+    REQUIRE(afterCancel.RequestPhase == RequestPhase::None);
+    REQUIRE(afterCancel.CapabilityRetained == 0u);
+    REQUIRE(afterCancel.ActiveAttemptNonce == 0u);
+    REQUIRE(afterCancel.LastAttemptNonce == begun.Attempt.AttemptNonce);
+    REQUIRE(afterCancel.BoundGeneration == 0u);
+    REQUIRE(afterCancel.CurrentGeneration == generation);
+    REQUIRE(afterCancel.CurrentGeneration >
+        begun.Attempt.ReservedGeneration);
     REQUIRE(provider.GetActiveAttemptNonce() == 0u);
+    REQUIRE(provider.GetState() ==
+        PartyQuestNativeLoadBridgeAdapterState::Ready);
 }
 
 TEST_CASE(
@@ -389,12 +399,44 @@ TEST_CASE(
     const auto cancelled =
         coordinator.CancelBeforeTarget(begun.Attempt);
     REQUIRE(cancelled.Status == CoordinatorStatus::Cancelled);
+    REQUIRE(cancelled.ProviderStatus == BridgeStatus::Cancelled);
     REQUIRE(cancelled.Owner.State.Code == StateCode::Cancelled);
     REQUIRE(cancelled.Owner.State.ReleaseCapability == 0u);
+
+    const auto afterCancel = owner.Snapshot();
+    REQUIRE(afterCancel.Phase == Phase::Bound);
+    REQUIRE(afterCancel.RequestPhase == RequestPhase::None);
+    REQUIRE(afterCancel.CapabilityRetained == 1u);
+    REQUIRE(afterCancel.ActiveAttemptNonce == 0u);
+    REQUIRE(afterCancel.LastAttemptNonce == begun.Attempt.AttemptNonce);
+    REQUIRE(afterCancel.BoundGeneration ==
+        begun.Attempt.ReservedGeneration);
+    REQUIRE(afterCancel.CurrentGeneration ==
+        begun.Attempt.ReservedGeneration);
+    REQUIRE(provider.GetActiveAttemptNonce() == 0u);
+    REQUIRE(provider.GetState() ==
+        PartyQuestNativeLoadBridgeAdapterState::Ready);
+
+    // Cancellation is terminal for the exact attempt, but retaining the Bound
+    // capability must allow a fresh request. Repeating cancellation itself is
+    // rejected locally and must not poison or touch the provider.
+    const auto duplicate =
+        coordinator.CancelBeforeTarget(begun.Attempt);
+    REQUIRE(duplicate.Status == CoordinatorStatus::Rejected);
     REQUIRE(owner.Snapshot().Phase == Phase::Bound);
     REQUIRE(owner.Snapshot().RequestPhase == RequestPhase::None);
     REQUIRE(owner.Snapshot().CapabilityRetained == 1u);
     REQUIRE(provider.GetActiveAttemptNonce() == 0u);
+    REQUIRE(provider.GetState() ==
+        PartyQuestNativeLoadBridgeAdapterState::Ready);
+
+    const auto next =
+        coordinator.Begin(MakeIdentity("CancelledSave2_TEST"));
+    REQUIRE(next.Status == CoordinatorStatus::Reserved);
+    REQUIRE(next.Attempt.AttemptNonce > begun.Attempt.AttemptNonce);
+    REQUIRE(
+        coordinator.CancelBeforeTarget(next.Attempt).Status ==
+        CoordinatorStatus::Cancelled);
 }
 
 TEST_CASE(
@@ -422,6 +464,14 @@ TEST_CASE(
     REQUIRE(second.Attempt.AttemptNonce >
         first.Attempt.AttemptNonce);
 
+    const auto staleCancel =
+        coordinator.CancelBeforeTarget(first.Attempt);
+    REQUIRE(staleCancel.Status == CoordinatorStatus::Rejected);
+    REQUIRE(provider.GetActiveAttemptNonce() ==
+        second.Attempt.AttemptNonce);
+    REQUIRE(owner.Snapshot().ActiveAttemptNonce ==
+        second.Attempt.AttemptNonce);
+
     const auto stale =
         coordinator.EnterTarget(
             first.Attempt,
@@ -431,6 +481,21 @@ TEST_CASE(
         second.Attempt.AttemptNonce);
     REQUIRE(owner.Snapshot().ActiveAttemptNonce ==
         second.Attempt.AttemptNonce);
+
+    // Same nonce/generation is insufficient: the stack-owned attempt must also
+    // carry the exact identity reserved by the owner/provider pair.
+    auto wrongIdentity = second.Attempt;
+    REQUIRE(wrongIdentity.Identity.Length != 0u);
+    wrongIdentity.Identity.Bytes[0] ^= 0x1u;
+    const auto mismatchedAttempt =
+        coordinator.CancelBeforeTarget(wrongIdentity);
+    REQUIRE(mismatchedAttempt.Status == CoordinatorStatus::Rejected);
+    REQUIRE(provider.GetActiveAttemptNonce() ==
+        second.Attempt.AttemptNonce);
+    REQUIRE(owner.Snapshot().ActiveAttemptNonce ==
+        second.Attempt.AttemptNonce);
+    REQUIRE(provider.GetState() ==
+        PartyQuestNativeLoadBridgeAdapterState::Ready);
 
     REQUIRE(
         coordinator.CancelBeforeTarget(second.Attempt).Status ==

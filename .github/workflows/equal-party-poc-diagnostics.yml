@@ -3,7 +3,7 @@ name: Equal party PoC diagnostics
 on:
   push:
     branches:
-      - chat/task07-load-bridge-process-coordinator-ci2
+      - codex/task07-load-bridge-followup
   pull_request:
     branches:
       - dev
