@@ -11,7 +11,9 @@ target("TPTests")
             "TPTests.rc",
             "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeModuleLease.cpp",
             "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeOwner.cpp",
-            "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeResolver.cpp")
+            "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeResolver.cpp",
+            "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeProvider.cpp",
+            "../client/Games/Skyrim/PartyQuestSkyrimNativeLoadBridgeCoordinator.cpp")
         add_syslinks("kernel32", "bcrypt")
     end
     add_deps("SkyrimEncoding")

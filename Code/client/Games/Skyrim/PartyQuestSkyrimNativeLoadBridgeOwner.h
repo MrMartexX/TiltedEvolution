@@ -11,6 +11,7 @@
 
 class PartyQuestSkyrimNativeLoadBridgeResolver;
 class PartyQuestSkyrimNativeLoadBridgeOwnerTestAccess;
+class PartyQuestSkyrimNativeLoadBridgeCoordinatorTestAccess;
 
 enum class PartyQuestSkyrimNativeLoadBridgeOwnerStatus : uint8_t
 {
@@ -216,6 +217,7 @@ public:
 private:
     friend class PartyQuestSkyrimNativeLoadBridgeResolver;
     friend class PartyQuestSkyrimNativeLoadBridgeOwnerTestAccess;
+    friend class PartyQuestSkyrimNativeLoadBridgeCoordinatorTestAccess;
 
     [[nodiscard]] PartyQuestSkyrimNativeLoadBridgeOwnerResult
     BindAuthenticated(

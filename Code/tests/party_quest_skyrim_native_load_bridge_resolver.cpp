@@ -37,7 +37,23 @@ using LifetimeKind =
     PartyQuestSkyrimNativeLoadBridgeLeaseLifetimeKind;
 
 constexpr RuntimeVersion kRuntime{1u, 6u, 1170u, 0u};
-constexpr uint64_t kRuntimeFingerprint = 0x4C4F414452455331ull;
+
+constexpr ExecutableIdentity MakeExecutableIdentity(uint8_t aSeed) noexcept
+{
+    ExecutableIdentity identity{};
+    identity.Sha256[0] = aSeed == 0u ? 1u : aSeed;
+    identity.Sha256[31] =
+        static_cast<uint8_t>(identity.Sha256[0] ^ 0xA5u);
+    return identity;
+}
+
+constexpr ExecutableIdentity kFixtureExecutableIdentity =
+    MakeExecutableIdentity(0x42u);
+constexpr uint64_t kRuntimeFingerprint =
+    PartyQuestNativeLoadBridgeRuntimeFingerprintPolicy::Derive(
+        kRuntime,
+        kFixtureExecutableIdentity);
+static_assert(kRuntimeFingerprint != 0u);
 
 enum class FakeDescriptorMode : uint8_t
 {
@@ -69,15 +85,6 @@ PartyQuestNativeLoadBridgeDescriptorV1 MakeDescriptor() noexcept
     descriptor.BridgeFingerprint =
         kPartyQuestNativeLoadBridgeFingerprint;
     return descriptor;
-}
-
-ExecutableIdentity MakeExecutableIdentity(uint8_t aSeed) noexcept
-{
-    ExecutableIdentity identity{};
-    identity.Sha256[0] = aSeed == 0u ? 1u : aSeed;
-    identity.Sha256[31] =
-        static_cast<uint8_t>(identity.Sha256[0] ^ 0xA5u);
-    return identity;
 }
 
 std::filesystem::path GetCurrentExecutablePath()
@@ -319,7 +326,7 @@ struct TrustedFixture final
     TrustedFixture()
         : ExecutablePath(GetCurrentExecutablePath())
         , TrustedDirectory(ExecutablePath.parent_path())
-        , SkyrimExecutableIdentity(MakeExecutableIdentity(0x42u))
+        , SkyrimExecutableIdentity(kFixtureExecutableIdentity)
         , Runtime(
               PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::
                   MakeRuntimeAuthorization(
@@ -427,6 +434,11 @@ TEST_CASE(
     "[quest.party-state][native-load-resolver][source-authorization]")
 {
     const auto executableIdentity = MakeExecutableIdentity(0x31u);
+    const uint64_t exactFingerprint =
+        PartyQuestNativeLoadBridgeRuntimeFingerprintPolicy::Derive(
+            kRuntime,
+            executableIdentity);
+    REQUIRE(exactFingerprint != 0u);
     std::array<uint8_t, 32> hash{};
     hash[0] = 1u;
 
@@ -437,7 +449,7 @@ TEST_CASE(
                 executableIdentity,
                 L"native-load-test.dll",
                 hash,
-                kRuntimeFingerprint,
+                exactFingerprint,
                 false);
     REQUIRE_FALSE(unreviewed.IsVerified());
 
@@ -450,7 +462,7 @@ TEST_CASE(
                     L".." /
                     L"native-load-test.dll",
                 hash,
-                kRuntimeFingerprint);
+                exactFingerprint);
     REQUIRE_FALSE(parentTraversal.IsVerified());
 
     const auto currentTraversal =
@@ -461,7 +473,7 @@ TEST_CASE(
                 std::filesystem::path(L".") /
                     L"native-load-test.dll",
                 hash,
-                kRuntimeFingerprint);
+                exactFingerprint);
     REQUIRE_FALSE(currentTraversal.IsVerified());
 
     const auto absolute =
@@ -471,7 +483,7 @@ TEST_CASE(
                 executableIdentity,
                 std::filesystem::path(L"C:\\native-load-test.dll"),
                 hash,
-                kRuntimeFingerprint);
+                exactFingerprint);
     REQUIRE_FALSE(absolute.IsVerified());
 
     auto zeroHash = hash;
@@ -483,8 +495,18 @@ TEST_CASE(
                 executableIdentity,
                 L"native-load-test.dll",
                 zeroHash,
-                kRuntimeFingerprint);
+                exactFingerprint);
     REQUIRE_FALSE(noHash.IsVerified());
+
+    const auto wrongFingerprint =
+        PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::
+            MakeSourceAuthorization(
+                kRuntime,
+                executableIdentity,
+                L"native-load-test.dll",
+                hash,
+                exactFingerprint ^ 0x1u);
+    REQUIRE_FALSE(wrongFingerprint.IsVerified());
 
     const auto noFingerprint =
         PartyQuestSkyrimNativeLoadBridgeResolverTestAccess::
