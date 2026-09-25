@@ -1,9 +1,6 @@
 name: Equal party PoC diagnostics
 
 on:
-  push:
-    branches:
-      - codex/task07-load-bridge-followup
   pull_request:
     branches:
       - dev
