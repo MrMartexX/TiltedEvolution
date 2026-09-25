@@ -265,6 +265,13 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
             result.Status = PartyQuestRuntimeRecoveryStatus::CheckpointManifestInvalid;
             return result;
         }
+        if (manifest.Durability !=
+            PartyQuestReplicaManifestDurability::PowerLossDurable)
+        {
+            result.Status =
+                PartyQuestRuntimeRecoveryStatus::CheckpointDurabilityUnavailable;
+            return result;
+        }
 
         result.VerificationStatus = PartyQuestReplicaManifestStore::VerifyPublishedFiles(
             acPaths,

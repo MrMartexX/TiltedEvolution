@@ -109,7 +109,8 @@ void PublishCheckpoint(
     const PartyQuestCoopSavePaths& acPaths,
     PartyQuestCheckpointKind aKind,
     uint64_t aWorldRevision,
-    const std::string& acCheckpointBytes)
+    const std::string& acCheckpointBytes,
+    bool aPromoteBeforeMutation = true)
 {
     WriteRecoveryBytes(acPaths.SavesDirectory / "Hero.ess", acCheckpointBytes);
     PartyQuestReplicaSnapshotManager manager(
@@ -122,9 +123,12 @@ void PublishCheckpoint(
         aWorldRevision,
         plan);
     REQUIRE(snapshot.Status == PartyQuestReplicaSnapshotStatus::Ready);
-    REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
-                acPaths, kRecoveryCampaign, kRecoveryPlayer,
-                aKind, aWorldRevision).IsPromoted());
+    if (aPromoteBeforeMutation)
+    {
+        REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                    acPaths, kRecoveryCampaign, kRecoveryPlayer,
+                    aKind, aWorldRevision).IsPromoted());
+    }
 }
 
 PartyQuestRuntimeRecoveryState BuildBlockedRecoveryState(
@@ -259,6 +263,45 @@ TEST_CASE("Crash recovery restores exact PreRepair revision before clearing runt
     REQUIRE(session.GetCoordinator().GetRecoveryRecord() == nullptr);
     REQUIRE_FALSE(capture.States.empty());
     REQUIRE(capture.States.back().Active == std::nullopt);
+}
+
+TEST_CASE(
+    "Crash recovery rejects a weak checkpoint before every restore executor",
+    "[quest.party-state.runtime-recovery][durability][fail-closed]")
+{
+    RecoverySandbox sandbox;
+    const auto paths = BuildRecoveryPaths(sandbox);
+    constexpr uint64_t kWorldRevision = 1605;
+    constexpr uint64_t kTransactionId = 21002;
+
+    PublishCheckpoint(
+        paths,
+        PartyQuestCheckpointKind::PreRepair,
+        kWorldRevision,
+        "WEAK_PRE_REPAIR_1605",
+        false);
+    WriteRecoveryBytes(paths.SavesDirectory / "Hero.ess", "MUTATED_AFTER_1605");
+
+    RecoveryDurableCapture capture;
+    auto session = BuildBlockedSession(capture, kTransactionId, kWorldRevision);
+    const auto result =
+        PartyQuestRuntimeRecoveryCoordinatorTestAccess::ResolveCrashRecovery(
+            session,
+            paths);
+
+    REQUIRE(result.Status ==
+        PartyQuestRuntimeRecoveryStatus::CheckpointDurabilityUnavailable);
+    REQUIRE(result.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::None);
+    REQUIRE(result.RestoreId == 0);
+    REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") ==
+        "MUTATED_AFTER_1605");
+    REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
+
+    const auto manifest = PartyQuestReplicaManifestStore::Load(result.ManifestPath);
+    REQUIRE(manifest.Status == PartyQuestReplicaManifestPersistenceStatus::Success);
+    REQUIRE(manifest.Manifest.has_value());
+    REQUIRE(manifest.Manifest->Durability ==
+        PartyQuestReplicaManifestDurability::ProcessCrashResilient);
 }
 
 TEST_CASE("Crash recovery never guesses LastKnownGood when exact PreRepair revision is absent", "[quest.party-state.runtime-recovery]")

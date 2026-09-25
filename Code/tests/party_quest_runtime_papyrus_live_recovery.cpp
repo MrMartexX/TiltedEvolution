@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
+#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeRestoreAttempt.h>
 
@@ -167,6 +168,9 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
                     PartyQuestCheckpointKind::PreRepair,
                     worldRevision,
                     checkpointPlan).IsReady());
+        REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                    *paths, kLiveRecoveryCampaign, kLiveRecoveryPlayer,
+                    PartyQuestCheckpointKind::PreRepair, worldRevision).IsPromoted());
     }
 
     PartyQuestRuntimeProcessOwnerTestScope processOwner(

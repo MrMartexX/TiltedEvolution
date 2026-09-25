@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
+#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 
 #include <party_quest_runtime_recovery_coordinator_test_access.h>
 
@@ -113,6 +114,9 @@ TEST_CASE("Committed restore journal cannot clear runtime barrier after live rep
                 PartyQuestCheckpointKind::PreRepair,
                 kWorldRevision,
                 checkpointPlan).IsReady());
+    REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                *paths, kIntegrityCampaign, kIntegrityPlayer,
+                PartyQuestCheckpointKind::PreRepair, kWorldRevision).IsPromoted());
 
     WriteIntegrityBytes(liveSave, "MUTATED_1640");
 

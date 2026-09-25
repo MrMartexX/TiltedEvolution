@@ -26,6 +26,7 @@ enum class PartyQuestRuntimeRecoveryStatus : uint8_t
     CheckpointMissing,
     CheckpointManifestRecoveryRequired,
     CheckpointManifestInvalid,
+    CheckpointDurabilityUnavailable,
     CheckpointVerificationFailed,
     RestorePlanInvalid,
     RestoreJournalConflict,

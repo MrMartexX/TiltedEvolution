@@ -104,7 +104,8 @@ PartyQuestRuntimeApplyRequest BuildStrongLiveRequest(
 
 PartyQuestReplicaRestorePlan PublishStrongLiveCheckpoint(
     const PartyQuestCoopSavePaths& acPaths,
-    uint64_t aWorldRevision)
+    uint64_t aWorldRevision,
+    bool aPromoteBeforeMutation = true)
 {
     const auto liveSave = acPaths.SavesDirectory / "Hero.ess";
     WriteStrongLiveBytes(liveSave, "PRE_REPAIR_STRONG_LIVE");
@@ -129,9 +130,12 @@ PartyQuestReplicaRestorePlan PublishStrongLiveCheckpoint(
                 PartyQuestCheckpointKind::PreRepair,
                 aWorldRevision,
                 checkpointPlan).IsReady());
-    REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
-                acPaths, kStrongLiveCampaign, kStrongLivePlayer,
-                PartyQuestCheckpointKind::PreRepair, aWorldRevision).IsPromoted());
+    if (aPromoteBeforeMutation)
+    {
+        REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                    acPaths, kStrongLiveCampaign, kStrongLivePlayer,
+                    PartyQuestCheckpointKind::PreRepair, aWorldRevision).IsPromoted());
+    }
 
     const auto manifestPath =
         PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
@@ -150,6 +154,52 @@ PartyQuestReplicaRestorePlan PublishStrongLiveCheckpoint(
     return restorePlan;
 }
 } // namespace
+
+TEST_CASE(
+    "Live recovery rejects a weak checkpoint before every restore executor",
+    "[quest.party-state.runtime-recovery][live-recovery][durability][fail-closed]")
+{
+    StrongLiveSandbox sandbox;
+    const auto paths = PartyQuestCoopSaveLayout::Build(
+        sandbox.Root / "CoopCampaigns",
+        kStrongLiveCampaign,
+        kStrongLivePlayer);
+    REQUIRE(paths.has_value());
+
+    constexpr uint64_t transactionId = 28100;
+    constexpr uint64_t worldRevision = 1885;
+    const auto unusedPlan =
+        PublishStrongLiveCheckpoint(*paths, worldRevision, false);
+    REQUIRE(unusedPlan.IsReady());
+    const auto liveSave = paths->SavesDirectory / "Hero.ess";
+    WriteStrongLiveBytes(liveSave, "MUTATED_WEAK_LIVE");
+
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(
+        kStrongLiveCampaign,
+        kStrongLivePlayer,
+        *paths);
+    auto& guarded = processOwner.GuardedSession();
+    auto& session = processOwner.RuntimeSession();
+    const auto request = BuildStrongLiveRequest(transactionId, worldRevision);
+    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
+                session,
+                transactionId) ==
+        PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status ==
+        PartyQuestRuntimeGuardStatus::Ready);
+
+    const auto result = guarded.ResolveLiveRecovery(*paths);
+    REQUIRE(result.Status ==
+        PartyQuestRuntimeRecoveryStatus::CheckpointDurabilityUnavailable);
+    REQUIRE(result.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::None);
+    REQUIRE(result.RestoreId == 0);
+    REQUIRE(ReadStrongLiveBytes(liveSave) == "MUTATED_WEAK_LIVE");
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
+    REQUIRE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
+    REQUIRE(PartyQuestSaveGuard::GetProcessGuard().GetTransactionId() ==
+        transactionId);
+}
 
 TEST_CASE(
     "Strong live rollback advances one attempt while process guard remains held",

@@ -2,6 +2,7 @@
 #include <Structs/Skyrim/PartyQuestRuntimeRecovery.h>
 #include <Structs/Skyrim/PartyQuestRuntimeRestoreAttempt.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
+#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 
 #include <party_quest_runtime_recovery_coordinator_test_access.h>
 
@@ -91,6 +92,9 @@ void PublishCheckpoint(
                 PartyQuestCheckpointKind::PreRepair,
                 aWorldRevision,
                 copyPlan).IsReady());
+    REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                acPaths, kCampaign, kPlayer,
+                PartyQuestCheckpointKind::PreRepair, aWorldRevision).IsPromoted());
 }
 
 PartyQuestReplicaRestorePlan LoadRestorePlan(
