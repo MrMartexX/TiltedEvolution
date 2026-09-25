@@ -106,8 +106,9 @@ struct PartyQuestStableStorage
      * directory is fsync'd after rename. On Windows the source is opened with
      * FILE_FLAG_WRITE_THROUGH, the filesystem is required to identify as NTFS,
      * the exact handle is flushed, and FileRenameInfo is issued through that
-     * handle. Microsoft documents that write-through requests cause NTFS to
-     * flush metadata changes including rename operations.
+     * handle. After closing that handle, the containing directory crosses the
+     * reviewed NTFS NtFlushBuffersFileEx metadata barrier before success is
+     * reported.
      *
      * If rename succeeds but a later flush/close reports failure, publication is
      * uncertain and the result remains failure. Callers must preserve recovery

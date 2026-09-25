@@ -402,7 +402,8 @@ later journal transition.
 - Windows: open the exact regular non-reparse source with `DELETE` and
   `FILE_FLAG_WRITE_THROUGH`, require NTFS by handle, `FlushFileBuffers`, issue
   `SetFileInformationByHandle(FileRenameInfo)`, then apply an additional
-  exact-handle flush before close.
+  exact-handle flush before close and cross the reviewed NTFS parent-directory
+  metadata barrier before reporting success.
 
 `PartyQuestStableStorage::FlushDirectory` / `FlushParentDirectory` remain:
 

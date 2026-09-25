@@ -272,6 +272,7 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::WriteFileDurably(
         }
         if (!::CloseHandle(file))
             return PartyQuestStableStorageStatus::CloseFailed;
+
         return PartyQuestStableStorageStatus::Success;
 #else
         const int descriptor = ::open(
@@ -410,7 +411,12 @@ PartyQuestStableStorageStatus PartyQuestStableStorage::PublishFileRename(
         }
         if (!::CloseHandle(file))
             return PartyQuestStableStorageStatus::CloseFailed;
-        return PartyQuestStableStorageStatus::Success;
+
+        // The write-through file handle covers the exact renamed file, but the
+        // destination name is directory metadata. Cross the same reviewed NTFS
+        // directory barrier used for namespace creation before reporting the
+        // publication as durable.
+        return EnsureDirectoryTreeDurably(destination.parent_path());
 #else
         ec.clear();
         const auto destinationStatus = std::filesystem::symlink_status(destination, ec);
