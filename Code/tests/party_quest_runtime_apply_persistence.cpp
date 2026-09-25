@@ -333,6 +333,103 @@ TEST_CASE("Runtime apply recovery state encodes deterministically and round-trip
     REQUIRE(*decoded.State == original);
 }
 
+uint64_t ComputeTestChecksum(const uint8_t* apData, size_t aSize)
+{
+    uint64_t checksum = 14695981039346656037ull;
+    for (size_t i = 0; i < aSize; ++i)
+    {
+        checksum ^= apData[i];
+        checksum *= 1099511628211ull;
+    }
+    return checksum;
+}
+
+void WriteTestU64(std::vector<uint8_t>& aBytes, size_t aOffset, uint64_t aValue)
+{
+    REQUIRE(aOffset <= aBytes.size());
+    REQUIRE(aBytes.size() - aOffset >= sizeof(uint64_t));
+    for (size_t i = 0; i < sizeof(uint64_t); ++i)
+        aBytes[aOffset + i] = static_cast<uint8_t>((aValue >> (i * 8)) & 0xFF);
+}
+
+std::vector<uint8_t> DowngradeSingleActiveV5ArchiveToV4(
+    std::vector<uint8_t> aArchive)
+{
+    constexpr size_t kHeaderSize = 8 + 2 + 8;
+    constexpr size_t kPayloadPrefixSize = 32 + 8 + 1;
+    constexpr size_t kActiveFingerprintSize = 98;
+    constexpr size_t kStateAndCheckpointFlagsSize = 3;
+    constexpr size_t kProvenanceSize = 16;
+    const size_t provenanceOffset = kHeaderSize + kPayloadPrefixSize +
+        kActiveFingerprintSize + kStateAndCheckpointFlagsSize;
+    REQUIRE(aArchive.size() >= provenanceOffset + kProvenanceSize + sizeof(uint64_t));
+
+    aArchive.erase(
+        aArchive.begin() + static_cast<std::ptrdiff_t>(provenanceOffset),
+        aArchive.begin() + static_cast<std::ptrdiff_t>(provenanceOffset + kProvenanceSize));
+    aArchive[8] = 4;
+    aArchive[9] = 0;
+    const uint64_t payloadSize = aArchive.size() - kHeaderSize - sizeof(uint64_t);
+    WriteTestU64(aArchive, 10, payloadSize);
+    WriteTestU64(
+        aArchive,
+        kHeaderSize + static_cast<size_t>(payloadSize),
+        ComputeTestChecksum(aArchive.data() + kHeaderSize, static_cast<size_t>(payloadSize)));
+    return aArchive;
+}
+
+TEST_CASE(
+    "Runtime apply v5 persists exact checkpoint generation and capture epoch",
+    "[quest.party-state.runtime-apply.persistence][checkpoint-provenance]")
+{
+    constexpr uint64_t kRuntimeGeneration = 17;
+    constexpr uint64_t kCaptureEpochId = 29;
+    const auto request = BuildRecoveryRequest(10003, GameId(11, 0x3000), 82);
+
+    PartyQuestRuntimeApplyCoordinator coordinator;
+    REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Started);
+    REQUIRE(coordinator.MarkCheckpointCreated(
+        request.TransactionId,
+        kRuntimeGeneration,
+        kCaptureEpochId));
+
+    const auto original = coordinator.ExportRecoveryState(kCampaignId, kPlayerProfileId);
+    REQUIRE(original.Active.has_value());
+    REQUIRE(original.Active->CheckpointRuntimeGeneration == kRuntimeGeneration);
+    REQUIRE(original.Active->CheckpointCaptureEpochId == kCaptureEpochId);
+
+    const auto encoded = PartyQuestRuntimeApplyPersistence::Encode(original);
+    REQUIRE_FALSE(encoded.empty());
+    const auto decoded = PartyQuestRuntimeApplyPersistence::Decode(encoded);
+    REQUIRE(decoded.Status == PartyQuestRuntimeApplyPersistenceStatus::Success);
+    REQUIRE(decoded.State == original);
+
+    auto mismatched = original;
+    mismatched.Active->CheckpointCaptureEpochId = 0;
+    REQUIRE(PartyQuestRuntimeApplyPersistence::Encode(mismatched).empty());
+}
+
+TEST_CASE(
+    "Runtime apply v5 decoder preserves backward readability of v4 without fabricating provenance",
+    "[quest.party-state.runtime-apply.persistence][checkpoint-provenance][legacy]")
+{
+    const auto request = BuildRecoveryRequest(10004, GameId(11, 0x4000), 83);
+    PartyQuestRuntimeApplyCoordinator coordinator;
+    REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Started);
+    REQUIRE(coordinator.MarkCheckpointCreated(request.TransactionId));
+    const auto original = coordinator.ExportRecoveryState(kCampaignId, kPlayerProfileId);
+
+    const auto v5 = PartyQuestRuntimeApplyPersistence::Encode(original);
+    REQUIRE_FALSE(v5.empty());
+    const auto decoded = PartyQuestRuntimeApplyPersistence::Decode(
+        DowngradeSingleActiveV5ArchiveToV4(v5));
+    REQUIRE(decoded.Status == PartyQuestRuntimeApplyPersistenceStatus::Success);
+    REQUIRE(decoded.State == original);
+    REQUIRE(decoded.State->Active.has_value());
+    REQUIRE(decoded.State->Active->CheckpointRuntimeGeneration == 0);
+    REQUIRE(decoded.State->Active->CheckpointCaptureEpochId == 0);
+}
+
 TEST_CASE("Runtime apply persistence rejects invalid campaign corruption truncation and hostile lengths", "[quest.party-state.runtime-apply.persistence]")
 {
     PartyQuestRuntimeApplyCoordinator coordinator;

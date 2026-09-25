@@ -146,8 +146,19 @@ PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkWorl
 PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkCheckpointCreatedInternal(
     uint64_t aTransactionId)
 {
+    return MarkCheckpointCreatedInternal(aTransactionId, 0, 0);
+}
+
+PartyQuestRuntimeDurableTransitionStatus PartyQuestRuntimeApplySession::MarkCheckpointCreatedInternal(
+    uint64_t aTransactionId,
+    uint64_t aRuntimeGeneration,
+    uint64_t aCaptureEpochId)
+{
     PartyQuestRuntimeApplyCoordinator candidate = m_coordinator;
-    if (!candidate.MarkCheckpointCreated(aTransactionId))
+    if (!candidate.MarkCheckpointCreated(
+            aTransactionId,
+            aRuntimeGeneration,
+            aCaptureEpochId))
         return PartyQuestRuntimeDurableTransitionStatus::InvalidState;
 
     if (!Persist(candidate))

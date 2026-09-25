@@ -322,6 +322,25 @@ TEST_CASE("Deferred world repair does not lock saving until its targets are read
     REQUIRE(coordinator.MarkCheckpointCreated(request.TransactionId));
 }
 
+TEST_CASE(
+    "Checkpoint provenance transition accepts only an all-or-none generation epoch pair",
+    "[quest.party-state.runtime-apply][checkpoint-provenance]")
+{
+    const auto request = BuildRuntimeRequest(4002, GameId(9, 0x4001));
+    PartyQuestRuntimeApplyCoordinator coordinator;
+    REQUIRE(coordinator.Begin(request) == PartyQuestRuntimeApplyBeginStatus::Started);
+
+    REQUIRE_FALSE(coordinator.MarkCheckpointCreated(request.TransactionId, 7, 0));
+    REQUIRE_FALSE(coordinator.MarkCheckpointCreated(request.TransactionId, 0, 11));
+    REQUIRE(coordinator.GetActive() != nullptr);
+    REQUIRE_FALSE(coordinator.GetActive()->CheckpointCreated);
+
+    REQUIRE(coordinator.MarkCheckpointCreated(request.TransactionId, 7, 11));
+    REQUIRE(coordinator.GetActive()->CheckpointCreated);
+    REQUIRE(coordinator.GetActive()->CheckpointRuntimeGeneration == 7);
+    REQUIRE(coordinator.GetActive()->CheckpointCaptureEpochId == 11);
+}
+
 TEST_CASE("Verification refuses divergence until two canonical samples stabilize", "[quest.party-state.runtime-apply]")
 {
     const auto request = BuildRuntimeRequest(5001, GameId(9, 0x5000));

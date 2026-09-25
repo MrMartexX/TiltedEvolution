@@ -172,6 +172,10 @@ private:
     /** Only the full checkpoint coordinator may publish this durable bit. */
     [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreatedInternal(
         uint64_t aTransactionId);
+    [[nodiscard]] PartyQuestRuntimeDurableTransitionStatus MarkCheckpointCreatedInternal(
+        uint64_t aTransactionId,
+        uint64_t aRuntimeGeneration,
+        uint64_t aCaptureEpochId);
 
     /**
      * Persists RuntimeMutationMayHaveOccurred before returning Applied. Only the

@@ -109,6 +109,8 @@ struct PartyQuestRuntimeApplyEntry
     PartyQuestRuntimeApplyState State{PartyQuestRuntimeApplyState::AwaitingCheckpoint};
     bool SaveGuardActive{};
     bool CheckpointCreated{};
+    uint64_t CheckpointRuntimeGeneration{};
+    uint64_t CheckpointCaptureEpochId{};
     bool RuntimeMutationMayHaveOccurred{};
     uint64_t LastObservedDigest{};
     uint32_t StableCanonicalSamples{};
@@ -166,6 +168,10 @@ public:
 
     /** Records that a pre-repair checkpoint exists while saving is guarded. */
     bool MarkCheckpointCreated(uint64_t aTransactionId) noexcept;
+    bool MarkCheckpointCreated(
+        uint64_t aTransactionId,
+        uint64_t aRuntimeGeneration,
+        uint64_t aCaptureEpochId) noexcept;
 
     /** Records dispatch of the future runtime mutation; does not execute it. */
     bool MarkApplyDispatched(uint64_t aTransactionId) noexcept;

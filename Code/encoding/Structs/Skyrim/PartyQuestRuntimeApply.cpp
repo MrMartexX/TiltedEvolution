@@ -237,15 +237,26 @@ bool PartyQuestRuntimeApplyCoordinator::MarkWorldReady(
 
 bool PartyQuestRuntimeApplyCoordinator::MarkCheckpointCreated(uint64_t aTransactionId) noexcept
 {
+    return MarkCheckpointCreated(aTransactionId, 0, 0);
+}
+
+bool PartyQuestRuntimeApplyCoordinator::MarkCheckpointCreated(
+    uint64_t aTransactionId,
+    uint64_t aRuntimeGeneration,
+    uint64_t aCaptureEpochId) noexcept
+{
     if (!m_active ||
         m_active->TransactionId != aTransactionId ||
         m_active->State != PartyQuestRuntimeApplyState::AwaitingCheckpoint ||
-        !m_active->SaveGuardActive)
+        !m_active->SaveGuardActive ||
+        ((aRuntimeGeneration == 0) != (aCaptureEpochId == 0)))
     {
         return false;
     }
 
     m_active->CheckpointCreated = true;
+    m_active->CheckpointRuntimeGeneration = aRuntimeGeneration;
+    m_active->CheckpointCaptureEpochId = aCaptureEpochId;
     m_active->State = PartyQuestRuntimeApplyState::ReadyToApply;
     return true;
 }

@@ -11,7 +11,8 @@
 namespace
 {
 constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'R', 'A', 'P', 'P', 'L'};
-constexpr uint16_t kFormatVersion = 4;
+constexpr uint16_t kFormatVersion = 5;
+constexpr uint16_t kLegacyFormatVersion = 4;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
 constexpr uint64_t kMaxCommittedEntries =
@@ -307,6 +308,8 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
                 active.ExpectedVerification,
                 active.Actions) ||
             active.ExpectedVerification.QuestSnapshotDigest != active.CanonicalDigest ||
+            ((active.CheckpointRuntimeGeneration == 0) !=
+             (active.CheckpointCaptureEpochId == 0)) ||
             !transactionIds.emplace(active.TransactionId).second)
         {
             return {};
@@ -324,6 +327,8 @@ std::vector<uint8_t> PartyQuestRuntimeApplyPersistence::Encode(
         WriteInteger<uint8_t>(payload, static_cast<uint8_t>(active.State));
         WriteBool(payload, active.SaveGuardActive);
         WriteBool(payload, active.CheckpointCreated);
+        WriteInteger(payload, active.CheckpointRuntimeGeneration);
+        WriteInteger(payload, active.CheckpointCaptureEpochId);
         WriteBool(payload, active.RuntimeMutationMayHaveOccurred);
         WriteInteger(payload, active.LastObservedDigest);
         WriteInteger(payload, active.StableCanonicalSamples);
@@ -372,7 +377,7 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
         result.Status = PartyQuestRuntimeApplyPersistenceStatus::Truncated;
         return result;
     }
-    if (version != kFormatVersion)
+    if (version != kFormatVersion && version != kLegacyFormatVersion)
     {
         result.Status = PartyQuestRuntimeApplyPersistenceStatus::UnsupportedVersion;
         return result;
@@ -509,7 +514,27 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
         if (!ReadInteger(acBytes, offset, payloadEnd, stateValue) ||
             stateValue > static_cast<uint8_t>(PartyQuestRuntimeApplyState::ReadyToCommit) ||
             !ReadBool(acBytes, offset, payloadEnd, active.SaveGuardActive) ||
-            !ReadBool(acBytes, offset, payloadEnd, active.CheckpointCreated) ||
+            !ReadBool(acBytes, offset, payloadEnd, active.CheckpointCreated))
+        {
+            result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
+            return result;
+        }
+        if (version == kFormatVersion &&
+            (!ReadInteger(
+                 acBytes,
+                 offset,
+                 payloadEnd,
+                 active.CheckpointRuntimeGeneration) ||
+             !ReadInteger(
+                 acBytes,
+                 offset,
+                 payloadEnd,
+                 active.CheckpointCaptureEpochId)))
+        {
+            result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
+            return result;
+        }
+        if (
             !ReadBool(acBytes, offset, payloadEnd, active.RuntimeMutationMayHaveOccurred) ||
             !ReadInteger(acBytes, offset, payloadEnd, active.LastObservedDigest) ||
             !ReadInteger(acBytes, offset, payloadEnd, active.StableCanonicalSamples))
@@ -518,6 +543,12 @@ PartyQuestRuntimeApplyPersistenceResult PartyQuestRuntimeApplyPersistence::Decod
             return result;
         }
         active.State = static_cast<PartyQuestRuntimeApplyState>(stateValue);
+        if ((active.CheckpointRuntimeGeneration == 0) !=
+            (active.CheckpointCaptureEpochId == 0))
+        {
+            result.Status = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
+            return result;
+        }
         state.Active = active;
     }
 
