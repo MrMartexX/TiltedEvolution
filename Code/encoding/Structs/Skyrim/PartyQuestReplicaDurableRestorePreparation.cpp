@@ -1,6 +1,5 @@
 #include <Structs/Skyrim/PartyQuestReplicaDurableRestorePreparation.h>
 
-#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 #include <Structs/Skyrim/PartyQuestStableStorage.h>
 
 #include <filesystem>
@@ -214,26 +213,11 @@ PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(
             PartyQuestReplicaDurableRestorePreparationStatus::WorkspaceLeaseFailure);
     }
 
-    const auto promotion =
-        PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpointAuthorized(
-            acPaths,
-            acPlan.CampaignId,
-            acPlan.PlayerProfileId,
-            acPlan.CheckpointKind,
-            acPlan.CampaignWorldRevision,
-            acWorkspaceCapability);
-    if (!promotion.IsPromoted())
-    {
-        return Failure(
-            promotion.Status == PartyQuestReplicaDurableSnapshotStatus::UnsupportedPlatform
-                ? PartyQuestReplicaDurableRestorePreparationStatus::UnsupportedPlatform
-                : PartyQuestReplicaDurableRestorePreparationStatus::CheckpointDurabilityUnavailable);
-    }
-
-    // Rebuild the exact restore plan from the now-durable manifest. This makes
-    // the supplied source/digest/path set prove it belongs to the same promoted
-    // authority marker rather than to another legacy checkpoint with coincident
-    // campaign/kind/revision fields.
+    // Restore preparation is a post-mutation recovery operation. It must never
+    // manufacture missing pre-mutation durability after the protected runtime
+    // state may already have changed. The checkpoint producer is responsible
+    // for promotion before mutation is armed; recovery only accepts that
+    // already-published authority marker.
     const auto manifestPath = PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
         acPaths,
         acPlan.CheckpointKind,
@@ -241,6 +225,12 @@ PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(
     const auto manifest = PartyQuestReplicaManifestStore::Load(manifestPath);
     if (manifest.Status != PartyQuestReplicaManifestPersistenceStatus::Success ||
         !manifest.Manifest)
+    {
+        return Failure(
+            PartyQuestReplicaDurableRestorePreparationStatus::CheckpointDurabilityUnavailable);
+    }
+    if (manifest.Manifest->Durability !=
+        PartyQuestReplicaManifestDurability::PowerLossDurable)
     {
         return Failure(
             PartyQuestReplicaDurableRestorePreparationStatus::CheckpointDurabilityUnavailable);

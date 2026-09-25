@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
+#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGuardedSession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeRestoreAttempt.h>
 
@@ -128,6 +129,9 @@ PartyQuestReplicaRestorePlan PublishStrongLiveCheckpoint(
                 PartyQuestCheckpointKind::PreRepair,
                 aWorldRevision,
                 checkpointPlan).IsReady());
+    REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                acPaths, kStrongLiveCampaign, kStrongLivePlayer,
+                PartyQuestCheckpointKind::PreRepair, aWorldRevision).IsPromoted());
 
     const auto manifestPath =
         PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(

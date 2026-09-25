@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestPersistenceDurability.h>
 #include <Structs/Skyrim/PartyQuestReplicaDurableRestoreExecutor.h>
 #include <Structs/Skyrim/PartyQuestReplicaDurableRestorePreparation.h>
+#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 #include <Structs/Skyrim/PartyQuestStableStorage.h>
 
@@ -122,6 +123,9 @@ PartyQuestReplicaRestorePlan BuildPlan(
                 PartyQuestCheckpointKind::PreRepair,
                 kRevision,
                 checkpointPlan).IsReady());
+    REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                aPaths, kCampaign, kPlayer,
+                PartyQuestCheckpointKind::PreRepair, kRevision).IsPromoted());
 
     WriteText(aPaths.SavesDirectory / "Hero.ess", "LIVE_DIVERGED_ESS");
     WriteText(aPaths.SavesDirectory / "Hero.skse", "LIVE_DIVERGED_SKSE");
@@ -597,9 +601,51 @@ TEST_CASE(
         kPlayer,
         fixture.Prepared.JournalPath);
     REQUIRE(result.Status ==
+        PartyQuestReplicaDurableRestoreStatus::CheckpointPlanMismatch);
+    REQUIRE(result.Phase == PartyQuestReplicaRestoreJournalPhase::BackupsReady);
+    REQUIRE_FALSE(result.RequiresRecovery);
+    REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
+    REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
+
+    RequireGlobalMutationGateClosed();
+}
+
+TEST_CASE(
+    "durable continuation never re-promotes a downgraded checkpoint during recovery",
+    "[quest.party-state.replica-restore][durability][fail-closed]")
+{
+    Sandbox sandbox;
+    auto fixture = PrepareFixture(sandbox, 0x6101000A);
+    const auto manifestPath =
+        PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
+            fixture.Paths,
+            PartyQuestCheckpointKind::PreRepair,
+            kRevision);
+    auto loaded = PartyQuestReplicaManifestStore::Load(manifestPath);
+    REQUIRE(loaded.Status == PartyQuestReplicaManifestPersistenceStatus::Success);
+    REQUIRE(loaded.Manifest.has_value());
+    loaded.Manifest->Durability =
+        PartyQuestReplicaManifestDurability::ProcessCrashResilient;
+    REQUIRE(PartyQuestReplicaManifestStore::SaveAtomically(
+                manifestPath,
+                *loaded.Manifest) ==
+        PartyQuestReplicaManifestPersistenceStatus::Success);
+
+    const auto result = PartyQuestReplicaDurableRestoreExecutor::Continue(
+        fixture.Paths,
+        kCampaign,
+        kPlayer,
+        fixture.Prepared.JournalPath);
+    REQUIRE(result.Status ==
         PartyQuestReplicaDurableRestoreStatus::CheckpointDurabilityUnavailable);
     REQUIRE(result.Phase == PartyQuestReplicaRestoreJournalPhase::BackupsReady);
     REQUIRE_FALSE(result.RequiresRecovery);
+
+    loaded = PartyQuestReplicaManifestStore::Load(manifestPath);
+    REQUIRE(loaded.Status == PartyQuestReplicaManifestPersistenceStatus::Success);
+    REQUIRE(loaded.Manifest.has_value());
+    REQUIRE(loaded.Manifest->Durability ==
+        PartyQuestReplicaManifestDurability::ProcessCrashResilient);
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
     REQUIRE(ReadText(fixture.Paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
 

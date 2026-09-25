@@ -1,6 +1,7 @@
 #include <Structs/Skyrim/PartyQuestPersistenceDurability.h>
 #include <Structs/Skyrim/PartyQuestReplicaDurableRestoreExecutor.h>
 #include <Structs/Skyrim/PartyQuestReplicaDurableRestorePreparation.h>
+#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 
 #include <catch2/catch.hpp>
@@ -157,6 +158,9 @@ PartyQuestReplicaRestorePlan BuildRestorePlan(
                 PartyQuestCheckpointKind::PreRepair,
                 kRevision,
                 checkpointPlan).IsReady());
+    REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                aPaths, kCampaign, kPlayer,
+                PartyQuestCheckpointKind::PreRepair, kRevision).IsPromoted());
 
     WriteText(aPaths.SavesDirectory / "Hero.ess", acOriginalEss);
     WriteText(aPaths.SavesDirectory / "Hero.skse", acOriginalSkse);

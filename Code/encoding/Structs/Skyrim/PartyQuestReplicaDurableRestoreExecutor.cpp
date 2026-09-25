@@ -1,6 +1,5 @@
 #include <Structs/Skyrim/PartyQuestReplicaDurableRestoreExecutor.h>
 
-#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 #include <Structs/Skyrim/PartyQuestReplicaWorkspaceLease.h>
 #include <Structs/Skyrim/PartyQuestStableStorage.h>
 
@@ -479,19 +478,10 @@ bool StateMatchesPromotedPlan(
     return true;
 }
 
-PartyQuestReplicaDurableRestoreStatus RebindPromotedCheckpoint(
+PartyQuestReplicaDurableRestoreStatus RebindDurableCheckpoint(
     const PartyQuestCoopSavePaths& acPaths,
     const PartyQuestReplicaRestoreJournalState& acState) noexcept
 {
-    const auto promotion = PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
-        acPaths,
-        acState.CampaignId,
-        acState.PlayerProfileId,
-        acState.CheckpointKind,
-        acState.CampaignWorldRevision);
-    if (!promotion.IsPromoted())
-        return PartyQuestReplicaDurableRestoreStatus::CheckpointDurabilityUnavailable;
-
     const auto manifestPath = PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
         acPaths,
         acState.CheckpointKind,
@@ -499,6 +489,11 @@ PartyQuestReplicaDurableRestoreStatus RebindPromotedCheckpoint(
     const auto loaded = PartyQuestReplicaManifestStore::Load(manifestPath);
     if (loaded.Status != PartyQuestReplicaManifestPersistenceStatus::Success ||
         !loaded.Manifest)
+    {
+        return PartyQuestReplicaDurableRestoreStatus::CheckpointDurabilityUnavailable;
+    }
+    if (loaded.Manifest->Durability !=
+        PartyQuestReplicaManifestDurability::PowerLossDurable)
     {
         return PartyQuestReplicaDurableRestoreStatus::CheckpointDurabilityUnavailable;
     }
@@ -1049,7 +1044,7 @@ PartyQuestReplicaDurableRestoreReport PartyQuestReplicaDurableRestoreExecutor::C
                 &state);
         }
 
-        const auto checkpointStatus = RebindPromotedCheckpoint(acPaths, state);
+        const auto checkpointStatus = RebindDurableCheckpoint(acPaths, state);
         if (checkpointStatus != PartyQuestReplicaDurableRestoreStatus::Success)
             return MakeReport(checkpointStatus, acJournalPath, &state);
         if (!VerifyRollbackEvidenceDurably(state))

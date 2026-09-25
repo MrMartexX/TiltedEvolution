@@ -1,5 +1,6 @@
 #include <Structs/Skyrim/PartyQuestPersistenceDurability.h>
 #include <Structs/Skyrim/PartyQuestReplicaDurableRestorePreparation.h>
+#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 
 #include <catch2/catch.hpp>
@@ -83,7 +84,8 @@ std::string ReadText(const std::filesystem::path& acPath)
 
 PartyQuestReplicaRestorePlan BuildPlan(
     const Sandbox& acSandbox,
-    PartyQuestCoopSavePaths& aPaths)
+    PartyQuestCoopSavePaths& aPaths,
+    bool aPromoteBeforeMutation = true)
 {
     const auto paths = PartyQuestCoopSaveLayout::Build(
         acSandbox.Root / "CoopCampaigns",
@@ -136,6 +138,12 @@ PartyQuestReplicaRestorePlan BuildPlan(
                 PartyQuestCheckpointKind::PreRepair,
                 kRevision,
                 checkpointPlan).IsReady());
+    if (aPromoteBeforeMutation)
+    {
+        REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                    aPaths, kCampaign, kPlayer,
+                    PartyQuestCheckpointKind::PreRepair, kRevision).IsPromoted());
+    }
 
     WriteText(aPaths.SavesDirectory / "Hero.ess", "LIVE_DIVERGED_ESS");
     WriteText(aPaths.SavesDirectory / "Hero.skse", "LIVE_DIVERGED_SKSE");
@@ -158,6 +166,36 @@ PartyQuestReplicaRestorePlan BuildPlan(
     return plan;
 }
 } // namespace
+
+TEST_CASE(
+    "durable restore rejects a checkpoint that was not promoted before mutation",
+    "[quest.party-state.replica-restore][durability][fail-closed]")
+{
+    Sandbox sandbox;
+    PartyQuestCoopSavePaths paths;
+    const auto plan = BuildPlan(sandbox, paths, false);
+
+    const auto prepared = PartyQuestReplicaDurableRestorePreparation::Prepare(
+        paths,
+        plan,
+        kRestoreId);
+    REQUIRE(prepared.Status ==
+        PartyQuestReplicaDurableRestorePreparationStatus::CheckpointDurabilityUnavailable);
+    REQUIRE_FALSE(prepared.State.has_value());
+
+    const auto manifestPath =
+        PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
+            paths,
+            PartyQuestCheckpointKind::PreRepair,
+            kRevision);
+    const auto loaded = PartyQuestReplicaManifestStore::Load(manifestPath);
+    REQUIRE(loaded.Status == PartyQuestReplicaManifestPersistenceStatus::Success);
+    REQUIRE(loaded.Manifest.has_value());
+    REQUIRE(loaded.Manifest->Durability ==
+        PartyQuestReplicaManifestDurability::ProcessCrashResilient);
+    REQUIRE(ReadText(paths.SavesDirectory / "Hero.ess") == "LIVE_DIVERGED_ESS");
+    REQUIRE(ReadText(paths.SavesDirectory / "Hero.skse") == "LIVE_DIVERGED_SKSE");
+}
 
 TEST_CASE(
     "durable restore preparation reaches and idempotently revalidates BackupsReady without live replacement",

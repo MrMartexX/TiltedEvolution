@@ -59,8 +59,8 @@ struct PartyQuestReplicaDurableRestorePreparationReport
  *
  * This is deliberately the non-destructive half of the future strong executor.
  * It acquires the exact workspace lease, requires the immutable revision
- * checkpoint to pass the data-before-manifest durability promotion, binds the
- * supplied restore plan back to that exact promoted manifest, durably publishes
+ * checkpoint to already carry the data-before-manifest durability proof created
+ * before mutation, binds the supplied restore plan back to that exact manifest, durably publishes
  * Prepared, creates/verifies bounded-memory durable rollback copies, then
  * durably publishes BackupsReady. Rollback copy publication uses the dedicated
  * stable-storage copy primitive rather than reading a Skyrim save into memory.
@@ -76,9 +76,9 @@ struct PartyQuestReplicaDurableRestorePreparationReport
  * authority. A later destructive phase must revalidate the same workspace and
  * all evidence before it may publish MutationStarted.
  *
- * Windows fails closed before creating restore metadata because durable
- * checkpoint directory promotion and durable rollback deletion are not yet
- * proved there.
+ * This recovery component never promotes a weak checkpoint: doing so after a
+ * runtime mutation may have occurred would manufacture pre-mutation authority
+ * retroactively.
  */
 class PartyQuestReplicaDurableRestorePreparation final
 {
