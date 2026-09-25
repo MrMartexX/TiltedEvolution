@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
 
@@ -20,6 +21,7 @@ enum class PartyQuestRuntimeCheckpointStatus : uint8_t
     InvalidCheckpointPlan,
     InvalidCoverageAuthorization,
     SnapshotFailed,
+    DurablePromotionFailed,
     RuntimeStatePersistenceFailed
 };
 
@@ -73,6 +75,8 @@ struct PartyQuestRuntimeCheckpointResult
         PartyQuestRuntimeCheckpointStatus::InvalidRuntimeState};
     PartyQuestReplicaSnapshotStatus SnapshotStatus{
         PartyQuestReplicaSnapshotStatus::InvalidPlan};
+    PartyQuestReplicaDurableSnapshotStatus DurableSnapshotStatus{
+        PartyQuestReplicaDurableSnapshotStatus::ManifestInvalid};
     PartyQuestRuntimeDurableTransitionStatus RuntimeTransition{
         PartyQuestRuntimeDurableTransitionStatus::InvalidState};
     uint64_t TransactionId{};

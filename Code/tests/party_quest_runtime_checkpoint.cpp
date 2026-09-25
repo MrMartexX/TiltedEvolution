@@ -239,6 +239,8 @@ TEST_CASE("Runtime checkpoint gate durably publishes exact PreRepair revision be
         request.TargetWorldRevision);
     REQUIRE(result.Status == PartyQuestRuntimeCheckpointStatus::Ready);
     REQUIRE(result.SnapshotStatus == PartyQuestReplicaSnapshotStatus::Ready);
+    REQUIRE(result.DurableSnapshotStatus ==
+        PartyQuestReplicaDurableSnapshotStatus::Promoted);
     REQUIRE(result.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(result.TransactionId == request.TransactionId);
     REQUIRE(result.TargetWorldRevision == request.TargetWorldRevision);
@@ -327,6 +329,8 @@ TEST_CASE("Checkpoint publication survives runtime-state persistence failure and
         request.TargetWorldRevision);
     REQUIRE(failed.Status == PartyQuestRuntimeCheckpointStatus::RuntimeStatePersistenceFailed);
     REQUIRE(failed.SnapshotStatus == PartyQuestReplicaSnapshotStatus::Ready);
+    REQUIRE(failed.DurableSnapshotStatus ==
+        PartyQuestReplicaDurableSnapshotStatus::Promoted);
     REQUIRE(session.GetCoordinator().GetActive()->State ==
         PartyQuestRuntimeApplyState::AwaitingCheckpoint);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->CheckpointCreated);
@@ -341,6 +345,8 @@ TEST_CASE("Checkpoint publication survives runtime-state persistence failure and
         request.TargetWorldRevision);
     REQUIRE(retried.Status == PartyQuestRuntimeCheckpointStatus::AlreadyReady);
     REQUIRE(retried.SnapshotStatus == PartyQuestReplicaSnapshotStatus::AlreadyReady);
+    REQUIRE(retried.DurableSnapshotStatus ==
+        PartyQuestReplicaDurableSnapshotStatus::Promoted);
     REQUIRE(retried.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::ReadyToApply);
     REQUIRE(session.GetCoordinator().GetActive()->CheckpointCreated);
@@ -400,6 +406,8 @@ TEST_CASE("Already-ready runtime checkpoint is reverified instead of trusting th
         request.TargetWorldRevision);
     REQUIRE(repeated.Status == PartyQuestRuntimeCheckpointStatus::AlreadyReady);
     REQUIRE(repeated.SnapshotStatus == PartyQuestReplicaSnapshotStatus::Ready);
+    REQUIRE(repeated.DurableSnapshotStatus ==
+        PartyQuestReplicaDurableSnapshotStatus::Promoted);
 
     const auto checkpointRoot = PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
         paths,

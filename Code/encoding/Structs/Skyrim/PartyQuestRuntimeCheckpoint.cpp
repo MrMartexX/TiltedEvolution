@@ -202,6 +202,34 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
             aSession.GetCampaignId(),
             aSession.GetPlayerProfileId());
 
+        PartyQuestReplicaWorkspacePublicationCapability ownerCapability;
+        if (!apPublicationCapability)
+        {
+            ownerCapability = PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
+                aSession,
+                acPaths);
+            if (ownerCapability.IsVerified())
+                apPublicationCapability = &ownerCapability;
+        }
+
+        const auto promoteDurably = [&]() noexcept
+        {
+            return apPublicationCapability
+                ? PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpointAuthorized(
+                      acPaths,
+                      aSession.GetCampaignId(),
+                      aSession.GetPlayerProfileId(),
+                      PartyQuestCheckpointKind::PreRepair,
+                      targetWorldRevision,
+                      *apPublicationCapability)
+                : PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                      acPaths,
+                      aSession.GetCampaignId(),
+                      aSession.GetPlayerProfileId(),
+                      PartyQuestCheckpointKind::PreRepair,
+                      targetWorldRevision);
+        };
+
         if (IsCheckpointReadyState(*pActive))
         {
             PartyQuestRuntimeCheckpointResult result = MakeResult(
@@ -213,7 +241,15 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
                 targetWorldRevision);
             result.SnapshotStatus = validation.Status;
             if (!validation.IsReady())
+            {
                 result.Status = PartyQuestRuntimeCheckpointStatus::SnapshotFailed;
+                return result;
+            }
+
+            const auto durable = promoteDurably();
+            result.DurableSnapshotStatus = durable.Status;
+            if (!durable.IsPromoted())
+                result.Status = PartyQuestRuntimeCheckpointStatus::DurablePromotionFailed;
             return result;
         }
 
@@ -231,16 +267,6 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
                 PartyQuestRuntimeCheckpointStatus::InvalidCheckpointPlan,
                 pActive,
                 manifestPath);
-        }
-
-        PartyQuestReplicaWorkspacePublicationCapability ownerCapability;
-        if (!apPublicationCapability)
-        {
-            ownerCapability = PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
-                aSession,
-                acPaths);
-            if (ownerCapability.IsVerified())
-                apPublicationCapability = &ownerCapability;
         }
 
         const auto snapshot = apPublicationCapability
@@ -267,6 +293,14 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
             result.Status = snapshot.Status == PartyQuestReplicaSnapshotStatus::InvalidPlan
                 ? PartyQuestRuntimeCheckpointStatus::InvalidCheckpointPlan
                 : PartyQuestRuntimeCheckpointStatus::SnapshotFailed;
+            return result;
+        }
+
+        const auto durable = promoteDurably();
+        result.DurableSnapshotStatus = durable.Status;
+        if (!durable.IsPromoted())
+        {
+            result.Status = PartyQuestRuntimeCheckpointStatus::DurablePromotionFailed;
             return result;
         }
 
