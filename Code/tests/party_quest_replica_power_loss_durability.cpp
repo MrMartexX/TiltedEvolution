@@ -339,6 +339,16 @@ TEST_CASE(
         PartyQuestReplicaManifestPersistenceStatus::Success);
     REQUIRE(promotion.VerificationStatus ==
         PartyQuestReplicaManifestVerificationStatus::Verified);
+    const auto promotedManifest = PartyQuestReplicaManifestStore::Load(
+        PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
+            paths,
+            PartyQuestCheckpointKind::PreRepair,
+            3001));
+    REQUIRE(promotedManifest.Status ==
+        PartyQuestReplicaManifestPersistenceStatus::Success);
+    REQUIRE(promotedManifest.Manifest.has_value());
+    REQUIRE(promotedManifest.Manifest->Durability ==
+        PartyQuestReplicaManifestDurability::PowerLossDurable);
 
     const auto repeated = PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
         paths,

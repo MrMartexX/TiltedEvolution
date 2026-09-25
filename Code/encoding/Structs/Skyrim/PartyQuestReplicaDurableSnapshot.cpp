@@ -106,7 +106,9 @@ PartyQuestReplicaDurableSnapshotResult PromoteProtected(
         }
         if (manifest.SnapshotType != PartyQuestReplicaSnapshotType::RevisionCheckpoint ||
             manifest.CheckpointKind != aKind ||
-            manifest.CampaignWorldRevision != aCampaignWorldRevision)
+            manifest.CampaignWorldRevision != aCampaignWorldRevision ||
+            manifest.Durability ==
+                PartyQuestReplicaManifestDurability::AmbiguousLegacyEncoding)
         {
             result.Status = PartyQuestReplicaDurableSnapshotStatus::ManifestInvalid;
             return result;
@@ -181,9 +183,12 @@ PartyQuestReplicaDurableSnapshotResult PromoteProtected(
         if (stable != PartyQuestStableStorageStatus::Success)
             return StableFailure(stable);
 
+        PartyQuestReplicaManifest durableManifest = manifest;
+        durableManifest.Durability =
+            PartyQuestReplicaManifestDurability::PowerLossDurable;
         result.ManifestStatus = PartyQuestReplicaManifestStore::SavePowerLossDurably(
             manifestPath,
-            manifest);
+            durableManifest);
         if (result.ManifestStatus != PartyQuestReplicaManifestPersistenceStatus::Success)
         {
             result.Status = result.ManifestStatus ==
@@ -196,7 +201,7 @@ PartyQuestReplicaDurableSnapshotResult PromoteProtected(
         const auto durable = PartyQuestReplicaManifestStore::Load(manifestPath);
         result.ManifestStatus = durable.Status;
         if (durable.Status != PartyQuestReplicaManifestPersistenceStatus::Success ||
-            !durable.Manifest || *durable.Manifest != manifest)
+            !durable.Manifest || *durable.Manifest != durableManifest)
         {
             result.Status = PartyQuestReplicaDurableSnapshotStatus::ManifestPersistenceFailed;
             return result;
@@ -206,7 +211,7 @@ PartyQuestReplicaDurableSnapshotResult PromoteProtected(
             acPaths,
             acCampaignId,
             acPlayerProfileId,
-            manifest);
+            durableManifest);
         if (result.VerificationStatus != PartyQuestReplicaManifestVerificationStatus::Verified)
         {
             result.Status = PartyQuestReplicaDurableSnapshotStatus::FileVerificationFailed;

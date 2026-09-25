@@ -16,6 +16,33 @@ const PartyQuestCampaignId kManifestCampaign{0x1011121314151617ull, 0x18191A1B1C
 const PartyQuestCampaignId kManifestOtherCampaign{0x9999, 0x8888};
 const PartyQuestPlayerProfileId kManifestPlayer{0x2122232425262728ull, 0x292A2B2C2D2E2F30ull};
 const PartyQuestPlayerProfileId kManifestOtherPlayer{0x7777, 0x6666};
+constexpr size_t kManifestVersionOffset = 8;
+constexpr size_t kManifestPayloadSizeOffset = 10;
+constexpr size_t kManifestPayloadOffset = 18;
+constexpr size_t kManifestDurabilityPayloadOffset = 42;
+
+void WriteLittleEndian(
+    std::vector<uint8_t>& aBytes,
+    size_t aOffset,
+    uint64_t aValue,
+    size_t aWidth)
+{
+    REQUIRE(aOffset <= aBytes.size());
+    REQUIRE(aWidth <= aBytes.size() - aOffset);
+    for (size_t i = 0; i < aWidth; ++i)
+        aBytes[aOffset + i] = static_cast<uint8_t>((aValue >> (i * 8)) & 0xFF);
+}
+
+uint64_t ManifestChecksum(const uint8_t* apData, size_t aSize)
+{
+    uint64_t checksum = 14695981039346656037ull;
+    for (size_t i = 0; i < aSize; ++i)
+    {
+        checksum ^= apData[i];
+        checksum *= 1099511628211ull;
+    }
+    return checksum;
+}
 
 struct ManifestSandbox
 {
@@ -151,6 +178,8 @@ TEST_CASE("Replica completion manifest is deterministic durable and verifies imp
 
     REQUIRE(manifest.SnapshotType == PartyQuestReplicaSnapshotType::ImportedReplica);
     REQUIRE(manifest.CampaignWorldRevision == 401);
+    REQUIRE(manifest.Durability ==
+        PartyQuestReplicaManifestDurability::ProcessCrashResilient);
     REQUIRE(manifest.Files.size() == 3);
     REQUIRE(manifest.Files[0].RelativePath.is_relative());
 
@@ -178,6 +207,35 @@ TEST_CASE("Replica completion manifest is deterministic durable and verifies imp
                 kManifestPlayer,
                 manifest) ==
         PartyQuestReplicaManifestVerificationStatus::Verified);
+}
+
+TEST_CASE("Legacy replica manifest durability is explicit and cannot be republished as strong evidence", "[quest.party-state.replica-manifest]")
+{
+    ManifestSandbox sandbox;
+    PartyQuestCoopSavePaths paths;
+    PartyQuestReplicaCopyPlan plan;
+    const auto manifest = BuildReadyImportManifest(sandbox, paths, plan, 405);
+    auto legacy = PartyQuestReplicaManifestStore::Encode(manifest);
+    REQUIRE(legacy.size() > kManifestPayloadOffset + kManifestDurabilityPayloadOffset);
+
+    const size_t durabilityOffset =
+        kManifestPayloadOffset + kManifestDurabilityPayloadOffset;
+    legacy.erase(legacy.begin() + static_cast<std::ptrdiff_t>(durabilityOffset));
+    const uint64_t payloadSize = legacy.size() - kManifestPayloadOffset - sizeof(uint64_t);
+    WriteLittleEndian(legacy, kManifestVersionOffset, 1, sizeof(uint16_t));
+    WriteLittleEndian(legacy, kManifestPayloadSizeOffset, payloadSize, sizeof(uint64_t));
+    WriteLittleEndian(
+        legacy,
+        kManifestPayloadOffset + static_cast<size_t>(payloadSize),
+        ManifestChecksum(legacy.data() + kManifestPayloadOffset, static_cast<size_t>(payloadSize)),
+        sizeof(uint64_t));
+
+    const auto decoded = PartyQuestReplicaManifestStore::Decode(legacy);
+    REQUIRE(decoded.Status == PartyQuestReplicaManifestPersistenceStatus::Success);
+    REQUIRE(decoded.Manifest.has_value());
+    REQUIRE(decoded.Manifest->Durability ==
+        PartyQuestReplicaManifestDurability::AmbiguousLegacyEncoding);
+    REQUIRE(PartyQuestReplicaManifestStore::Encode(*decoded.Manifest).empty());
 }
 
 TEST_CASE("Replica manifest verification binds campaign player and final file bytes", "[quest.party-state.replica-manifest]")

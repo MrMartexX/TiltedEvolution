@@ -42,6 +42,29 @@ enum class RevisionCheckpointAdmission : uint8_t
     InvalidNamespace
 };
 
+bool MatchesManifestContentIgnoringEstablishedDurability(
+    const PartyQuestReplicaManifest& acExisting,
+    const PartyQuestReplicaManifest& acExpected)
+{
+    if (acExpected.Durability ==
+            PartyQuestReplicaManifestDurability::AmbiguousLegacyEncoding ||
+        (acExisting.Durability ==
+             PartyQuestReplicaManifestDurability::AmbiguousLegacyEncoding &&
+         acExpected.SnapshotType ==
+             PartyQuestReplicaSnapshotType::RevisionCheckpoint))
+    {
+        return false;
+    }
+
+    PartyQuestReplicaManifest existing = acExisting;
+    PartyQuestReplicaManifest expected = acExpected;
+    existing.Durability =
+        PartyQuestReplicaManifestDurability::ProcessCrashResilient;
+    expected.Durability =
+        PartyQuestReplicaManifestDurability::ProcessCrashResilient;
+    return existing == expected;
+}
+
 std::optional<std::filesystem::path> AbsoluteNormalized(
     const std::filesystem::path& acPath) noexcept
 {
@@ -856,7 +879,9 @@ PartyQuestReplicaSnapshotResult PartyQuestReplicaSnapshotManager::Ensure(
                 return result;
             }
 
-            result.Status = *existing.Manifest == *expectedManifest
+            result.Status = MatchesManifestContentIgnoringEstablishedDurability(
+                                *existing.Manifest,
+                                *expectedManifest)
                 ? PartyQuestReplicaSnapshotStatus::AlreadyReady
                 : PartyQuestReplicaSnapshotStatus::ExistingSnapshotConflict;
             return result;

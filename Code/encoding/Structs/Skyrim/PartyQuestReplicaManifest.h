@@ -15,6 +15,13 @@ enum class PartyQuestReplicaSnapshotType : uint8_t
     RevisionCheckpoint
 };
 
+enum class PartyQuestReplicaManifestDurability : uint8_t
+{
+    AmbiguousLegacyEncoding,
+    ProcessCrashResilient,
+    PowerLossDurable
+};
+
 struct PartyQuestReplicaPublishedFile
 {
     PartyQuestReplicaFileKind Kind{PartyQuestReplicaFileKind::ExternalSidecar};
@@ -32,6 +39,8 @@ struct PartyQuestReplicaManifest
     PartyQuestReplicaSnapshotType SnapshotType{PartyQuestReplicaSnapshotType::ImportedReplica};
     PartyQuestCheckpointKind CheckpointKind{PartyQuestCheckpointKind::PreJoin};
     uint64_t CampaignWorldRevision{};
+    PartyQuestReplicaManifestDurability Durability{
+        PartyQuestReplicaManifestDurability::ProcessCrashResilient};
     std::vector<PartyQuestReplicaPublishedFile> Files;
 
     bool operator==(const PartyQuestReplicaManifest&) const = default;

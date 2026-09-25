@@ -12,7 +12,8 @@
 namespace
 {
 constexpr std::array<uint8_t, 8> kMagic{'T', 'P', 'Q', 'R', 'P', 'L', 'C', 'M'};
-constexpr uint16_t kFormatVersion = 1;
+constexpr uint16_t kFormatVersion = 2;
+constexpr uint16_t kLegacyFormatVersion = 1;
 constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
 constexpr uint32_t kMaxFiles =
@@ -177,6 +178,11 @@ bool ValidateManifestData(const PartyQuestReplicaManifest& acManifest)
     {
         return false;
     }
+    if (static_cast<uint8_t>(acManifest.Durability) >
+        static_cast<uint8_t>(PartyQuestReplicaManifestDurability::PowerLossDurable))
+    {
+        return false;
+    }
     if (IsRevisionCheckpointType(acManifest.SnapshotType) && acManifest.CampaignWorldRevision == 0)
         return false;
 
@@ -279,6 +285,8 @@ std::optional<PartyQuestReplicaManifest> BuildManifest(
     manifest.SnapshotType = aSnapshotType;
     manifest.CheckpointKind = aCheckpointKind;
     manifest.CampaignWorldRevision = aCampaignWorldRevision;
+    manifest.Durability =
+        PartyQuestReplicaManifestDurability::ProcessCrashResilient;
     manifest.Files.reserve(acPlan.Operations.size());
 
     std::set<std::filesystem::path> relativePaths;
@@ -461,7 +469,9 @@ std::filesystem::path PartyQuestReplicaManifestStore::GetRevisionCheckpointManif
 std::vector<uint8_t> PartyQuestReplicaManifestStore::Encode(
     const PartyQuestReplicaManifest& acManifest)
 {
-    if (!ValidateManifestData(acManifest))
+    if (!ValidateManifestData(acManifest) ||
+        acManifest.Durability ==
+            PartyQuestReplicaManifestDurability::AmbiguousLegacyEncoding)
         return {};
 
     std::vector<PartyQuestReplicaPublishedFile> files = acManifest.Files;
@@ -478,6 +488,7 @@ std::vector<uint8_t> PartyQuestReplicaManifestStore::Encode(
     WriteInteger<uint8_t>(payload, static_cast<uint8_t>(acManifest.SnapshotType));
     WriteInteger<uint8_t>(payload, static_cast<uint8_t>(acManifest.CheckpointKind));
     WriteInteger(payload, acManifest.CampaignWorldRevision);
+    WriteInteger<uint8_t>(payload, static_cast<uint8_t>(acManifest.Durability));
     WriteInteger<uint32_t>(payload, static_cast<uint32_t>(files.size()));
 
     for (const PartyQuestReplicaPublishedFile& file : files)
@@ -536,7 +547,7 @@ PartyQuestReplicaManifestPersistenceResult PartyQuestReplicaManifestStore::Decod
         result.Status = PartyQuestReplicaManifestPersistenceStatus::Truncated;
         return result;
     }
-    if (version != kFormatVersion)
+    if (version != kFormatVersion && version != kLegacyFormatVersion)
     {
         result.Status = PartyQuestReplicaManifestPersistenceStatus::UnsupportedVersion;
         return result;
@@ -579,6 +590,7 @@ PartyQuestReplicaManifestPersistenceResult PartyQuestReplicaManifestStore::Decod
     PartyQuestReplicaManifest manifest;
     uint8_t snapshotType{};
     uint8_t checkpointKind{};
+    uint8_t durability{};
     uint32_t fileCount{};
     if (!ReadInteger(acBytes, offset, payloadEnd, manifest.CampaignId.High) ||
         !ReadInteger(acBytes, offset, payloadEnd, manifest.CampaignId.Low) ||
@@ -586,8 +598,27 @@ PartyQuestReplicaManifestPersistenceResult PartyQuestReplicaManifestStore::Decod
         !ReadInteger(acBytes, offset, payloadEnd, manifest.PlayerProfileId.Low) ||
         !ReadInteger(acBytes, offset, payloadEnd, snapshotType) ||
         !ReadInteger(acBytes, offset, payloadEnd, checkpointKind) ||
-        !ReadInteger(acBytes, offset, payloadEnd, manifest.CampaignWorldRevision) ||
-        !ReadInteger(acBytes, offset, payloadEnd, fileCount))
+        !ReadInteger(acBytes, offset, payloadEnd, manifest.CampaignWorldRevision))
+    {
+        result.Status = PartyQuestReplicaManifestPersistenceStatus::Truncated;
+        return result;
+    }
+
+    if (version == kFormatVersion)
+    {
+        if (!ReadInteger(acBytes, offset, payloadEnd, durability))
+        {
+            result.Status = PartyQuestReplicaManifestPersistenceStatus::Truncated;
+            return result;
+        }
+    }
+    else
+    {
+        durability = static_cast<uint8_t>(
+            PartyQuestReplicaManifestDurability::AmbiguousLegacyEncoding);
+    }
+
+    if (!ReadInteger(acBytes, offset, payloadEnd, fileCount))
     {
         result.Status = PartyQuestReplicaManifestPersistenceStatus::Truncated;
         return result;
@@ -595,6 +626,7 @@ PartyQuestReplicaManifestPersistenceResult PartyQuestReplicaManifestStore::Decod
 
     if (snapshotType > static_cast<uint8_t>(PartyQuestReplicaSnapshotType::RevisionCheckpoint) ||
         checkpointKind > static_cast<uint8_t>(PartyQuestCheckpointKind::LastKnownGood) ||
+        durability > static_cast<uint8_t>(PartyQuestReplicaManifestDurability::PowerLossDurable) ||
         fileCount == 0 || fileCount > kMaxFiles)
     {
         result.Status = PartyQuestReplicaManifestPersistenceStatus::InvalidData;
@@ -602,6 +634,7 @@ PartyQuestReplicaManifestPersistenceResult PartyQuestReplicaManifestStore::Decod
     }
     manifest.SnapshotType = static_cast<PartyQuestReplicaSnapshotType>(snapshotType);
     manifest.CheckpointKind = static_cast<PartyQuestCheckpointKind>(checkpointKind);
+    manifest.Durability = static_cast<PartyQuestReplicaManifestDurability>(durability);
     manifest.Files.reserve(fileCount);
 
     for (uint32_t i = 0; i < fileCount; ++i)

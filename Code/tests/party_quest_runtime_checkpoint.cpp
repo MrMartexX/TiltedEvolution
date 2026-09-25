@@ -258,6 +258,8 @@ TEST_CASE("Runtime checkpoint gate durably publishes exact PreRepair revision be
     REQUIRE(loaded.Manifest->SnapshotType == PartyQuestReplicaSnapshotType::RevisionCheckpoint);
     REQUIRE(loaded.Manifest->CheckpointKind == PartyQuestCheckpointKind::PreRepair);
     REQUIRE(loaded.Manifest->CampaignWorldRevision == request.TargetWorldRevision);
+    REQUIRE(loaded.Manifest->Durability ==
+        PartyQuestReplicaManifestDurability::PowerLossDurable);
 }
 
 TEST_CASE("Checkpoint gate rejects an unverified coverage token", "[quest.party-state.runtime-checkpoint]")
