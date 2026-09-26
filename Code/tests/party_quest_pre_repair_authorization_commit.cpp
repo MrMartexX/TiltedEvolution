@@ -943,6 +943,34 @@ TEST_CASE(
                 finalPath).Status !=
             PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success);
     }
+
+    SECTION("oversized existing final is a hard conflict and is never overwritten")
+    {
+        CommitSandbox sandbox;
+        const auto paths = BuildPaths(sandbox);
+        const auto commit = BuildCommit();
+        const auto finalPath =
+            PartyQuestPreRepairAuthorizationCommitStore::GetCommitPath(
+                paths,
+                commit.TargetWorldRevision);
+        const std::vector<uint8_t> oversized(
+            static_cast<size_t>(
+                PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes) +
+                1,
+            0xA5);
+        WriteRaw(finalPath, oversized);
+
+        REQUIRE(
+            PartyQuestPreRepairAuthorizationCommitStore::Load(finalPath).Status ==
+            PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
+                ResourceLimitExceeded);
+        REQUIRE(
+            PartyQuestPreRepairAuthorizationCommitStore::PublishDurably(
+                paths,
+                commit) ==
+            PartyQuestPreRepairAuthorizationCommitPublishStatus::Conflict);
+        REQUIRE(ReadRaw(finalPath) == oversized);
+    }
 }
 
 TEST_CASE(
