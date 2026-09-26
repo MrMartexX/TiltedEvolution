@@ -902,13 +902,6 @@ PartyQuestPreRepairAuthorizationCommitStore::PublishDurably(
             }
             return ReestablishExistingDurability(finalPath, *canonical);
         }
-        if (existing.Status ==
-            PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                ResourceLimitExceeded)
-        {
-            return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                ResourceLimitExceeded;
-        }
         if (existing.Status !=
             PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
                 FileNotFound)
