@@ -1,0 +1,263 @@
+#include <Structs/Skyrim/PartyQuestState.h>
+#include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
+#include <Structs/Skyrim/PartyQuestResourcePolicy.h>
+
+#include <catch2/catch.hpp>
+
+#include <algorithm>
+
+namespace
+{
+QuestSnapshot BuildQuestSnapshot(GameId aQuestId, uint16_t aStage)
+{
+    QuestSnapshot snapshot;
+    snapshot.QuestId = aQuestId;
+    snapshot.Status = QuestSnapshotStatus::Running;
+    snapshot.CurrentStage = aStage;
+    snapshot.CompletedStages = {aStage, 10};
+    snapshot.Objectives = {
+        {20, QuestObjectiveState::Displayed},
+        {10, QuestObjectiveState::Completed}
+    };
+    return snapshot;
+}
+
+PartyQuestTransaction BuildTransaction(uint64_t aTransactionId, GameId aQuestId, uint64_t aExpectedRevision, uint16_t aStage)
+{
+    PartyQuestTransaction transaction;
+    transaction.TransactionId = aTransactionId;
+    transaction.InitiatorPlayerId = 7;
+    transaction.QuestId = aQuestId;
+    transaction.ExpectedQuestRevision = aExpectedRevision;
+    transaction.ProposedSnapshot = BuildQuestSnapshot(aQuestId, aStage);
+    return transaction;
+}
+} // namespace
+
+TEST_CASE("Party quest state assigns canonical world and quest revisions", "[quest.party-state]")
+{
+    PartyQuestState state;
+    const GameId questId(1, 0x12345);
+
+    const auto first = state.Apply(BuildTransaction(1001, questId, 0, 20));
+    REQUIRE(first.Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(first.WorldRevision == 1);
+    REQUIRE(first.QuestRevision == 1);
+
+    const QuestSnapshot* pFirstSnapshot = state.FindQuest(questId);
+    REQUIRE(pFirstSnapshot != nullptr);
+    REQUIRE(pFirstSnapshot->Revision == 1);
+    REQUIRE(pFirstSnapshot->CurrentStage == 20);
+
+    const auto second = state.Apply(BuildTransaction(1002, questId, 1, 30));
+    REQUIRE(second.Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(second.WorldRevision == 2);
+    REQUIRE(second.QuestRevision == 2);
+    REQUIRE(state.FindQuest(questId)->Revision == 2);
+    REQUIRE(state.FindQuest(questId)->CurrentStage == 30);
+    REQUIRE(state.GetJournal().size() == 2);
+}
+
+TEST_CASE("Party quest state makes repeated delivery idempotent", "[quest.party-state]")
+{
+    PartyQuestState state;
+    const auto transaction = BuildTransaction(2001, GameId(1, 0x200), 0, 10);
+
+    REQUIRE(state.Apply(transaction).Status == PartyQuestApplyStatus::Accepted);
+    const auto duplicate = state.Apply(transaction);
+
+    REQUIRE(duplicate.Status == PartyQuestApplyStatus::Duplicate);
+    REQUIRE(duplicate.WorldRevision == 1);
+    REQUIRE(duplicate.QuestRevision == 1);
+    REQUIRE(state.GetJournal().size() == 1);
+}
+
+TEST_CASE("Party quest transaction identity ignores unordered collection insertion order", "[quest.party-state]")
+{
+    PartyQuestState state;
+    const GameId questId(1, 0x250);
+
+    auto first = BuildTransaction(2501, questId, 0, 20);
+    first.ProposedSnapshot.CompletedStages = {20, 10, 20};
+    first.ProposedSnapshot.Objectives = {
+        {20, QuestObjectiveState::Displayed},
+        {10, QuestObjectiveState::Completed}
+    };
+    first.ProposedSnapshot.ReferenceAliases = {
+        {2, std::nullopt, true},
+        {1, GameId(1, 0x900), false}
+    };
+
+    auto reordered = first;
+    reordered.ProposedSnapshot.CompletedStages = {10, 20};
+    std::reverse(reordered.ProposedSnapshot.Objectives.begin(), reordered.ProposedSnapshot.Objectives.end());
+    std::reverse(reordered.ProposedSnapshot.ReferenceAliases.begin(), reordered.ProposedSnapshot.ReferenceAliases.end());
+
+    REQUIRE(state.Apply(first).Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(state.Apply(reordered).Status == PartyQuestApplyStatus::Duplicate);
+    REQUIRE(state.GetJournal().size() == 1);
+    const std::vector<uint16_t> expectedStages{10, 20};
+    REQUIRE(state.GetJournal().front().Transaction.ProposedSnapshot.CompletedStages == expectedStages);
+}
+
+TEST_CASE("Party quest state rejects transaction id reuse with another payload", "[quest.party-state]")
+{
+    PartyQuestState state;
+    const GameId questId(1, 0x300);
+
+    REQUIRE(state.Apply(BuildTransaction(3001, questId, 0, 10)).Status == PartyQuestApplyStatus::Accepted);
+    const auto conflict = state.Apply(BuildTransaction(3001, questId, 1, 20));
+
+    REQUIRE(conflict.Status == PartyQuestApplyStatus::TransactionConflict);
+    REQUIRE(state.GetWorldRevision() == 1);
+    REQUIRE(state.FindQuest(questId)->CurrentStage == 10);
+    REQUIRE(state.GetJournal().size() == 1);
+}
+
+TEST_CASE("Party quest state rejects stale expected revisions", "[quest.party-state]")
+{
+    PartyQuestState state;
+    const GameId questId(2, 0x400);
+
+    REQUIRE(state.Apply(BuildTransaction(4001, questId, 0, 10)).Status == PartyQuestApplyStatus::Accepted);
+    const auto stale = state.Apply(BuildTransaction(4002, questId, 0, 20));
+
+    REQUIRE(stale.Status == PartyQuestApplyStatus::RevisionMismatch);
+    REQUIRE(stale.QuestRevision == 1);
+    REQUIRE(state.GetWorldRevision() == 1);
+    REQUIRE(state.FindQuest(questId)->CurrentStage == 10);
+}
+
+TEST_CASE("Party quest state keeps independent per-quest revisions", "[quest.party-state]")
+{
+    PartyQuestState state;
+    const GameId firstQuest(1, 0x500);
+    const GameId secondQuest(1, 0x501);
+
+    REQUIRE(state.Apply(BuildTransaction(5001, firstQuest, 0, 10)).Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(state.Apply(BuildTransaction(5002, secondQuest, 0, 40)).Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(state.Apply(BuildTransaction(5003, firstQuest, 1, 20)).Status == PartyQuestApplyStatus::Accepted);
+
+    REQUIRE(state.GetWorldRevision() == 3);
+    REQUIRE(state.FindQuest(firstQuest)->Revision == 2);
+    REQUIRE(state.FindQuest(secondQuest)->Revision == 1);
+}
+
+TEST_CASE("Party quest journal deterministically replays accepted transactions", "[quest.party-state]")
+{
+    PartyQuestState original;
+    const GameId firstQuest(3, 0x600);
+    const GameId secondQuest(3, 0x601);
+
+    REQUIRE(original.Apply(BuildTransaction(6001, firstQuest, 0, 10)).Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(original.Apply(BuildTransaction(6002, secondQuest, 0, 50)).Status == PartyQuestApplyStatus::Accepted);
+    REQUIRE(original.Apply(BuildTransaction(6003, firstQuest, 1, 30)).Status == PartyQuestApplyStatus::Accepted);
+
+    PartyQuestState replayed;
+    for (const auto& entry : original.GetJournal())
+        REQUIRE(replayed.Apply(entry.Transaction).Status == PartyQuestApplyStatus::Accepted);
+
+    REQUIRE(replayed.GetWorldRevision() == original.GetWorldRevision());
+    REQUIRE(replayed.FindQuest(firstQuest) != nullptr);
+    REQUIRE(replayed.FindQuest(secondQuest) != nullptr);
+    REQUIRE(*replayed.FindQuest(firstQuest) == *original.FindQuest(firstQuest));
+    REQUIRE(*replayed.FindQuest(secondQuest) == *original.FindQuest(secondQuest));
+}
+
+TEST_CASE("Party quest state rejects mismatched quest identifiers", "[quest.party-state]")
+{
+    PartyQuestState state;
+    auto transaction = BuildTransaction(7001, GameId(1, 0x700), 0, 10);
+    transaction.ProposedSnapshot.QuestId = GameId(1, 0x701);
+
+    const auto result = state.Apply(transaction);
+    REQUIRE(result.Status == PartyQuestApplyStatus::QuestIdMismatch);
+    REQUIRE(state.GetWorldRevision() == 0);
+    REQUIRE(state.GetQuestCount() == 0);
+}
+
+TEST_CASE("Party quest state rejects zero transaction identifiers", "[quest.party-state]")
+{
+    PartyQuestState state;
+    const auto result = state.Apply(BuildTransaction(0, GameId(1, 0x800), 0, 10));
+
+    REQUIRE(result.Status == PartyQuestApplyStatus::InvalidTransactionId);
+    REQUIRE(state.GetWorldRevision() == 0);
+    REQUIRE(state.GetJournal().empty());
+}
+
+TEST_CASE("Canonical journal fails closed at its durable identity bound", "[quest.party-state][resource-budget]")
+{
+    PartyQuestState state;
+    const GameId questId(1, 0x900);
+    const uint64_t limit =
+        PartyQuestDurableResourcePolicy::MaxCanonicalJournalRecords;
+
+    for (uint64_t i = 0; i < limit; ++i)
+    {
+        const auto result = state.Apply(BuildTransaction(
+            i + 1,
+            questId,
+            i,
+            static_cast<uint16_t>(i)));
+        REQUIRE(result.Status == PartyQuestApplyStatus::Accepted);
+    }
+
+    const auto duplicate = state.Apply(BuildTransaction(1, questId, 0, 0));
+    REQUIRE(duplicate.Status == PartyQuestApplyStatus::Duplicate);
+
+    auto conflicting = BuildTransaction(1, questId, 0, 1);
+    REQUIRE(state.Apply(conflicting).Status ==
+        PartyQuestApplyStatus::TransactionConflict);
+
+    const auto overflow = state.Apply(BuildTransaction(
+        limit + 1,
+        questId,
+        limit,
+        1));
+    REQUIRE(overflow.Status == PartyQuestApplyStatus::ResourceLimitExceeded);
+    REQUIRE(overflow.WorldRevision == limit);
+    REQUIRE(state.GetWorldRevision() == limit);
+    REQUIRE(state.GetJournal().size() == limit);
+}
+
+TEST_CASE("Canonical state remains inside its wire resource envelope", "[quest.party-state][resource-budget]")
+{
+    SECTION("snapshot collections")
+    {
+        PartyQuestState state;
+        auto transaction = BuildTransaction(90001, GameId(13, 1), 0, 10);
+        transaction.ProposedSnapshot.CompletedStages.resize(
+            PartyQuestResourcePolicy::MaxSnapshotCollectionEntries + 1);
+
+        REQUIRE(state.Apply(transaction).Status ==
+            PartyQuestApplyStatus::ResourceLimitExceeded);
+        REQUIRE(state.GetWorldRevision() == 0);
+        REQUIRE(state.GetJournal().empty());
+    }
+
+    SECTION("unique canonical quests")
+    {
+        PartyQuestState state;
+        for (size_t i = 0;
+             i < PartyQuestResourcePolicy::MaxWireQuestEntries;
+             ++i)
+        {
+            REQUIRE(state.Apply(BuildTransaction(
+                100000 + i,
+                GameId(13, static_cast<uint32_t>(i + 1)),
+                0,
+                10)).Status == PartyQuestApplyStatus::Accepted);
+        }
+
+        REQUIRE(state.Apply(BuildTransaction(
+            200000,
+            GameId(13, 0xFFFFF),
+            0,
+            10)).Status == PartyQuestApplyStatus::ResourceLimitExceeded);
+        REQUIRE(state.GetQuestCount() ==
+            PartyQuestResourcePolicy::MaxWireQuestEntries);
+        REQUIRE(state.GetWorldRevision() ==
+            PartyQuestResourcePolicy::MaxWireQuestEntries);
+    }
+}

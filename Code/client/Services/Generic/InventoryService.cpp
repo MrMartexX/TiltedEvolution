@@ -1,5 +1,7 @@
 #include <Services/InventoryService.h>
 
+#include "NakedNpcInventoryRepairPolicy.h"
+
 #include <Messages/RequestObjectInventoryChanges.h>
 #include <Messages/NotifyObjectInventoryChanges.h>
 #include <Messages/RequestInventoryChanges.h>
@@ -27,6 +29,9 @@
 #include <Forms/TESNPC.h>
 #include <DefaultObjectManager.h>
 
+static_assert(!NakedNpcInventoryRepairPolicy::CanCreateOrReloadInventory({false, true}),
+    "Appearance-only NPC state must not authorize item-creating inventory repair.");
+
 InventoryService::InventoryService(World& aWorld, entt::dispatcher& aDispatcher, TransportService& aTransport) noexcept
     : m_world(aWorld)
     , m_dispatcher(aDispatcher)
@@ -42,7 +47,6 @@ InventoryService::InventoryService(World& aWorld, entt::dispatcher& aDispatcher,
 void InventoryService::OnUpdate(const UpdateEvent& acUpdateEvent) noexcept
 {
     RunWeaponStateUpdates();
-    RunNakedNPCBugChecks();
 }
 
 void InventoryService::OnInventoryChangeEvent(const InventoryChangeEvent& acEvent) noexcept
@@ -263,49 +267,5 @@ void InventoryService::RunWeaponStateUpdates() noexcept
 
             m_transport.Send(request);
         }
-    }
-}
-
-void InventoryService::RunNakedNPCBugChecks() noexcept
-{
-    if (!m_transport.IsConnected())
-        return;
-
-    static std::chrono::steady_clock::time_point lastSendTimePoint;
-    constexpr auto cDelayBetweenUpdates = 1000ms;
-
-    const auto now = std::chrono::steady_clock::now();
-    if (now - lastSendTimePoint < cDelayBetweenUpdates)
-        return;
-
-    lastSendTimePoint = now;
-
-    auto view = m_world.view<FormIdComponent>();
-
-    for (auto entity : view)
-    {
-        const auto& formIdComponent = view.get<FormIdComponent>(entity);
-        Actor* pActor = Cast<Actor>(TESForm::GetById(formIdComponent.Id));
-        if (!pActor)
-            continue;
-
-        if (pActor->GetExtension()->IsPlayer())
-            continue;
-
-        if (pActor->IsDead())
-            continue;
-
-        if (pActor->IsWearingBodyPiece())
-            continue;
-
-        if (!pActor->ShouldWearBodyPiece())
-            continue;
-
-        // Don't broadcast changes, it'll just make things messier.
-        // If all clients have this problem, they'll all fix it individually.
-        ScopedEquipOverride seo;
-        ScopedInventoryOverride sio;
-
-        pActor->ResetInventory(false);
     }
 }

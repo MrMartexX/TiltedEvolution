@@ -248,28 +248,43 @@ uint32_t ExeLoader::Rva2Offset(uint32_t aRva) noexcept
     return 0;
 }
 
-void ExeLoader::DecryptCeg(IMAGE_NT_HEADERS* apSourceNt)
+bool ExeLoader::DecryptCeg(IMAGE_NT_HEADERS* apSourceNt)
 {
     auto entry = apSourceNt->OptionalHeader.AddressOfEntryPoint;
     // analyze executable sections if the entry point is already protected
     if (*GetOffset<uint32_t>(entry) != 0x000000e8)
-        return;
+        return true;
 
-    const auto* section = IMAGE_FIRST_SECTION(apSourceNt);
+    const auto* sections = IMAGE_FIRST_SECTION(apSourceNt);
+    const IMAGE_SECTION_HEADER* pTextSection = nullptr;
     for (int i = 0; i < apSourceNt->FileHeader.NumberOfSections; i++)
     {
-        if (!_strcmpi(reinterpret_cast<const char*>(section[i].Name), ".text"))
+        if (!_strcmpi(reinterpret_cast<const char*>(sections[i].Name), ".text"))
         {
+            pTextSection = &sections[i];
             break;
         }
     }
+    if (!pTextSection || apSourceNt->FileHeader.NumberOfSections == 0)
+        return false;
 
-    steam::CEGLocationInfo info{GetOffset<uint8_t>(entry), {GetOffset<uint8_t>(section->VirtualAddress), section->SizeOfRawData}};
+    const auto& lastSection = sections[apSourceNt->FileHeader.NumberOfSections - 1];
+    if (_strcmpi(reinterpret_cast<const char*>(lastSection.Name), ".bind") != 0)
+        return false;
+
+    steam::CEGLocationInfo info{
+        GetOffset<uint8_t>(entry),
+        {GetOffset<uint8_t>(pTextSection->VirtualAddress), pTextSection->SizeOfRawData}};
 
     auto realEntry = steam::CrackCEGInPlace(info);
+    const uint64_t textStart = pTextSection->VirtualAddress;
+    const uint64_t textEnd = textStart + pTextSection->Misc.VirtualSize;
+    if (realEntry < textStart || realEntry >= textEnd)
+        return false;
 
     apSourceNt->FileHeader.NumberOfSections--;
     apSourceNt->OptionalHeader.AddressOfEntryPoint = static_cast<uint32_t>(realEntry);
+    return true;
 }
 
 bool ExeLoader::Load(const uint8_t* apProgramBuffer)
@@ -286,7 +301,8 @@ bool ExeLoader::Load(const uint8_t* apProgramBuffer)
 
     // remove protections
     auto* ntHeader = GetRVA<IMAGE_NT_HEADERS>(dosHeader->e_lfanew);
-    DecryptCeg(ntHeader);
+    if (!DecryptCeg(ntHeader))
+        return false;
 
     // these point to launcher.exe's headers
     auto* sourceHeader = GetTargetRVA<IMAGE_DOS_HEADER>(0);

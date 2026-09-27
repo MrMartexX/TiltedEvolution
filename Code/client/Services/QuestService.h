@@ -3,39 +3,102 @@
 #include <World.h>
 #include <Events/EventDispatcher.h>
 #include <Games/Events.h>
+#include <Structs/Skyrim/PartyQuestProtocol.h>
+#include <Structs/Skyrim/PartyQuestRuntimeCanonicalInbox.h>
+#include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
+#include <Structs/Skyrim/PartyQuestRuntimeOwner.h>
+
+#include <optional>
+#include <unordered_map>
 
 struct NotifyQuestUpdate;
+struct NotifyPartyQuestTransactionResult;
+struct NotifyPartyQuestRepairPlan;
+struct NotifyPartyQuestCanonicalUpdate;
+struct ConnectedEvent;
+struct DisconnectedEvent;
+struct PartyJoinedEvent;
+struct PartyLeftEvent;
 
 struct TESQuest;
 
 /**
- * @brief Handles quest sync
+ * @brief Handles quest sync.
  *
- * This service is currently not in use.
+ * The legacy stage-only runtime path remains unchanged. The equal-party path is
+ * diagnostic-only: it mirrors canonical protocol state in memory and never
+ * applies repair snapshots to Skyrim or save files.
  */
 class QuestService final : public BSTEventSink<TESQuestStartStopEvent>, BSTEventSink<TESQuestStageEvent>
 {
 public:
     QuestService(World&, entt::dispatcher&);
-    ~QuestService() = default;
+    ~QuestService() noexcept;
 
     static bool IsNonSyncableQuest(TESQuest* apQuest);
     static void DebugDumpQuests();
     static bool StopQuest(uint32_t aformId);
 
+    /**
+     * Read-only production-bootstrap view. Campaign identity is exposed only
+     * after the server repair handshake has established a verified local replica.
+     */
+    [[nodiscard]] std::optional<PartyQuestCampaignId>
+    GetVerifiedPartyQuestCampaignId() const noexcept
+    {
+        if (!m_partyQuestProtocolVerified || !m_partyQuestSession)
+            return std::nullopt;
+        const auto campaign = m_partyQuestSession->GetCampaignId();
+        return campaign.IsValid()
+            ? std::optional<PartyQuestCampaignId>(campaign)
+            : std::nullopt;
+    }
+
 private:
     friend struct QuestEventHandler;
 
-    void OnConnected(const ConnectedEvent&) noexcept;
+    void OnConnected(const ConnectedEvent& acEvent) noexcept;
+    void OnDisconnected(const DisconnectedEvent& acEvent) noexcept;
+    void OnPartyJoined(const PartyJoinedEvent& acEvent) noexcept;
+    void OnPartyLeft(const PartyLeftEvent& acEvent) noexcept;
 
     BSTEventResult OnEvent(const TESQuestStartStopEvent*, const EventDispatcher<TESQuestStartStopEvent>*) override;
     BSTEventResult OnEvent(const TESQuestStageEvent*, const EventDispatcher<TESQuestStageEvent>*) override;
 
     void OnQuestUpdate(const NotifyQuestUpdate&) noexcept;
+    void OnPartyQuestTransactionResult(const NotifyPartyQuestTransactionResult& acResult) noexcept;
+    void OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPlan) noexcept;
+    void OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUpdate& acUpdate) noexcept;
+
+    void CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const char* acReason) noexcept;
+    void SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, const char* acReason) noexcept;
+    void FlushQueuedPartyQuestSnapshots(const char* acReason) noexcept;
+    void SendPartyQuestReplicaReport(bool aReconnect, const char* acReason) noexcept;
+    void PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexcept;
+    void StartPartyQuestCompatibilityEnvironment() noexcept;
 
     World& m_world;
+    EventDispatcher<TESQuestStartStopEvent>* m_pQuestStartStopDispatcher{};
+    EventDispatcher<TESQuestStageEvent>* m_pQuestStageDispatcher{};
+
+    uint32_t m_localPlayerId{};
+    uint64_t m_connectionGeneration{};
+    PartyQuestClientIdAllocator m_partyQuestIds;
+    std::optional<PartyQuestClientSession> m_partyQuestSession;
+    PartyQuestClientSubmissionQueue m_partyQuestSubmissions;
+    PartyQuestRuntimeCanonicalInbox m_partyQuestRuntimeCanonicalInbox;
+    PartyQuestRuntimeCompatibilityManifest m_partyQuestRuntimeCompatibilityManifest;
+    PartyQuestRuntimeCompatibilityEnvironmentHandle m_partyQuestCompatibilityEnvironment;
+    std::unordered_map<uint64_t, uint64_t> m_requestTransactions;
+    std::unordered_map<GameId, PartyQuestSyncFacts> m_partyQuestSyncFacts;
+    bool m_partyQuestProtocolVerified{};
 
     entt::scoped_connection m_joinedConnection;
-    entt::scoped_connection m_leftConnection;
+    entt::scoped_connection m_disconnectedConnection;
+    entt::scoped_connection m_partyJoinedConnection;
+    entt::scoped_connection m_partyLeftConnection;
     entt::scoped_connection m_questUpdateConnection;
+    entt::scoped_connection m_partyQuestTransactionResultConnection;
+    entt::scoped_connection m_partyQuestRepairPlanConnection;
+    entt::scoped_connection m_partyQuestCanonicalUpdateConnection;
 };

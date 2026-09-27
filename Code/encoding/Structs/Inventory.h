@@ -1,6 +1,9 @@
 #pragma once
 
 #include "MagicEquipment.h"
+#include <TiltedCore/Stl.hpp>
+#include <optional>
+#include <functional>
 
 using TiltedPhoques::Buffer;
 using TiltedPhoques::String;
@@ -81,7 +84,7 @@ struct Inventory
     int32_t GetEntryCountById(GameId& aItemId) const noexcept;
 
     void RemoveByFilter(std::function<bool(const Entry&)> aFilter) noexcept;
-    void AddOrRemoveEntry(const Entry& acEntry) noexcept;
+    bool AddOrRemoveEntry(const Entry& acEntry) noexcept;
     void UpdateEquipment(const Inventory& acNewInventory) noexcept;
     bool ContainsQuestItems() const noexcept;
 

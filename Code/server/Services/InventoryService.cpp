@@ -32,12 +32,12 @@ void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChan
     auto view = m_world.view<InventoryComponent>();
 
     const auto it = view.find(static_cast<entt::entity>(message.ServerId));
+    if (it == view.end())
+        return;
 
-    if (it != view.end())
-    {
-        auto& inventoryComponent = view.get<InventoryComponent>(*it);
-        inventoryComponent.Content.AddOrRemoveEntry(message.Item);
-    }
+    auto& inventoryComponent = view.get<InventoryComponent>(*it);
+    if (!inventoryComponent.Content.AddOrRemoveEntry(message.Item))
+        return;
 
     if (!message.UpdateClients)
         return;

@@ -54,6 +54,9 @@ enum ClientOpcode : unsigned char
     kRequestSetWaypoint,
     kRequestRemoveWaypoint,
     kSetTimeCommandRequest,
+    kRequestPartyQuestTransaction,
+    kRequestPartyQuestReplicaReport,
+    kRequestPartyQuestRepairAck,
     kClientOpcodeMax
 };
 
@@ -115,5 +118,8 @@ enum ServerOpcode : unsigned char
     kNotifySetWaypoint,
     kNotifyRemoveWaypoint,
     kNotifySetTimeResult,
+    kNotifyPartyQuestTransactionResult,
+    kNotifyPartyQuestRepairPlan,
+    kNotifyPartyQuestCanonicalUpdate,
     kServerOpcodeMax
 };

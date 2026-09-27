@@ -15,6 +15,7 @@ const void* PapyrusService::Get(const String& acNamespace, const String& acFunct
     if (itor != std::end(m_functions))
         return itor->second;
 
+    spdlog::error("Papyrus native function is unavailable: {}::{}", acNamespace.c_str(), acFunction.c_str());
     return nullptr;
 }
 

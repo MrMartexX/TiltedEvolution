@@ -1,0 +1,11 @@
+Party Quest offline compatibility review
+Status: COMPLETE
+Analyzer version: 7
+Runtime: 1.6.1170.0
+Plugin environment: 0x7acc3ca7855c8d11
+Script environment: 0xaa5709f94cc00612
+Important: this report is review input only; it authorizes no quest or mutation.
+
+Quest Base.esm:123 (winner Override.esp)
+  stages=3, objectives=1, aliases=1, scenes=0
+  side effects=YES; manual review required

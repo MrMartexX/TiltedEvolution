@@ -1,9 +1,13 @@
 #pragma once
 
+#include <Structs/Skyrim/SkyrimAddressLibraryDatabase.h>
+
 #include <Windows.h>
 #include <fstream>
 #include <map>
 #include <stdio.h>
+#include <utility>
+#include <vector>
 
 #pragma comment(lib, "version.lib")
 
@@ -22,13 +26,11 @@ private:
     std::string _verStr;
     std::string _moduleName;
     unsigned long long _base;
-
-    template <typename T> static T read(std::ifstream& file)
-    {
-        T v;
-        file.read((char*)&v, sizeof(T));
-        return v;
-    }
+    uint32_t _databaseFormat{};
+    SkyrimAddressLibraryIdNamespace _idNamespace{
+        SkyrimAddressLibraryIdNamespace::Unknown};
+    size_t _entryCount{};
+    bool _loaded{false};
 
     static void* ToPointer(unsigned long long v) { return (void*)v; }
 
@@ -39,6 +41,10 @@ private:
 public:
     const std::string& GetModuleName() const { return _moduleName; }
     const std::string& GetLoadedVersionString() const { return _verStr; }
+    bool IsLoaded() const { return _loaded; }
+    uint32_t GetLoadedDatabaseFormat() const { return _databaseFormat; }
+    SkyrimAddressLibraryIdNamespace GetLoadedIdNamespace() const { return _idNamespace; }
+    size_t GetLoadedEntryCount() const { return _entryCount; }
 
     const std::map<unsigned long long, unsigned long long>& GetOffsetMap() const { return _data; }
 
@@ -149,8 +155,13 @@ public:
         _rdata.clear();
         for (int i = 0; i < 4; i++)
             _ver[i] = 0;
+        _verStr.clear();
         _moduleName = std::string();
         _base = 0;
+        _databaseFormat = 0;
+        _idNamespace = SkyrimAddressLibraryIdNamespace::Unknown;
+        _entryCount = 0;
+        _loaded = false;
     }
 
     bool Load(const std::filesystem::path& acGamePath, const TiltedPhoques::String& acExeVersion)
@@ -159,6 +170,7 @@ public:
 
         if (!ParseVersionFromString(acExeVersion.c_str(), major, minor, revision, build))
         {
+            Clear();
             return false;
         }
 
@@ -168,144 +180,104 @@ public:
     bool Load(const std::filesystem::path& acGamePath, int major, int minor, int revision, int build)
     {
         Clear();
-
-        char fileName[256];
-        _snprintf_s(fileName, 256, "versionlib-%d-%d-%d-%d.bin", major, minor, revision, build);
-
-        std::ifstream file(acGamePath / "Data" / "SKSE" / "Plugins" / fileName, std::ios::binary);
-        if (!file.good())
+        if (major <= 0 || minor < 0 || revision < 0 || build < 0)
             return false;
 
-        int format = read<int>(file);
-
-        if (format != 2)
-            return false;
-
-        for (int i = 0; i < 4; i++)
-            _ver[i] = read<int>(file);
-
+        try
         {
-            char verName[64];
-            _snprintf_s(verName, 64, "%d.%d.%d.%d", _ver[0], _ver[1], _ver[2], _ver[3]);
-            _verStr = verName;
-        }
+            char fileName[256];
+            const char* prefix =
+                major == 1 && minor == 5 ? "version" : "versionlib";
+            _snprintf_s(
+                fileName,
+                sizeof(fileName),
+                "%s-%d-%d-%d-%d.bin",
+                prefix,
+                major,
+                minor,
+                revision,
+                build);
 
-        int tnLen = read<int>(file);
+            const auto path = acGamePath / "Data" / "SKSE" / "Plugins" / fileName;
+            std::ifstream file(path, std::ios::binary | std::ios::ate);
+            if (!file.good())
+                return false;
 
-        if (tnLen < 0 || tnLen >= 0x10000)
-            return false;
+            constexpr std::streamoff kMaximumDatabaseSize = 64ll * 1024ll * 1024ll;
+            const std::streamoff fileSize = file.tellg();
+            if (fileSize <= 0 || fileSize > kMaximumDatabaseSize)
+                return false;
 
-        if (tnLen > 0)
-        {
-            char* tnbuf = (char*)malloc(tnLen + 1);
-            file.read(tnbuf, tnLen);
-            tnbuf[tnLen] = '\0';
-            _moduleName = tnbuf;
-            free(tnbuf);
-        }
+            std::vector<uint8_t> bytes(static_cast<size_t>(fileSize));
+            file.seekg(0, std::ios::beg);
+            file.read(
+                reinterpret_cast<char*>(bytes.data()),
+                static_cast<std::streamsize>(bytes.size()));
+            if (!file || file.gcount() != static_cast<std::streamsize>(bytes.size()))
+                return false;
 
-        {
-            HMODULE handle = GetModuleHandleA(NULL);
-            _base = (unsigned long long)handle;
-        }
-
-        int ptrSize = read<int>(file);
-
-        int addrCount = read<int>(file);
-
-        unsigned char type, low, high;
-        unsigned char b1, b2;
-        unsigned short w1, w2;
-        unsigned int d1, d2;
-        unsigned long long q1, q2;
-        unsigned long long pvid = 0;
-        unsigned long long poffset = 0;
-        unsigned long long tpoffset;
-        for (int i = 0; i < addrCount; i++)
-        {
-            type = read<unsigned char>(file);
-            low = type & 0xF;
-            high = type >> 4;
-
-            switch (low)
+            const SkyrimAddressLibraryRuntimeVersion expectedRuntime{
+                static_cast<uint32_t>(major),
+                static_cast<uint32_t>(minor),
+                static_cast<uint32_t>(revision),
+                static_cast<uint32_t>(build)};
+            SkyrimAddressLibraryImage image{};
+            if (!SkyrimAddressLibraryDatabaseParser::TryParse(
+                    bytes,
+                    expectedRuntime,
+                    "SkyrimSE.exe",
+                    image) ||
+                image.IdNamespace != SkyrimAddressLibraryIdNamespace::Ae ||
+                image.Entries.empty())
             {
-            case 0: q1 = read<unsigned long long>(file); break;
-            case 1: q1 = pvid + 1; break;
-            case 2:
-                b1 = read<unsigned char>(file);
-                q1 = pvid + b1;
-                break;
-            case 3:
-                b1 = read<unsigned char>(file);
-                q1 = pvid - b1;
-                break;
-            case 4:
-                w1 = read<unsigned short>(file);
-                q1 = pvid + w1;
-                break;
-            case 5:
-                w1 = read<unsigned short>(file);
-                q1 = pvid - w1;
-                break;
-            case 6:
-                w1 = read<unsigned short>(file);
-                q1 = w1;
-                break;
-            case 7:
-                d1 = read<unsigned int>(file);
-                q1 = d1;
-                break;
-            default:
-            {
-                Clear();
+                // STR relocation callsites currently use AE-side IDs. A v1
+                // database is deliberately rejected until an exact reviewed
+                // SE-to-AE ID translation profile exists.
                 return false;
             }
-            }
 
-            tpoffset = (high & 8) != 0 ? (poffset / (unsigned long long)ptrSize) : poffset;
+            const HMODULE handle = GetModuleHandleA(nullptr);
+            if (!handle)
+                return false;
 
-            switch (high & 7)
+            std::map<unsigned long long, unsigned long long> data;
+            std::map<unsigned long long, unsigned long long> reverseData;
+            for (const auto& entry : image.Entries)
             {
-            case 0: q2 = read<unsigned long long>(file); break;
-            case 1: q2 = tpoffset + 1; break;
-            case 2:
-                b2 = read<unsigned char>(file);
-                q2 = tpoffset + b2;
-                break;
-            case 3:
-                b2 = read<unsigned char>(file);
-                q2 = tpoffset - b2;
-                break;
-            case 4:
-                w2 = read<unsigned short>(file);
-                q2 = tpoffset + w2;
-                break;
-            case 5:
-                w2 = read<unsigned short>(file);
-                q2 = tpoffset - w2;
-                break;
-            case 6:
-                w2 = read<unsigned short>(file);
-                q2 = w2;
-                break;
-            case 7:
-                d2 = read<unsigned int>(file);
-                q2 = d2;
-                break;
-            default: throw std::exception();
+                data.emplace(entry.Id, entry.Offset);
+                reverseData.emplace(entry.Offset, entry.Id);
             }
 
-            if ((high & 8) != 0)
-                q2 *= (unsigned long long)ptrSize;
+            char versionName[64];
+            _snprintf_s(
+                versionName,
+                sizeof(versionName),
+                "%d.%d.%d.%d",
+                major,
+                minor,
+                revision,
+                build);
 
-            _data[q1] = q2;
-            _rdata[q2] = q1;
-
-            poffset = q2;
-            pvid = q1;
+            _data = std::move(data);
+            _rdata = std::move(reverseData);
+            _ver[0] = major;
+            _ver[1] = minor;
+            _ver[2] = revision;
+            _ver[3] = build;
+            _verStr = versionName;
+            _moduleName = std::move(image.ModuleName);
+            _base = reinterpret_cast<unsigned long long>(handle);
+            _databaseFormat = image.Format;
+            _idNamespace = image.IdNamespace;
+            _entryCount = image.Entries.size();
+            _loaded = true;
+            return true;
         }
-
-        return true;
+        catch (...)
+        {
+            Clear();
+            return false;
+        }
     }
 
     bool DumpToTextFile(const std::string& path)

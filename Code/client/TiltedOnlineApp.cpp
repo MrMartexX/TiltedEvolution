@@ -18,8 +18,11 @@
 #include <Services/ImguiService.h>
 #include <Services/DiscordService.h>
 
-#include <ScriptExtender.h>
+#include <PartyQuestP0LiveDiagnostics.h>
+#include <PartyQuestSkyrimReferenceReadiness.h>
+#include <SaveLoad.h>
 #include <NvidiaUtil.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 using TiltedPhoques::Debug;
 
@@ -40,6 +43,10 @@ TiltedOnlineApp::TiltedOnlineApp()
     logger->set_pattern("%^[%Y-%m-%d %H:%M:%S.%e] [%l] [tid %t] %$ %v");
     spdlog::flush_every(std::chrono::seconds(1));
     set_default_logger(logger);
+
+    // Optional, read-only P0 evidence recorder. It is disabled by default and
+    // never grants runtime mutation authority.
+    PartyQuestP0LiveDiagnostics::Initialize();
 }
 
 TiltedOnlineApp::~TiltedOnlineApp() = default;
@@ -57,8 +64,6 @@ bool TiltedOnlineApp::BeginMain()
     World::Get().ctx().at<DiscordService>().Init();
     World::Get().ctx().emplace<RenderSystemD3D11>(World::Get().ctx().at<OverlayService>(), World::Get().ctx().at<ImguiService>());
 
-    LoadScriptExender();
-
     // TODO: Figure out a way to un-blacklist NvCamera64.dll (see DllBlocklist.cpp). Then this hack can be removed
     if (IsNvidiaOverlayLoaded())
         ApplyNvidiaFix();
@@ -68,6 +73,42 @@ bool TiltedOnlineApp::BeginMain()
 
 bool TiltedOnlineApp::EndMain()
 {
+    // EndMain is the explicit orderly teardown boundary. Fence the persisted
+    // runtime owner before hooks/resources disappear so pre-mutation work is
+    // durably aborted and post-mutation/recovery-blocked evidence is retained
+    // for exact restart recovery rather than being mistaken for a clean exit.
+    auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto lifecycle = runtimeOwner.PrepareAndRelease(
+        PartyQuestRuntimeLifecycleEvent::Shutdown);
+    if (!lifecycle.CanProceed())
+    {
+        // Process shutdown itself is not reversible. Do not fabricate a local
+        // restore here; leave the durable journal/workspace evidence intact so
+        // the next process can reconcile through the normal recovery path.
+        spdlog::error(
+            "PartyQuest orderly shutdown retained runtime recovery state: status={} transaction={} guardHeld={}",
+            static_cast<uint32_t>(lifecycle.Status),
+            lifecycle.TransactionId,
+            lifecycle.GuardHeld);
+    }
+    else if (lifecycle.Status ==
+             PartyQuestRuntimeLifecycleFenceStatus::SafeAbortApplied)
+    {
+        spdlog::info(
+            "PartyQuest orderly shutdown durably aborted pre-mutation runtime work: transaction={}",
+            lifecycle.TransactionId);
+    }
+
+    // Process sinks and World services are registered with Skyrim event
+    // dispatchers. Detach them while the engine and our code are still fully
+    // alive, before hook/DLL teardown begins.
+    UninstallPartyQuestSkyrimReferenceReadiness();
+    UninstallPartyQuestLoadGameLifecycleFence();
+
+    // World owns services registered with Skyrim event dispatchers. Destroy it
+    // while the engine and our code are still fully alive so those external
+    // sinks are detached before hook/DLL teardown begins.
+    World::Destroy();
     UninstallHooks();
     if (m_pDevice)
         m_pDevice->Release();
@@ -77,6 +118,8 @@ bool TiltedOnlineApp::EndMain()
 
 void TiltedOnlineApp::Update()
 {
+    PartyQuestP0LiveDiagnostics::RecordPapyrusRuntimeObservation();
+
     // Reverting a change that used to be here to disable bUseFaceGenPreprocessedHeads==true (which is 
     // the default) handling. Extensive testing over months by multiple parties showed that enabling 
     // the flag introduces no issues WITH PROPERLY GENERATED CHARACTERS (in-game character generation 

@@ -1,0 +1,421 @@
+# Task 7: native save-path and completion evidence, 2026-09-15
+
+Status: loaded-code inspection; not a completed-save or fault-injection test.
+Canonical mutation and engine PreRepair capture remain disabled.
+
+## Provenance
+
+The isolated 1.6.1170 MO2 instance launched its existing configured fork. A
+read-only `ReadProcessMemory` utility captured bounded function windows; it did
+not suspend the process, install a hook, call a save, or change a save path.
+
+- SkyrimSE.exe SHA256:
+  `C434208894F07F604B852F29B8EDC3A58C4DE63DE783373733E72B2B73F33BE9`.
+- Installed SkyrimTogether.exe file SHA256:
+  `BACF9E7BCFAA22034DB1CF4286BC9E88A3A44BA93DBE5A71C62E3D49E8EF7343`.
+  This is the previously installed artifact, **not** an artifact built from PR #9.
+- Snapshot UTC: `2026-09-15T10:00:19.7124204Z`; process 31960;
+  main image base `0x140000000`.
+- Local snapshot:
+  `D:\Codex\Artifacts\task07-save-targets\snapshot-20260915-100019-7355392.json`.
+- Snapshot SHA256:
+  `96E34A6504E3CC5DB1597EC50C6B7913C1249C95A0020D0CD003AAE0A70C48F8`.
+- Source used to interpret declarations: CommonLibSSE-NG
+  `b93280e832f263dbef44e44cbe2936622a02f91a` and the inspected SKSE 2.2.6 source.
+- Local tooling: `D:\Codex\Workspaces\2026-09-14\task07-skse-provider`;
+  Python parser tests: 11 passed; Windows read-only memory helper: four checks
+  passed (readback, invalid address, size bound, disposed handle). A non-Skyrim
+  target was also rejected. Disassembly used Capstone 5.0.9 and PE import names
+  from pefile 2024.8.26. These are tool tests, not TPTests or a runtime save proof.
+
+The live save-path vtable slot matched its reviewed disk target. Other captured
+functions include existing installed hooks: `Save_Impl` starts with a detour,
+and its SKSE call site is patched. Interpret original fall-through code and
+hook call ordering separately; this snapshot does not prove every hook's
+behavior, full loaded-image identity, or a production ABI.
+
+## Address Library discrimination for these targets only
+
+| AE ID | `versionlib-1-6-1170-0.bin` RVA | `versionlib-1-6-1170-0-1.bin` RVA |
+|---:|---:|---:|
+| 255912, BSWin32SaveDataSystemUtility vtable | `0x1AC8CB8` | `0x1AC5688` |
+| 255939, BSSaveDataSystemUtilityFile vtable | `0x1AC9128` | `0x1AC5AF8` |
+
+For the exact executable hash above, the first database's two targets pass
+MSVC RTTI class/locator and executable-slot checks. The second database fails
+the expected locator check. Both supplied together are rejected as ambiguous
+by the diagnostic utility. No Address Library file was renamed or replaced.
+This does not establish a universal database preference or validate all IDs.
+
+## Control flow observed in the loaded code
+
+1. `Save_Impl`, AE ID 35727 / RVA `0x60FD40`, calls `0x60F8E0` at
+   `0x60FF0E`, before the patched SKSE save-hook call at `0x60FFF3`.
+2. `0x60F8E0` invokes the utility's virtual slot 2 at `0x60F94A`, supplying
+   a 0x104-byte path buffer. The verified slot points to `PrepareFileSavePath`
+   at `0x15302A0`. It passes this resulting path to `0x152E2E0` at `0x60FA4F`.
+3. `PrepareFileSavePath` reads path pointers while executing (`0x15302D8`,
+   `0x15302F1`) and builds the output with imported string functions. A late
+   setting override inside the SKSE hook cannot retroactively change the path
+   already selected by this earlier call.
+4. After the SKSE hook returns, `Save_Impl` has a branch that constructs an
+   object whose disk RTTI is `bgs::saveload::SaveOperationRequest`, stores the
+   save-buffer pointer at `+0x148`, and submits it at `0x6102E7`. Another
+   branch calls the utility's virtual slot 7 at `0x610359`.
+5. Slot 7 resolves to `0x152FD60`. It uses the buffer path at `+0x64`, opens a
+   file through `0xCFB3B0`, writes through `0xCFBC40`, calls the destructor at
+   `0x152FE1C`, then constructs and dispatches the save-data event at
+   `0x152FE35` / `0x152FE44`.
+6. The manager's save-data event handler, RVA `0x6138A0`, calls
+   `PrepareFileSavePath` again at `0x6139A8` and performs backup/final rename
+   operations at `0x613AB4` and `0x613ACE`.
+
+This is a code-order finding, not an event trace collected during a save.
+It identifies **multiple path-resolution phases** and shows why the old
+temporary `sLocalSavePath` assignment around `SaveGame_HookTarget` cannot be
+accepted as request-wide isolation.
+
+## Why the native event is insufficient as a success certificate
+
+- `0xCFBC40` calls imported `WriteFile` at `0xCFBC6F`, reports an API failure
+  as a nonzero result, and exposes bytes-written through an output pointer.
+  The inspected slot-7 caller uses the result but does not compare that byte
+  count with the requested size before constructing its event status.
+- `0xCFB400` calls `0xCFBFA0`. The latter calls imported `CloseHandle` at
+  `0xCFBFB3`; the destructor/event path does not propagate a checked close
+  result. No explicit flush is present in this inspected write/close chain.
+- The manager's observed `rename` calls are followed by further instructions
+  without checking their return value. Event receipt alone therefore does
+  not certify successful final-name publication, much less power-loss durability.
+
+These observations do not assert that disk-full, short-write, or rename failure
+actually happened in this session. They establish missing proof in promoting
+the native event to the project's stronger completion capability.
+
+## Required implementation boundary
+
+The next provider must route every matching path-resolution phase from an
+owned immutable request, including co-save path construction and final rename.
+It must retain that request until file closure and final publication are
+checked, including the queued branch. A scoped global-setting swap and the
+existing worker-return flag are not suitable implementations.
+
+Before enabling it, demonstrate checked create/write/byte count/flush/close/
+rename results, failure propagation, cancellation and request retirement;
+then execute overlapping-save and fault tests on an isolated disposable root.
+The event structure's observed offsets are research findings, not permission
+to install a speculative event sink or change the production bridge ABI.
+
+## Research-provider safety correction
+
+Local SKSE research commit `6faa561ca4f71d6f3ef88d6ec5f1700d9ba90c7f`
+on `codex/task07-checked-cosave` rejects isolated-save admission before reading
+request fields or publishing pending state. The hook no longer temporarily
+changes `sLocalSavePath` or retires a request at hook return. It retains the
+ordinary SKSE save sequence and reports zero in the legacy `workerReturned`
+field: the native ESS completion outcome is still unknown. The separately
+checked co-save outcome is not promoted to ESS success.
+
+- Full MSVC v143 x64 Release SKSE DLL build succeeded, Windows SDK 10.0.26100.0.
+- Four structural regression tests passed: admission remains disabled before
+  request access; no hook-time global path swap/early retirement; ordinary
+  save-call ordering remains once; the event does not certify ESS completion.
+  These are source-shape tests, not dynamic engine-save tests.
+- DLL SHA256:
+  `A3F30BD9AE7D94FD99DE3BD075F396894C3DA4A6A34DA40C0CC54D581A27643E`.
+- Output stays in `D:\Codex\Artifacts\task07-checked-cosave`; **not installed**.
+  No research commit was pushed to the upstream SKSE repository.
+- The STR production capture policy and native mutation policy remain disabled.
+  STR TPTests were not rerun for this documentation update; the SKSE build is
+  not a substitute for the four STR CI checks or live save validation.
+
+## Exact-runtime provider gate added after the inspection
+
+Research commit `c1c853d9d5d4ee1afdc704d34e936b918beb9cd3`
+adds a non-authorizing capability query. It verifies the reviewed 1.6.1170
+save-utility vtable slot and byte sequences for initial path preparation,
+utility save, native write and close, the late path call, and both rename call
+sites. Any mismatch returns false before isolated-save admission. It installs
+no new hook and leaves `kRequestWideIsolationProven` false.
+
+The verified BSWin32 save-utility vtable contains 18 slots. Its path method is
+slot 2 (`0x15302A0`); the Save_Impl branch invokes slot 7 (`0x152FD60`). Slots
+7 and 12 contain closely related write-and-event paths, while slots 5, 8 and 9
+perform other file/event operations. This broader map prevents treating one
+observed writer as the entire utility contract.
+
+- Full MSVC v143 x64 Release build passed.
+- Five native exact-byte matcher checks passed, including mismatch/null/empty
+  rejection and unavailable-runtime rejection.
+- Four hook safety regression checks passed.
+- Resulting research DLL SHA256:
+  `41CFEAC614EB1B9A3D8D6BAED4612F53D9F70F24260E24C5596C4D640534CB19`.
+- The DLL remains outside the game installation. The research branch is local
+  and was not pushed to the upstream SKSE repository.
+
+Task 7 still lacks a completed-save trace and the actual request-owned provider.
+P0 NOT CLOSED.
+
+## Portable command binding evidence (2026-09-20)
+
+The portable client now owns one move-only authenticated capability containing
+the Begin, Cancel, and dequeue exports from the same path-checked and pinned PE
+image. It never returns a naked export pointer. Begin encodes the fixed 480-byte
+request locally, derives the isolated path only from validated campaign/profile
+identity, revalidates the registration token, and holds the exact runtime
+generation lease across the native call. Cancel applies the same token and
+generation checks. A C++ exception or Windows structured exception makes the
+result uncertain and permanently poisons the capability. A normal native
+rejection remains a deterministic fail-closed rejection.
+
+The command capability remains deliberately absent from production bootstrap.
+Its owner must serialize Begin, Cancel, PollAndRoute, and Invalidate and must
+provide callback/native-call quiescence before teardown. That serialization and
+quiescence primitive belongs to P0-C; this Task 7 branch does not invent a
+second lifecycle domain.
+
+Portable commit `c72560009bc456216afc935fa98e5b489d003a25` is FULL GREEN:
+
+- Build Linux: success, run `35470419618`;
+- Build Windows: success, run `35470420865`;
+- diagnostics Linux: success, 168278 assertions / 676 test cases;
+- diagnostics Windows: success, 168269 assertions / 676 test cases;
+- diagnostics run: `35470418194`.
+
+The immediately preceding exact request-encoding commit
+`20b9652b10e621b585db2277d8a909c71622585f` is also FULL GREEN with 168277
+assertions / 675 cases on Linux and 168268 assertions / 675 cases on Windows.
+
+## Exact remaining Task 7 gate
+
+Static/source work cannot prove that the real 1.6.1170 engine and SKSE writers
+produce the asserted observations. Closing Task 7 now requires an explicitly
+identified research artifact and an isolated live run that records one exact
+request from admission through retirement. The evidence must show:
+
+1. the `.ess` and `.skse` paths both remain beneath the request-derived
+   campaign/profile root;
+2. ordinary manual, auto, and quick saves retain their ordinary paths;
+3. each checked close and final-name publication belongs to the same immutable
+   request identity;
+4. retirement occurs only after the synchronous writer chain has returned and
+   no request-owned writer can issue further I/O;
+5. cancel, writer failure, LoadGame/MainMenu, and shutdown remain fail-closed;
+6. the portable consumer receives the full contiguous event sequence and does
+   not accept a stale generation or partial prefix.
+
+The native compile-time production gate remains false. It must not be flipped
+in a distributable build merely to manufacture this evidence. A research-only
+activation mechanism needs an unmistakable non-production identity and must be
+installable only into the isolated 1.6.1170/MO2 environment. Until that live
+evidence and the P0-C owner/quiescence primitive exist, Task 7 and Task 8 remain
+open and engine PreRepair capture remains disabled.
+
+## Offline exact-binary follow-up, 2026-09-18
+
+The exact `SkyrimSE.exe` above was inspected without launching Skyrim. The
+SteamStub 3.1 header was decoded with the reviewed launcher algorithm and its
+AES fields were used to decrypt a temporary in-memory copy of `.text`; the game
+file was not modified. Header signature `0xC0DEC0DF`, original entry point
+`0x153BC64`, code RVA `0x1000`, code size `0x174DA00`, and zero DRM flags were
+recovered from the exact binary.
+
+This closes the previously missing normal queued-control-flow proof for that
+binary:
+
+1. `Save_Impl` constructs a 0x150-byte `SaveOperationRequest`, gives it the
+   operation discriminator `0x40000001`, stores the save-buffer pointer at
+   `+0x148`, and submits it at `0x6102E7`.
+2. The queue worker at `0x617820` selects discriminator `0x40000001` and, at
+   `0x617905`, loads that exact `+0x148` buffer.
+3. The worker calls the save utility's slot 7 at `0x617962` and only after that
+   call returns invokes the request's virtual destructor at `0x617985`.
+4. Address Library AE ID 206598 resolves the request vtable to `0x188CFE0` for
+   the accepted `versionlib-1-6-1170-0.bin`; its first slot is the scalar
+   destructor at `0x61B740`. The destructor clears its retained operation state,
+   runs the base cleanup and conditionally frees the 0x150-byte request.
+
+Local research commits on `codex/task07-checked-cosave` now bind the immutable
+reservation to the exact buffer returned by `CreateSaveBuffer`, retire normal
+work only after checked slot-7 return, and use the identity-bound request
+destructor as the no-writer/discard drain boundary. A destructor belonging to
+an ordinary or different save buffer cannot retire the reserved request. The
+enqueue hook additionally binds the exact `SaveOperationRequest` address, so a
+later allocation that reuses only the buffer address cannot pass retirement
+validation. If slot 7 returns before any checked write/close/rename hook (for
+example, because file creation failed), the provider emits a terminal ESS
+failure before request retirement instead of leaving the portable contract
+pending. Hook installation reserves the complete 66 trampoline bytes and verifies
+every patched pointer/call target before publishing provider readiness.
+
+Latest local native commit at the time of this note: `e5dc7eb`. Full MSVC v143
+x64 Release build succeeded; 17 structural safety tests and the native
+state/target executable passed. DLL SHA256:
+`D54718A4B8CFB38FD60172882E059F3B2BC7AA338FBDE9526C88AD0A6F04088F`.
+
+This remains research evidence, not production authorization. The provider is
+still compile-time disabled. Fault-injection, overlapping-save, authenticated
+bridge/lifecycle ownership, isolated live `.ess`/`.skse` validation and the
+Task 8 durability proof remain required. P0 NOT CLOSED.
+
+## Portable authorization and routing follow-up, 2026-09-19
+
+Local branch `codex/task07-save-event-adapter` now contains one fail-closed
+portable route from decoded native events to finalization. PQS3 always flows
+through adapter, logical contract and finalization gate; PQS4 is decoded and
+routed directly to the gate, which is the sole owner allowed to retire the
+logical contract. The former adapter API that independently retired the
+contract was removed.
+
+The route also requires a current move-only provider-registration token bound
+to the exact registration instance and runtime generation. The fixed provider
+descriptor requires event ABI v2, the complete PQS3/PQS4 and checked-I/O
+capability set, the exact implementation fingerprint and the currently proven
+Skyrim 1.6.1170 runtime tuple. Descriptor compatibility is explicitly not
+module/source authentication; `RegisterAuthenticated` may only be called by a
+future trusted loader after it establishes the module and export identity.
+Invalidation revokes authority immediately, and an old token cannot regain it
+after same-generation re-registration.
+
+Latest portable commit at the time of this note: `bd12080d`. The focused MSVC
+test executable passed 1131 assertions in 44 test cases. No Skyrim process was
+launched and no provider was installed or enabled.
+
+Still required before production wiring: trusted module/export resolution,
+validated callback registration and lifetime, serialized callback handoff
+under the existing generation fence, and P0-C-owned unregister/quiescence on
+shutdown. A descriptor or structurally valid payload alone grants no source
+authority. Task 7 and Task 8 remain open; P0 NOT CLOSED.
+
+### Native descriptor export follow-up
+
+Native research commits `2d94456` and `fb8092a` add the fixed 64-byte
+`PartyQuestSKSE_GetSaveProviderDescriptor` export with the same ABI version,
+implementation version, capability mask, 1.6.1170 runtime tuple and provider
+fingerprint required by the portable policy. The export is fail-closed: it
+zeroes the caller's correctly sized output and returns false unless the native
+provider has already published verified readiness. An invalid pointer/size or
+the compile-time-disabled provider cannot produce an approved descriptor.
+
+The full MSVC v143 x64 Release DLL build, all 17 structural tests and the
+native descriptor/state executable passed. `dumpbin /exports` confirmed both
+`PartyQuestSKSE_GetSaveProviderDescriptor` and the legacy readiness export in
+the built DLL. DLL SHA256:
+`16A4EC6C88DA3842931351E105D0AD31265096CCA7E8C314E52093416D9EAF2E`.
+
+The DLL was not loaded into a non-Skyrim process, installed or executed.
+Descriptor presence is compatibility evidence only. Trusted resolution of the
+already loaded module, callback registration ownership and unload/quiescence
+remain external blockers; the provider remains disabled.
+
+## Trusted loaded-module resolver follow-up
+
+The STR client now has an intentionally unwired Windows resolver boundary in
+`PartyQuestSkyrimNativeSaveProviderResolver`. The future bootstrap must pass its
+already-trusted Skyrim installation directory. The resolver never calls
+`LoadLibrary`: it acquires only the already-loaded `skse64_1_6_1170.dll`, resolves
+both the reported and expected file to their final handle paths, requires an
+exact case-insensitive match, requires the fixed descriptor export to point into
+the same committed executable PE image, checks the loaded VersionDb runtime,
+holds the current generation lease, SEH-contains the foreign descriptor call,
+applies the exact descriptor policy, registers the authority, and pins the
+accepted module. A failed registration does not pin the module; a pin failure
+revokes the newly issued registration.
+
+This closes descriptor-origin confusion at the client adapter boundary but does
+not register callbacks, enable capture, or prove unload/shutdown quiescence.
+Those remain production bootstrap/P0-C work. The check also deliberately does
+not claim that a pathname proves the historical on-disk bytes from which Windows
+mapped the image; source trust still begins at the SKSE loader, while export
+range, runtime, descriptor and generation checks constrain what that loaded
+module can authorize.
+
+The resolver translation unit was compiled locally with the installed MSVC
+19.44 toolchain in C++20 mode under `/W4 /WX /Zs`, using only narrow stubs for
+the project PCH and `VersionDb`; the real resolver/header, native-provider ABI
+and generation-fence headers were compiled unchanged. This proves the new
+Windows/SEH code is warning-clean and type-correct, but is not a substitute for
+the full client link or TPTests. A full xmake client build was deliberately not
+allowed to start downloading its large missing dependency set (including CEF).
+
+## Production event-ingress gap
+
+Repository-wide tracing confirms that the native research provider currently
+emits PQS3/PQS4 through SKSE's internal `PluginManager::Dispatch_Message`, while
+the STR client has no SKSE messaging-listener registration and contains no
+production caller of the native save capability. The authenticated pinned
+capability now resolves Begin, Cancel, and dequeue from the same verified PE
+image. Begin derives its fixed request ABI without a caller-controlled path;
+Begin and Cancel revalidate the provider token and hold the exact runtime
+generation lease across the foreign call. C++ and Windows structured
+exceptions are contained, and an uncertain call poisons the capability.
+These methods remain deliberately unwired, so the portable decoder/router is
+not yet reachable from production. Descriptor authentication alone does not
+close this gap.
+
+Returning raw event callbacks or provider function pointers from the resolver
+would create callback-after-unload and shutdown races. The next integration
+slice must define one owned ingress primitive with explicit unregister/drain
+semantics (P0-C), or a lossless pull/snapshot contract that preserves exact
+PQS3/PQS4 identity and retirement semantics without callbacks. Until that
+primitive is independently proved, the resolver remains unwired and the native
+provider remains disabled.
+
+The current native dispatch path is additionally not lossless:
+`ObserveAndDispatchArtifact` and `DispatchAndRetireRequest` ignore the boolean
+returned by `DispatchPartyQuestMessage`. The reservation may therefore be
+retired even when PQS4 was not delivered, permanently stranding a portable
+request. Merely registering an SKSE listener would not repair this invariant.
+The preferred follow-up is a provider-owned, bounded pull queue: the single
+active request can produce at most four unique artifact transitions plus one
+retirement event; admission of the next request must remain closed until those
+events are drained. This avoids foreign callbacks entirely while preserving the
+existing PQS3/PQS4 payload ABI. Queue overflow, consumer absence, duplicate
+polling and generation invalidation must all fail closed and be regression
+tested before production wiring.
+
+## Lossless pull ingress follow-up, 2026-09-19
+
+Native research commits `a97e916` and `df4f5d3` replace callback delivery as
+the required ingress with a provider-owned fixed-capacity queue. Its capacity
+is exactly five: at most four unique artifact transitions and one request
+retirement. Enqueue and reservation retirement share the reservation lock, a
+new request is rejected until the prior queue is drained, overflow or sequence
+exhaustion poison the provider, and the exported dequeue status distinguishes
+`Dequeued`, normal `Empty`, caller `Invalid`, and provider `Poisoned`.
+The fixed envelope is 256 bytes and contains transport ABI, exact size, PQS3 or
+PQS4 message type, exact payload size, a nonzero sequence and a zero-filled
+232-byte payload area. The provider remains compile-time disabled.
+
+The native full MSVC v143 x64 Release build passed, all 21 structural tests and
+the native state/queue executable passed, and `dumpbin` confirmed
+`PartyQuestSKSE_TryDequeueSaveEvent`. DLL SHA256 after the explicit dequeue
+status hardening:
+`E7F8E66F28953A20A5982F804A1D3E5604804637C0B3DB83DF9E180551669E59`.
+No DLL was installed and Skyrim was not launched.
+
+The portable branch now has a pure transport consumer that copies the complete
+envelope before validation, requires exact ABI/type/payload size and zero tail,
+rejects replay and sequence gaps, and routes only through the existing
+generation/token/identity-aware PQS3/PQS4 router. The Windows resolver also
+authenticates the dequeue export as part of the same pinned PE image. It returns
+one move-only opaque poll binding that privately owns the function pointer,
+provider token, registered generation and sequence state. Every poll acquires
+the matching runtime-generation execution lease across the contained foreign
+call and portable routing. No naked function pointer or callback is exposed.
+The registration-scoped stream must start at sequence 1 and remain contiguous.
+Any native fault, invalid/poisoned dequeue status, malformed already-dequeued
+envelope, replay, gap or rejected route permanently poisons that binding; it
+cannot resume from an unknowable queue position.
+
+The strict initial sequence also means a fresh binding cannot silently attach
+mid-stream. Re-registration after a previously used native queue remains
+fail-closed until the lifecycle owner can prove a drained/reset queue or pass an
+authenticated baseline. This is preferable to accepting an undetectably lost
+prefix.
+
+This ingress remains intentionally unwired. A production lifecycle owner must
+serialize registration, polling and invalidation and define when polling stops;
+that is a P0-C dependency, not authorization to enable capture here. Real
+PreRepair capture, `SetStage`, aliases, inventory and generic world mutation all
+remain disabled. Task 7 and Task 8 remain open; P0 NOT CLOSED.

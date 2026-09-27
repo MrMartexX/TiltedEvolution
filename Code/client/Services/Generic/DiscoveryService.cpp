@@ -17,6 +17,7 @@
 #include <Events/LocationChangeEvent.h>
 #include <Events/ConnectedEvent.h>
 #include <Events/ConnectionErrorEvent.h>
+#include <Structs/Skyrim/PartyQuestExternalSinkLifetime.h>
 
 #include <World.h>
 
@@ -27,11 +28,26 @@ DiscoveryService::DiscoveryService(World& aWorld, entt::dispatcher& aDispatcher)
     m_preUpdateConnection = m_dispatcher.sink<PreUpdateEvent>().connect<&DiscoveryService::OnUpdate>(this);
     m_connectedConnection = m_dispatcher.sink<ConnectedEvent>().connect<&DiscoveryService::OnConnected>(this);
 
-    EventDispatcherManager::Get()->loadGameEvent.RegisterSink(this);
+    if (auto* pEventList = EventDispatcherManager::Get())
+    {
+        m_pLoadGameDispatcher = &pEventList->loadGameEvent;
+        m_pLoadGameDispatcher->RegisterSink(this);
+    }
+}
+
+DiscoveryService::~DiscoveryService() noexcept
+{
+    PartyQuestReleaseExternalSink(m_pLoadGameDispatcher, this);
 }
 
 void DiscoveryService::VisitCell(bool aForceTrigger) noexcept
 {
+    // Cell/worldspace identities cannot be translated until the server has
+    // published a complete mod mapping. Readiness is expected to be false
+    // before connecting, so do not retry and log the same lookup every frame.
+    if (!m_world.GetModSystem().IsReady())
+        return;
+
     const PlayerCharacter* pPlayer = PlayerCharacter::Get();
     if (!pPlayer)
         return;

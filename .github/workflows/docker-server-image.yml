@@ -32,7 +32,7 @@ jobs:
             arch: arm64
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # We need full history in order to create a version string (BuildInfo.h)
           fetch-depth: 0
@@ -84,7 +84,7 @@ jobs:
           echo "${digest#sha256:}" > "/tmp/digests/${{ matrix.arch }}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: digests-${{ matrix.runner }}
           path: /tmp/digests/*
@@ -99,7 +99,7 @@ jobs:
 
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: /tmp/digests
           pattern: digests-*
