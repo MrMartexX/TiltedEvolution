@@ -2,6 +2,7 @@
 
 #include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
 #include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
+#include <Structs/Skyrim/PartyQuestPreRepairAuthorizationCommit.h>
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
 
 #include <cstddef>
@@ -22,7 +23,8 @@ enum class PartyQuestRuntimeCheckpointStatus : uint8_t
     InvalidCoverageAuthorization,
     SnapshotFailed,
     DurablePromotionFailed,
-    RuntimeStatePersistenceFailed
+    RuntimeStatePersistenceFailed,
+    AuthorizationCommitFailed
 };
 
 /**
@@ -39,27 +41,25 @@ public:
 
     [[nodiscard]] bool IsVerified() const noexcept { return m_verified; }
     [[nodiscard]] uint64_t GetTransactionId() const noexcept { return m_transactionId; }
-    [[nodiscard]] uint64_t GetTargetWorldRevision() const noexcept
-    {
-        return m_targetWorldRevision;
-    }
+    [[nodiscard]] uint64_t GetTargetWorldRevision() const noexcept { return m_targetWorldRevision; }
+    [[nodiscard]] uint64_t GetRuntimeGeneration() const noexcept { return m_runtimeGeneration; }
+    [[nodiscard]] uint64_t GetCaptureEpochId() const noexcept { return m_captureEpochId; }
+    [[nodiscard]] bool HasStrongAuthorization() const noexcept { return m_runtimeGeneration != 0 && m_captureEpochId != 0; }
 
-    [[nodiscard]] bool Matches(
-        uint64_t aTransactionId,
-        uint64_t aTargetWorldRevision,
-        const PartyQuestReplicaCopyPlan& acPlan) const noexcept;
+    [[nodiscard]] bool Matches(uint64_t aTransactionId, uint64_t aTargetWorldRevision, const PartyQuestReplicaCopyPlan& acPlan) const noexcept;
 
 private:
-    PartyQuestRuntimeCheckpointCoverageAuthorization(
-        uint64_t aTransactionId,
-        uint64_t aTargetWorldRevision,
-        const PartyQuestReplicaCopyPlan& acPlan) noexcept;
+    PartyQuestRuntimeCheckpointCoverageAuthorization(uint64_t aTransactionId, uint64_t aTargetWorldRevision, const PartyQuestReplicaCopyPlan& acPlan) noexcept;
 
-    [[nodiscard]] static uint64_t ComputePlanFingerprint(
-        const PartyQuestReplicaCopyPlan& acPlan) noexcept;
+    PartyQuestRuntimeCheckpointCoverageAuthorization(
+        uint64_t aTransactionId, uint64_t aTargetWorldRevision, uint64_t aRuntimeGeneration, uint64_t aCaptureEpochId, const PartyQuestReplicaCopyPlan& acPlan) noexcept;
+
+    [[nodiscard]] static uint64_t ComputePlanFingerprint(const PartyQuestReplicaCopyPlan& acPlan) noexcept;
 
     uint64_t m_transactionId{};
     uint64_t m_targetWorldRevision{};
+    uint64_t m_runtimeGeneration{};
+    uint64_t m_captureEpochId{};
     uint64_t m_planFingerprint{};
     size_t m_operationCount{};
     bool m_verified{};
@@ -71,23 +71,15 @@ private:
 
 struct PartyQuestRuntimeCheckpointResult
 {
-    PartyQuestRuntimeCheckpointStatus Status{
-        PartyQuestRuntimeCheckpointStatus::InvalidRuntimeState};
-    PartyQuestReplicaSnapshotStatus SnapshotStatus{
-        PartyQuestReplicaSnapshotStatus::InvalidPlan};
-    PartyQuestReplicaDurableSnapshotStatus DurableSnapshotStatus{
-        PartyQuestReplicaDurableSnapshotStatus::ManifestInvalid};
-    PartyQuestRuntimeDurableTransitionStatus RuntimeTransition{
-        PartyQuestRuntimeDurableTransitionStatus::InvalidState};
+    PartyQuestRuntimeCheckpointStatus Status{PartyQuestRuntimeCheckpointStatus::InvalidRuntimeState};
+    PartyQuestReplicaSnapshotStatus SnapshotStatus{PartyQuestReplicaSnapshotStatus::InvalidPlan};
+    PartyQuestReplicaDurableSnapshotStatus DurableSnapshotStatus{PartyQuestReplicaDurableSnapshotStatus::ManifestInvalid};
+    PartyQuestRuntimeDurableTransitionStatus RuntimeTransition{PartyQuestRuntimeDurableTransitionStatus::InvalidState};
     uint64_t TransactionId{};
     uint64_t TargetWorldRevision{};
     std::filesystem::path ManifestPath;
 
-    [[nodiscard]] bool IsReady() const noexcept
-    {
-        return Status == PartyQuestRuntimeCheckpointStatus::Ready ||
-            Status == PartyQuestRuntimeCheckpointStatus::AlreadyReady;
-    }
+    [[nodiscard]] bool IsReady() const noexcept { return Status == PartyQuestRuntimeCheckpointStatus::Ready || Status == PartyQuestRuntimeCheckpointStatus::AlreadyReady; }
 };
 
 /**
@@ -127,9 +119,6 @@ class PartyQuestRuntimeCheckpointCoordinator final
 {
 public:
     [[nodiscard]] static PartyQuestRuntimeCheckpointResult EnsurePreRepairCheckpoint(
-        PartyQuestRuntimeApplySession& aSession,
-        const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestReplicaCopyPlan& acCheckpointPlan,
-        const PartyQuestRuntimeCheckpointCoverageAuthorization& acCoverage,
-        const PartyQuestReplicaWorkspacePublicationCapability* apPublicationCapability = nullptr) noexcept;
+        PartyQuestRuntimeApplySession& aSession, const PartyQuestCoopSavePaths& acPaths, const PartyQuestReplicaCopyPlan& acCheckpointPlan,
+        const PartyQuestRuntimeCheckpointCoverageAuthorization& acCoverage, const PartyQuestReplicaWorkspacePublicationCapability* apPublicationCapability = nullptr) noexcept;
 };

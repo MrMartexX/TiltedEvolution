@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestRuntimePreRepairCheckpoint.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 
 #include <algorithm>
 #include <string>
@@ -19,8 +20,7 @@ void HashBytes(uint64_t& aHash, const void* apData, size_t aSize) noexcept
     }
 }
 
-template <class T>
-void HashValue(uint64_t& aHash, const T& acValue) noexcept
+template <class T> void HashValue(uint64_t& aHash, const T& acValue) noexcept
 {
     static_assert(std::is_trivially_copyable_v<T>);
     HashBytes(aHash, &acValue, sizeof(T));
@@ -34,8 +34,7 @@ void HashString(uint64_t& aHash, const std::string& acValue) noexcept
         HashBytes(aHash, acValue.data(), acValue.size());
 }
 
-uint64_t FingerprintFiles(
-    const std::vector<PartyQuestReplicaFileSpec>& acFiles) noexcept
+uint64_t FingerprintFiles(const std::vector<PartyQuestReplicaFileSpec>& acFiles) noexcept
 {
     try
     {
@@ -44,19 +43,21 @@ uint64_t FingerprintFiles(
         for (const auto& file : acFiles)
             ordered.push_back(&file);
 
-        std::sort(ordered.begin(), ordered.end(), [](const auto* apLeft, const auto* apRight)
-        {
-            const std::string leftRelative = apLeft->RelativePath.lexically_normal().generic_string();
-            const std::string rightRelative = apRight->RelativePath.lexically_normal().generic_string();
-            if (leftRelative != rightRelative)
-                return leftRelative < rightRelative;
+        std::sort(
+            ordered.begin(), ordered.end(),
+            [](const auto* apLeft, const auto* apRight)
+            {
+                const std::string leftRelative = apLeft->RelativePath.lexically_normal().generic_string();
+                const std::string rightRelative = apRight->RelativePath.lexically_normal().generic_string();
+                if (leftRelative != rightRelative)
+                    return leftRelative < rightRelative;
 
-            const std::string leftSource = apLeft->SourcePath.lexically_normal().generic_string();
-            const std::string rightSource = apRight->SourcePath.lexically_normal().generic_string();
-            if (leftSource != rightSource)
-                return leftSource < rightSource;
-            return static_cast<uint8_t>(apLeft->Kind) < static_cast<uint8_t>(apRight->Kind);
-        });
+                const std::string leftSource = apLeft->SourcePath.lexically_normal().generic_string();
+                const std::string rightSource = apRight->SourcePath.lexically_normal().generic_string();
+                if (leftSource != rightSource)
+                    return leftSource < rightSource;
+                return static_cast<uint8_t>(apLeft->Kind) < static_cast<uint8_t>(apRight->Kind);
+            });
 
         uint64_t hash = kFnvOffset;
         const uint64_t count = static_cast<uint64_t>(ordered.size());
@@ -78,20 +79,12 @@ uint64_t FingerprintFiles(
     }
 }
 
-bool IsInsideNamespace(
-    const std::filesystem::path& acRoot,
-    const std::filesystem::path& acSource) noexcept
+bool IsInsideNamespace(const std::filesystem::path& acRoot, const std::filesystem::path& acSource) noexcept
 {
-    return !acRoot.empty() &&
-        !acSource.empty() &&
-        acRoot.is_absolute() &&
-        acSource.is_absolute() &&
-        PartyQuestReplicaFilePlanner::IsContainedBy(acRoot, acSource);
+    return !acRoot.empty() && !acSource.empty() && acRoot.is_absolute() && acSource.is_absolute() && PartyQuestReplicaFilePlanner::IsContainedBy(acRoot, acSource);
 }
 
-bool ValidateCoreFiles(
-    const PartyQuestCoopSavePaths& acPaths,
-    const std::vector<PartyQuestReplicaFileSpec>& acFiles) noexcept
+bool ValidateCoreFiles(const PartyQuestCoopSavePaths& acPaths, const std::vector<PartyQuestReplicaFileSpec>& acFiles) noexcept
 {
     try
     {
@@ -102,26 +95,17 @@ bool ValidateCoreFiles(
 
         for (const auto& file : acFiles)
         {
-            if (file.SourcePath.empty() ||
-                file.RelativePath.empty() ||
-                file.Digest == 0 ||
-                !PartyQuestReplicaFilePlanner::IsSafeRelativePath(file.RelativePath) ||
-                file.RelativePath.has_parent_path() ||
-                !IsInsideNamespace(acPaths.SavesDirectory, file.SourcePath))
+            if (file.SourcePath.empty() || file.RelativePath.empty() || file.Digest == 0 || !PartyQuestReplicaFilePlanner::IsSafeRelativePath(file.RelativePath) ||
+                file.RelativePath.has_parent_path() || !IsInsideNamespace(acPaths.SavesDirectory, file.SourcePath))
             {
                 return false;
             }
 
             switch (file.Kind)
             {
-            case PartyQuestReplicaFileKind::SkyrimSave:
-                ++essCount;
-                break;
-            case PartyQuestReplicaFileKind::SkseCosave:
-                ++skseCount;
-                break;
-            case PartyQuestReplicaFileKind::ExternalSidecar:
-                return false;
+            case PartyQuestReplicaFileKind::SkyrimSave: ++essCount; break;
+            case PartyQuestReplicaFileKind::SkseCosave: ++skseCount; break;
+            case PartyQuestReplicaFileKind::ExternalSidecar: return false;
             }
         }
 
@@ -133,22 +117,15 @@ bool ValidateCoreFiles(
     }
 }
 
-bool ValidateSidecarFiles(
-    const PartyQuestCoopSavePaths& acPaths,
-    const std::vector<PartyQuestReplicaFileSpec>& acFiles) noexcept
+bool ValidateSidecarFiles(const PartyQuestCoopSavePaths& acPaths, const std::vector<PartyQuestReplicaFileSpec>& acFiles) noexcept
 {
     try
     {
-        const std::filesystem::path externalRoot =
-            acPaths.SidecarsDirectory / "external";
+        const std::filesystem::path externalRoot = acPaths.SidecarsDirectory / "external";
         for (const auto& file : acFiles)
         {
-            if (file.Kind != PartyQuestReplicaFileKind::ExternalSidecar ||
-                file.SourcePath.empty() ||
-                file.RelativePath.empty() ||
-                file.Digest == 0 ||
-                !PartyQuestReplicaFilePlanner::IsSafeRelativePath(file.RelativePath) ||
-                !IsInsideNamespace(externalRoot, file.SourcePath))
+            if (file.Kind != PartyQuestReplicaFileKind::ExternalSidecar || file.SourcePath.empty() || file.RelativePath.empty() || file.Digest == 0 ||
+                !PartyQuestReplicaFilePlanner::IsSafeRelativePath(file.RelativePath) || !IsInsideNamespace(externalRoot, file.SourcePath))
             {
                 return false;
             }
@@ -162,88 +139,55 @@ bool ValidateSidecarFiles(
 }
 } // namespace
 
-uint64_t PartyQuestRuntimePreRepairCoreAuthorization::ComputeFilesFingerprint(
-    const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept
+uint64_t PartyQuestRuntimePreRepairCoreAuthorization::ComputeFilesFingerprint(const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept
 {
     return FingerprintFiles(acCoreFiles);
 }
 
-PartyQuestRuntimePreRepairCoreAuthorization::
-PartyQuestRuntimePreRepairCoreAuthorization(
-    uint64_t aTransactionId,
-    uint64_t aTargetWorldRevision,
-    const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept
+PartyQuestRuntimePreRepairCoreAuthorization::PartyQuestRuntimePreRepairCoreAuthorization(
+    uint64_t aTransactionId, uint64_t aTargetWorldRevision, const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept
     : m_transactionId(aTransactionId)
     , m_targetWorldRevision(aTargetWorldRevision)
     , m_filesFingerprint(ComputeFilesFingerprint(acCoreFiles))
     , m_fileCount(acCoreFiles.size())
-    , m_verified(
-          aTransactionId != 0 &&
-          aTargetWorldRevision != 0 &&
-          !acCoreFiles.empty() &&
-          m_filesFingerprint != 0)
+    , m_verified(aTransactionId != 0 && aTargetWorldRevision != 0 && !acCoreFiles.empty() && m_filesFingerprint != 0)
 {
 }
 
-PartyQuestRuntimePreRepairCoreAuthorization::
-PartyQuestRuntimePreRepairCoreAuthorization(
-    const PartyQuestCheckpointCaptureEpoch& acEpoch,
-    const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept
+PartyQuestRuntimePreRepairCoreAuthorization::PartyQuestRuntimePreRepairCoreAuthorization(
+    const PartyQuestCheckpointCaptureEpoch& acEpoch, const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept
     : m_captureEpochId(acEpoch.GetEpochId())
+    , m_runtimeGeneration(PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration())
     , m_transactionId(acEpoch.GetTransactionId())
     , m_targetWorldRevision(acEpoch.GetTargetWorldRevision())
     , m_sidecarManifestFingerprint(acEpoch.GetSidecarManifestFingerprint())
     , m_filesFingerprint(ComputeFilesFingerprint(acCoreFiles))
     , m_fileCount(acCoreFiles.size())
     , m_verified(
-          acEpoch.IsVerified() &&
-          !acEpoch.IsExpired() &&
-          m_captureEpochId != 0 &&
-          m_transactionId != 0 &&
-          m_targetWorldRevision != 0 &&
-          m_sidecarManifestFingerprint != 0 &&
-          !acCoreFiles.empty() &&
-          m_filesFingerprint != 0)
+          acEpoch.IsVerified() && !acEpoch.IsExpired() && m_captureEpochId != 0 && m_runtimeGeneration != 0 && m_transactionId != 0 && m_targetWorldRevision != 0 &&
+          m_sidecarManifestFingerprint != 0 && !acCoreFiles.empty() && m_filesFingerprint != 0)
 {
 }
 
 bool PartyQuestRuntimePreRepairCoreAuthorization::Matches(
-    uint64_t aTransactionId,
-    uint64_t aTargetWorldRevision,
-    const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) const noexcept
+    uint64_t aTransactionId, uint64_t aTargetWorldRevision, const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) const noexcept
 {
-    return m_verified &&
-        aTransactionId == m_transactionId &&
-        aTargetWorldRevision == m_targetWorldRevision &&
-        acCoreFiles.size() == m_fileCount &&
-        ComputeFilesFingerprint(acCoreFiles) == m_filesFingerprint;
+    return m_verified && aTransactionId == m_transactionId && aTargetWorldRevision == m_targetWorldRevision && acCoreFiles.size() == m_fileCount &&
+           ComputeFilesFingerprint(acCoreFiles) == m_filesFingerprint;
 }
 
-bool PartyQuestRuntimePreRepairCoreAuthorization::Matches(
-    const PartyQuestCheckpointCaptureEpoch& acEpoch,
-    const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) const noexcept
+bool PartyQuestRuntimePreRepairCoreAuthorization::Matches(const PartyQuestCheckpointCaptureEpoch& acEpoch, const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) const noexcept
 {
-    return m_verified &&
-        m_captureEpochId != 0 &&
-        acEpoch.IsVerified() &&
-        !acEpoch.IsExpired() &&
-        acEpoch.GetEpochId() == m_captureEpochId &&
-        acEpoch.GetTransactionId() == m_transactionId &&
-        acEpoch.GetTargetWorldRevision() == m_targetWorldRevision &&
-        acEpoch.GetSidecarManifestFingerprint() == m_sidecarManifestFingerprint &&
-        acCoreFiles.size() == m_fileCount &&
-        ComputeFilesFingerprint(acCoreFiles) == m_filesFingerprint;
+    return m_verified && m_captureEpochId != 0 && m_runtimeGeneration != 0 && PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration() == m_runtimeGeneration &&
+           acEpoch.IsVerified() && !acEpoch.IsExpired() && acEpoch.GetEpochId() == m_captureEpochId && acEpoch.GetTransactionId() == m_transactionId &&
+           acEpoch.GetTargetWorldRevision() == m_targetWorldRevision && acEpoch.GetSidecarManifestFingerprint() == m_sidecarManifestFingerprint &&
+           acCoreFiles.size() == m_fileCount && ComputeFilesFingerprint(acCoreFiles) == m_filesFingerprint;
 }
 
-PartyQuestRuntimePreRepairCheckpointResult
-PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
-    PartyQuestRuntimeGuardedSession& aGuardedSession,
-    const PartyQuestCoopSavePaths& acPaths,
-    const PartyQuestCheckpointCaptureEpoch& acEpoch,
-    const PartyQuestRuntimePreRepairCoreAuthorization& acCoreAuthorization,
-    const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles,
-    const PartyQuestCheckpointSidecarManifest& acSidecarManifest,
-    const PartyQuestCheckpointSidecarMirrorResult& acSidecars) noexcept
+PartyQuestRuntimePreRepairCheckpointResult PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
+    PartyQuestRuntimeGuardedSession& aGuardedSession, const PartyQuestCoopSavePaths& acPaths, const PartyQuestCheckpointCaptureEpoch& acEpoch,
+    const PartyQuestRuntimePreRepairCoreAuthorization& acCoreAuthorization, const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles,
+    const PartyQuestCheckpointSidecarManifest& acSidecarManifest, const PartyQuestCheckpointSidecarMirrorResult& acSidecars) noexcept
 {
     PartyQuestRuntimePreRepairCheckpointResult result;
 
@@ -251,50 +195,52 @@ PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
     {
         auto& session = aGuardedSession.GetRuntimeSession();
         const auto* active = session.GetCoordinator().GetActive();
-        if (!active ||
-            active->State != PartyQuestRuntimeApplyState::AwaitingCheckpoint ||
-            !active->SaveGuardActive ||
-            active->CheckpointCreated ||
-            active->RuntimeMutationMayHaveOccurred ||
-            active->TransactionId == 0 ||
-            active->TargetWorldRevision == 0 ||
-            active->SidecarManifestFingerprint == 0)
+        if (!active || active->State != PartyQuestRuntimeApplyState::AwaitingCheckpoint || !active->SaveGuardActive || active->CheckpointCreated ||
+            active->RuntimeMutationMayHaveOccurred || active->TransactionId == 0 || active->TargetWorldRevision == 0 || active->SidecarManifestFingerprint == 0)
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidRuntimeState;
             return result;
         }
 
         auto& guard = aGuardedSession.GetSaveGuard();
-        if (!guard.IsActive() ||
-            guard.GetTransactionId() != active->TransactionId)
+        if (!guard.IsActive() || guard.GetTransactionId() != active->TransactionId)
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::GuardMismatch;
             return result;
         }
 
         if (!aGuardedSession.IsCheckpointCaptureEpochActive(acEpoch) ||
-            !acEpoch.MatchesContext(
-                active->TransactionId,
-                active->TargetWorldRevision,
-                active->SidecarManifestFingerprint))
+            !acEpoch.MatchesContext(active->TransactionId, active->TargetWorldRevision, active->SidecarManifestFingerprint))
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidCaptureEpoch;
             return result;
         }
 
-        if (!PartyQuestCoopSaveLayout::Matches(
-                acPaths,
-                session.GetCampaignId(),
-                session.GetPlayerProfileId()))
+        auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+        std::optional<PartyQuestRuntimeGenerationFence::ExecutionLease> generationLease;
+        if (!generationFence.IsExecutionLeaseHeldByCurrentThread())
+        {
+            generationLease = generationFence.TryAcquire(acCoreAuthorization.GetRuntimeGeneration());
+            if (!generationLease || !generationLease->IsValid())
+            {
+                result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidRuntimeGeneration;
+                return result;
+            }
+        }
+        if (generationFence.GetGeneration() != acCoreAuthorization.GetRuntimeGeneration())
+        {
+            result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidRuntimeGeneration;
+            return result;
+        }
+
+        if (!PartyQuestCoopSaveLayout::Matches(acPaths, session.GetCampaignId(), session.GetPlayerProfileId()))
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidRuntimeState;
             return result;
         }
 
-        const uint64_t sidecarManifestFingerprint =
-            acSidecarManifest.ComputeFingerprint();
-        if (sidecarManifestFingerprint == 0 ||
-            sidecarManifestFingerprint != active->SidecarManifestFingerprint ||
+        const uint64_t sidecarManifestFingerprint = acSidecarManifest.ComputeFingerprint();
+        if (sidecarManifestFingerprint == 0 || sidecarManifestFingerprint != active->SidecarManifestFingerprint ||
             sidecarManifestFingerprint != acEpoch.GetSidecarManifestFingerprint())
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::SidecarManifestMismatch;
@@ -307,11 +253,7 @@ PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
             return result;
         }
 
-        if (!acSidecars.IsReady() ||
-            !acSidecars.Authorization.Matches(
-                acSidecarManifest,
-                acEpoch,
-                acSidecars.Files))
+        if (!acSidecars.IsReady() || !acSidecars.Authorization.Matches(acSidecarManifest, acEpoch, acSidecars.Files))
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidSidecarAuthorization;
             return result;
@@ -333,11 +275,7 @@ PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
         files.insert(files.end(), acCoreFiles.begin(), acCoreFiles.end());
         files.insert(files.end(), acSidecars.Files.begin(), acSidecars.Files.end());
 
-        const auto plan = PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(
-            acPaths,
-            PartyQuestCheckpointKind::PreRepair,
-            active->TargetWorldRevision,
-            files);
+        const auto plan = PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(acPaths, PartyQuestCheckpointKind::PreRepair, active->TargetWorldRevision, files);
         result.PlanStatus = plan.Status;
         if (!plan.IsReady())
         {
@@ -346,19 +284,14 @@ PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
         }
 
         const PartyQuestRuntimeCheckpointCoverageAuthorization coverage(
-            active->TransactionId,
-            active->TargetWorldRevision,
-            plan);
+            active->TransactionId, active->TargetWorldRevision, acCoreAuthorization.GetRuntimeGeneration(), acEpoch.GetEpochId(), plan);
         if (!coverage.IsVerified())
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::InvalidCheckpointPlan;
             return result;
         }
 
-        result.Checkpoint = aGuardedSession.EnsurePreRepairCheckpoint(
-            acPaths,
-            plan,
-            coverage);
+        result.Checkpoint = aGuardedSession.EnsurePreRepairCheckpoint(acPaths, plan, coverage);
         if (!result.Checkpoint.IsReady())
         {
             result.Status = PartyQuestRuntimePreRepairCheckpointStatus::CheckpointFailed;

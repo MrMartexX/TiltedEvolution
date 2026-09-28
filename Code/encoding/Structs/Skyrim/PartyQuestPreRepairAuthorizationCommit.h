@@ -8,13 +8,14 @@
 #include <optional>
 #include <vector>
 
+struct PartyQuestRuntimeApplyEntry;
+
 /**
  * Local-only immutable proof that one exact runtime repair authorization was
  * bound to one exact PowerLossDurable PreRepair revision checkpoint.
  *
  * This record is not a network message and grants no mutation authority by
- * itself. RuntimeCheckpoint/RuntimeRecovery integration is intentionally owned
- * by a separate slice.
+ * itself. Runtime checkpoint/recovery consume it only as one conjunctive gate.
  */
 struct PartyQuestPreRepairAuthorizationCommitFile
 {
@@ -59,8 +60,7 @@ enum class PartyQuestPreRepairAuthorizationCommitPersistenceStatus : uint8_t
 
 struct PartyQuestPreRepairAuthorizationCommitLoadResult
 {
-    PartyQuestPreRepairAuthorizationCommitPersistenceStatus Status{
-        PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData};
+    PartyQuestPreRepairAuthorizationCommitPersistenceStatus Status{PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData};
     std::optional<PartyQuestPreRepairAuthorizationCommit> Record;
 };
 
@@ -97,19 +97,14 @@ enum class PartyQuestPreRepairAuthorizationCommitDirective : uint8_t
  */
 struct PartyQuestPreRepairAuthorizationCommitHooks
 {
-    using Callback = PartyQuestPreRepairAuthorizationCommitDirective (*)(
-        PartyQuestPreRepairAuthorizationCommitBoundary,
-        void*) noexcept;
+    using Callback = PartyQuestPreRepairAuthorizationCommitDirective (*)(PartyQuestPreRepairAuthorizationCommitBoundary, void*) noexcept;
 
     Callback OnBoundary{};
     void* Context{};
 
-    [[nodiscard]] PartyQuestPreRepairAuthorizationCommitDirective Invoke(
-        PartyQuestPreRepairAuthorizationCommitBoundary aBoundary) const noexcept
+    [[nodiscard]] PartyQuestPreRepairAuthorizationCommitDirective Invoke(PartyQuestPreRepairAuthorizationCommitBoundary aBoundary) const noexcept
     {
-        return OnBoundary
-            ? OnBoundary(aBoundary, Context)
-            : PartyQuestPreRepairAuthorizationCommitDirective::Continue;
+        return OnBoundary ? OnBoundary(aBoundary, Context) : PartyQuestPreRepairAuthorizationCommitDirective::Continue;
     }
 };
 
@@ -126,25 +121,26 @@ struct PartyQuestPreRepairAuthorizationCommitHooks
 class PartyQuestPreRepairAuthorizationCommitStore final
 {
 public:
-    [[nodiscard]] static std::filesystem::path GetCommitPath(
-        const PartyQuestCoopSavePaths& acPaths,
-        uint64_t aTargetWorldRevision);
+    /**
+     * Builds the canonical record that must accompany one exact promoted
+     * PreRepair checkpoint and runtime transaction.
+     */
+    [[nodiscard]] static std::optional<PartyQuestPreRepairAuthorizationCommit> Build(
+        const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, const PartyQuestRuntimeApplyEntry& acRuntime, uint64_t aRuntimeGeneration,
+        uint64_t aCaptureEpochId, const PartyQuestReplicaManifest& acManifest) noexcept;
 
-    [[nodiscard]] static std::vector<uint8_t> Encode(
-        const PartyQuestPreRepairAuthorizationCommit& acCommit);
+    [[nodiscard]] static std::filesystem::path GetCommitPath(const PartyQuestCoopSavePaths& acPaths, uint64_t aTargetWorldRevision);
 
-    [[nodiscard]] static PartyQuestPreRepairAuthorizationCommitLoadResult Decode(
-        const std::vector<uint8_t>& acBytes);
+    [[nodiscard]] static std::vector<uint8_t> Encode(const PartyQuestPreRepairAuthorizationCommit& acCommit);
+
+    [[nodiscard]] static PartyQuestPreRepairAuthorizationCommitLoadResult Decode(const std::vector<uint8_t>& acBytes);
 
     /**
      * Loads only the supplied final path. Sibling .tmp/.bak files are never
      * inspected or adopted as authorization authority.
      */
-    [[nodiscard]] static PartyQuestPreRepairAuthorizationCommitLoadResult Load(
-        const std::filesystem::path& acFinalPath);
+    [[nodiscard]] static PartyQuestPreRepairAuthorizationCommitLoadResult Load(const std::filesystem::path& acFinalPath);
 
     [[nodiscard]] static PartyQuestPreRepairAuthorizationCommitPublishStatus PublishDurably(
-        const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestPreRepairAuthorizationCommit& acCommit,
-        PartyQuestPreRepairAuthorizationCommitHooks aHooks = {}) noexcept;
+        const PartyQuestCoopSavePaths& acPaths, const PartyQuestPreRepairAuthorizationCommit& acCommit, PartyQuestPreRepairAuthorizationCommitHooks aHooks = {}) noexcept;
 };

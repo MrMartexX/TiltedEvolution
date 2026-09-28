@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestPreRepairAuthorizationCommit.h>
+#include <Structs/Skyrim/PartyQuestRuntimeApply.h>
 
 #include <Structs/Skyrim/PartyQuestDurableResourcePolicy.h>
 #include <Structs/Skyrim/PartyQuestStableStorage.h>
@@ -24,20 +25,13 @@ constexpr uint64_t kFnvOffsetBasis = 14695981039346656037ull;
 constexpr uint64_t kFnvPrime = 1099511628211ull;
 constexpr size_t kHeaderBytes = kMagic.size() + sizeof(uint16_t) + sizeof(uint64_t);
 constexpr size_t kChecksumBytes = sizeof(uint64_t);
-constexpr uint32_t kMaxFiles =
-    static_cast<uint32_t>(PartyQuestReplicaResourcePolicy::MaxFiles);
-constexpr uint32_t kMaxPathBytes =
-    PartyQuestDurableResourcePolicy::MaxSerializedPathBytes;
-constexpr uint32_t kKnownApplyActions =
-    static_cast<uint32_t>(PartyQuestApplyAction::StageTransition) |
-    static_cast<uint32_t>(PartyQuestApplyAction::VerifyObjectives) |
-    static_cast<uint32_t>(PartyQuestApplyAction::WaitForWorldTargets) |
-    static_cast<uint32_t>(PartyQuestApplyAction::WaitForPapyrusQuiescence) |
-    static_cast<uint32_t>(PartyQuestApplyAction::ResnapshotAndVerify) |
-    static_cast<uint32_t>(PartyQuestApplyAction::AdapterManaged);
+constexpr uint32_t kMaxFiles = static_cast<uint32_t>(PartyQuestReplicaResourcePolicy::MaxFiles);
+constexpr uint32_t kMaxPathBytes = PartyQuestDurableResourcePolicy::MaxSerializedPathBytes;
+constexpr uint32_t kKnownApplyActions = static_cast<uint32_t>(PartyQuestApplyAction::StageTransition) | static_cast<uint32_t>(PartyQuestApplyAction::VerifyObjectives) |
+                                        static_cast<uint32_t>(PartyQuestApplyAction::WaitForWorldTargets) | static_cast<uint32_t>(PartyQuestApplyAction::WaitForPapyrusQuiescence) |
+                                        static_cast<uint32_t>(PartyQuestApplyAction::ResnapshotAndVerify) | static_cast<uint32_t>(PartyQuestApplyAction::AdapterManaged);
 
-template <class T>
-void WriteInteger(std::vector<uint8_t>& aBytes, T aValue)
+template <class T> void WriteInteger(std::vector<uint8_t>& aBytes, T aValue)
 {
     static_assert(std::is_integral_v<T>);
     using UnsignedType = std::make_unsigned_t<T>;
@@ -46,18 +40,11 @@ void WriteInteger(std::vector<uint8_t>& aBytes, T aValue)
         aBytes.push_back(static_cast<uint8_t>((value >> (i * 8)) & 0xFF));
 }
 
-template <class T>
-bool ReadInteger(
-    const std::vector<uint8_t>& acBytes,
-    size_t& aOffset,
-    size_t aEnd,
-    T& aValue) noexcept
+template <class T> bool ReadInteger(const std::vector<uint8_t>& acBytes, size_t& aOffset, size_t aEnd, T& aValue) noexcept
 {
     static_assert(std::is_integral_v<T>);
     using UnsignedType = std::make_unsigned_t<T>;
-    if (aEnd > acBytes.size() ||
-        aOffset > aEnd ||
-        aEnd - aOffset < sizeof(UnsignedType))
+    if (aEnd > acBytes.size() || aOffset > aEnd || aEnd - aOffset < sizeof(UnsignedType))
     {
         return false;
     }
@@ -82,15 +69,12 @@ uint64_t ComputeChecksum(const uint8_t* apData, size_t aSize) noexcept
     return checksum;
 }
 
-std::optional<std::string> PathToUtf8(
-    const std::filesystem::path& acPath) noexcept
+std::optional<std::string> PathToUtf8(const std::filesystem::path& acPath) noexcept
 {
     try
     {
         const auto utf8 = acPath.generic_u8string();
-        return std::string(
-            reinterpret_cast<const char*>(utf8.data()),
-            utf8.size());
+        return std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size());
     }
     catch (...)
     {
@@ -98,8 +82,7 @@ std::optional<std::string> PathToUtf8(
     }
 }
 
-std::optional<std::filesystem::path> Utf8ToPath(
-    const std::string& acUtf8) noexcept
+std::optional<std::filesystem::path> Utf8ToPath(const std::string& acUtf8) noexcept
 {
     try
     {
@@ -113,14 +96,8 @@ std::optional<std::filesystem::path> Utf8ToPath(
 
 bool IsCanonicalRelativePathText(const std::string& acPath) noexcept
 {
-    if (acPath.empty() ||
-        acPath.size() > kMaxPathBytes ||
-        acPath.front() == '/' ||
-        acPath.front() == '\\' ||
-        acPath.back() == '/' ||
-        acPath.find('\\') != std::string::npos ||
-        acPath.find(':') != std::string::npos ||
-        acPath.find('\0') != std::string::npos)
+    if (acPath.empty() || acPath.size() > kMaxPathBytes || acPath.front() == '/' || acPath.front() == '\\' || acPath.back() == '/' || acPath.find('\\') != std::string::npos ||
+        acPath.find(':') != std::string::npos || acPath.find('\0') != std::string::npos)
     {
         return false;
     }
@@ -129,8 +106,7 @@ bool IsCanonicalRelativePathText(const std::string& acPath) noexcept
     while (start < acPath.size())
     {
         const size_t separator = acPath.find('/', start);
-        const size_t end =
-            separator == std::string::npos ? acPath.size() : separator;
+        const size_t end = separator == std::string::npos ? acPath.size() : separator;
         if (end == start)
             return false;
 
@@ -148,64 +124,43 @@ bool IsCanonicalRelativePathText(const std::string& acPath) noexcept
 std::string LowerExtension(const std::filesystem::path& acPath)
 {
     std::string extension = acPath.extension().string();
-    std::transform(
-        extension.begin(),
-        extension.end(),
-        extension.begin(),
-        [](unsigned char aCharacter)
-        {
-            return static_cast<char>(std::tolower(aCharacter));
-        });
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char aCharacter) { return static_cast<char>(std::tolower(aCharacter)); });
     return extension;
 }
 
 bool IsKnownFileKind(PartyQuestReplicaFileKind aKind) noexcept
 {
-    return aKind == PartyQuestReplicaFileKind::SkyrimSave ||
-        aKind == PartyQuestReplicaFileKind::SkseCosave ||
-        aKind == PartyQuestReplicaFileKind::ExternalSidecar;
+    return aKind == PartyQuestReplicaFileKind::SkyrimSave || aKind == PartyQuestReplicaFileKind::SkseCosave || aKind == PartyQuestReplicaFileKind::ExternalSidecar;
 }
 
-bool IsExpectedRelativePath(
-    PartyQuestReplicaFileKind aKind,
-    const std::filesystem::path& acRelativePath) noexcept
+bool IsExpectedRelativePath(PartyQuestReplicaFileKind aKind, const std::filesystem::path& acRelativePath) noexcept
 {
     try
     {
-        if (!IsKnownFileKind(aKind) ||
-            !PartyQuestReplicaFilePlanner::IsSafeRelativePath(acRelativePath))
+        if (!IsKnownFileKind(aKind) || !PartyQuestReplicaFilePlanner::IsSafeRelativePath(acRelativePath))
         {
             return false;
         }
 
         const auto text = PathToUtf8(acRelativePath);
-        const auto normalizedText =
-            PathToUtf8(acRelativePath.lexically_normal());
-        if (!text || !normalizedText ||
-            *text != *normalizedText ||
-            !IsCanonicalRelativePathText(*text))
+        const auto normalizedText = PathToUtf8(acRelativePath.lexically_normal());
+        if (!text || !normalizedText || *text != *normalizedText || !IsCanonicalRelativePathText(*text))
         {
             return false;
         }
 
         if (aKind == PartyQuestReplicaFileKind::SkyrimSave)
         {
-            return acRelativePath.parent_path() == "saves" &&
-                LowerExtension(acRelativePath) == ".ess";
+            return acRelativePath.parent_path() == "saves" && LowerExtension(acRelativePath) == ".ess";
         }
 
         if (aKind == PartyQuestReplicaFileKind::SkseCosave)
         {
-            return acRelativePath.parent_path() == "saves" &&
-                LowerExtension(acRelativePath) == ".skse";
+            return acRelativePath.parent_path() == "saves" && LowerExtension(acRelativePath) == ".skse";
         }
 
-        const std::filesystem::path externalRoot =
-            std::filesystem::path("sidecars") / "external";
-        return acRelativePath != externalRoot &&
-            PartyQuestReplicaFilePlanner::IsContainedBy(
-                externalRoot,
-                acRelativePath);
+        const std::filesystem::path externalRoot = std::filesystem::path("sidecars") / "external";
+        return acRelativePath != externalRoot && PartyQuestReplicaFilePlanner::IsContainedBy(externalRoot, acRelativePath);
     }
     catch (...)
     {
@@ -219,31 +174,16 @@ bool HasKnownActions(PartyQuestApplyAction aActions) noexcept
     return actions != 0 && (actions & ~kKnownApplyActions) == 0;
 }
 
-bool ValidateRecord(
-    const PartyQuestPreRepairAuthorizationCommit& acCommit,
-    bool aRequireCanonicalFileOrder) noexcept
+bool ValidateRecord(const PartyQuestPreRepairAuthorizationCommit& acCommit, bool aRequireCanonicalFileOrder) noexcept
 {
     try
     {
-        if (!acCommit.CampaignId.IsValid() ||
-            !acCommit.PlayerProfileId.IsValid() ||
-            acCommit.TransactionId == 0 ||
-            acCommit.RuntimeGeneration == 0 ||
-            acCommit.CaptureEpochId == 0 ||
-            acCommit.TargetWorldRevision == 0 ||
-            !static_cast<bool>(acCommit.QuestId) ||
-            acCommit.CanonicalDigest == 0 ||
-            acCommit.SidecarManifestFingerprint == 0 ||
-            !HasKnownActions(acCommit.Actions) ||
-            acCommit.ExpectedVerification.SchemaVersion !=
-                PartyQuestVerificationEnvelopeV1::kSchemaVersion ||
-            acCommit.ExpectedVerification.QuestSnapshotDigest !=
-                acCommit.CanonicalDigest ||
-            !PartyQuestVerificationPolicy::IsCompleteForActions(
-                acCommit.ExpectedVerification,
-                acCommit.Actions) ||
-            acCommit.Files.empty() ||
-            acCommit.Files.size() > kMaxFiles)
+        if (!acCommit.CampaignId.IsValid() || !acCommit.PlayerProfileId.IsValid() || acCommit.TransactionId == 0 || acCommit.RuntimeGeneration == 0 ||
+            acCommit.CaptureEpochId == 0 || acCommit.TargetWorldRevision == 0 || !static_cast<bool>(acCommit.QuestId) || acCommit.CanonicalDigest == 0 ||
+            acCommit.SidecarManifestFingerprint == 0 || !HasKnownActions(acCommit.Actions) ||
+            acCommit.ExpectedVerification.SchemaVersion != PartyQuestVerificationEnvelopeV1::kSchemaVersion ||
+            acCommit.ExpectedVerification.QuestSnapshotDigest != acCommit.CanonicalDigest ||
+            !PartyQuestVerificationPolicy::IsCompleteForActions(acCommit.ExpectedVerification, acCommit.Actions) || acCommit.Files.empty() || acCommit.Files.size() > kMaxFiles)
         {
             return false;
         }
@@ -255,29 +195,20 @@ bool ValidateRecord(
 
         for (const auto& file : acCommit.Files)
         {
-            if (!IsKnownFileKind(file.Kind) ||
-                file.Digest == 0 ||
-                file.Size > PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes ||
-                file.Size >
-                    PartyQuestReplicaResourcePolicy::MaxTotalFileBytes - totalSize ||
-                !IsExpectedRelativePath(file.Kind, file.RelativePath))
+            if (!IsKnownFileKind(file.Kind) || file.Digest == 0 || file.Size > PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes ||
+                file.Size > PartyQuestReplicaResourcePolicy::MaxTotalFileBytes - totalSize || !IsExpectedRelativePath(file.Kind, file.RelativePath))
             {
                 return false;
             }
             totalSize += file.Size;
 
             const auto pathText = PathToUtf8(file.RelativePath);
-            if (!pathText ||
-                pathText->empty() ||
-                pathText->size() > kMaxPathBytes ||
-                !relativePaths.emplace(*pathText).second)
+            if (!pathText || pathText->empty() || pathText->size() > kMaxPathBytes || !relativePaths.emplace(*pathText).second)
             {
                 return false;
             }
 
-            if (aRequireCanonicalFileOrder &&
-                !previousPath.empty() &&
-                previousPath >= *pathText)
+            if (aRequireCanonicalFileOrder && !previousPath.empty() && previousPath >= *pathText)
             {
                 return false;
             }
@@ -287,8 +218,7 @@ bool ValidateRecord(
                 ++mainSaveCount;
         }
 
-        return mainSaveCount == 1 &&
-            totalSize <= PartyQuestReplicaResourcePolicy::MaxTotalFileBytes;
+        return mainSaveCount == 1 && totalSize <= PartyQuestReplicaResourcePolicy::MaxTotalFileBytes;
     }
     catch (...)
     {
@@ -296,26 +226,22 @@ bool ValidateRecord(
     }
 }
 
-std::optional<PartyQuestPreRepairAuthorizationCommit> Canonicalize(
-    const PartyQuestPreRepairAuthorizationCommit& acCommit) noexcept
+std::optional<PartyQuestPreRepairAuthorizationCommit> Canonicalize(const PartyQuestPreRepairAuthorizationCommit& acCommit) noexcept
 {
     try
     {
         PartyQuestPreRepairAuthorizationCommit canonical = acCommit;
         std::sort(
-            canonical.Files.begin(),
-            canonical.Files.end(),
+            canonical.Files.begin(), canonical.Files.end(),
             [](const auto& acLeft, const auto& acRight)
             {
                 const auto left = PathToUtf8(acLeft.RelativePath);
                 const auto right = PathToUtf8(acRight.RelativePath);
                 if (!left || !right)
-                    return static_cast<uint8_t>(acLeft.Kind) <
-                        static_cast<uint8_t>(acRight.Kind);
+                    return static_cast<uint8_t>(acLeft.Kind) < static_cast<uint8_t>(acRight.Kind);
                 if (*left != *right)
                     return *left < *right;
-                return static_cast<uint8_t>(acLeft.Kind) <
-                    static_cast<uint8_t>(acRight.Kind);
+                return static_cast<uint8_t>(acLeft.Kind) < static_cast<uint8_t>(acRight.Kind);
             });
 
         if (!ValidateRecord(canonical, true))
@@ -328,38 +254,31 @@ std::optional<PartyQuestPreRepairAuthorizationCommit> Canonicalize(
     }
 }
 
-PartyQuestPreRepairAuthorizationCommitPersistenceStatus ReadArchive(
-    const std::filesystem::path& acPath,
-    std::vector<uint8_t>& aBytes) noexcept
+PartyQuestPreRepairAuthorizationCommitPersistenceStatus ReadArchive(const std::filesystem::path& acPath, std::vector<uint8_t>& aBytes) noexcept
 {
     try
     {
         if (!PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(acPath))
         {
-            return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                ResourceLimitExceeded;
+            return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::ResourceLimitExceeded;
         }
 
         std::error_code ec;
         const auto node = std::filesystem::symlink_status(acPath, ec);
         if (ec)
         {
-            if (ec == std::errc::no_such_file_or_directory ||
-                ec == std::errc::not_a_directory)
+            if (ec == std::errc::no_such_file_or_directory || ec == std::errc::not_a_directory)
             {
-                return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                    FileNotFound;
+                return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::FileNotFound;
             }
             return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::IoError;
         }
 
         if (node.type() == std::filesystem::file_type::not_found)
         {
-            return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                FileNotFound;
+            return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::FileNotFound;
         }
-        if (std::filesystem::is_symlink(node) ||
-            !std::filesystem::is_regular_file(node))
+        if (std::filesystem::is_symlink(node) || !std::filesystem::is_regular_file(node))
         {
             return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::IoError;
         }
@@ -373,28 +292,21 @@ PartyQuestPreRepairAuthorizationCommitPersistenceStatus ReadArchive(
             return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::IoError;
 
         const uint64_t size = static_cast<uint64_t>(end);
-        if (size > PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes ||
-            size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+        if (size > PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes || size > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
         {
-            return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                ResourceLimitExceeded;
+            return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::ResourceLimitExceeded;
         }
 
         aBytes.resize(static_cast<size_t>(size));
         file.seekg(0, std::ios::beg);
-        if (!aBytes.empty() &&
-            !file.read(
-                reinterpret_cast<char*>(aBytes.data()),
-                static_cast<std::streamsize>(aBytes.size())))
+        if (!aBytes.empty() && !file.read(reinterpret_cast<char*>(aBytes.data()), static_cast<std::streamsize>(aBytes.size())))
         {
             return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::IoError;
         }
 
         ec.clear();
         const auto afterRead = std::filesystem::symlink_status(acPath, ec);
-        if (ec ||
-            std::filesystem::is_symlink(afterRead) ||
-            !std::filesystem::is_regular_file(afterRead))
+        if (ec || std::filesystem::is_symlink(afterRead) || !std::filesystem::is_regular_file(afterRead))
         {
             return PartyQuestPreRepairAuthorizationCommitPersistenceStatus::IoError;
         }
@@ -407,14 +319,12 @@ PartyQuestPreRepairAuthorizationCommitPersistenceStatus ReadArchive(
     }
 }
 
-PartyQuestPreRepairAuthorizationCommitLoadResult DecodeFile(
-    const std::filesystem::path& acPath) noexcept
+PartyQuestPreRepairAuthorizationCommitLoadResult DecodeFile(const std::filesystem::path& acPath) noexcept
 {
     std::vector<uint8_t> bytes;
     PartyQuestPreRepairAuthorizationCommitLoadResult result;
     result.Status = ReadArchive(acPath, bytes);
-    if (result.Status !=
-        PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success)
+    if (result.Status != PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success)
     {
         return result;
     }
@@ -425,28 +335,21 @@ PartyQuestPreRepairAuthorizationCommitLoadResult DecodeFile(
     }
     catch (...)
     {
-        result.Status =
-            PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
+        result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
         return result;
     }
 }
 
-PartyQuestPreRepairAuthorizationCommitPublishStatus MapStableFailure(
-    PartyQuestStableStorageStatus aStatus) noexcept
+PartyQuestPreRepairAuthorizationCommitPublishStatus MapStableFailure(PartyQuestStableStorageStatus aStatus) noexcept
 {
-    return aStatus == PartyQuestStableStorageStatus::Unsupported
-        ? PartyQuestPreRepairAuthorizationCommitPublishStatus::
-              StableStorageUnsupported
-        : PartyQuestPreRepairAuthorizationCommitPublishStatus::
-              StableStorageFailure;
+    return aStatus == PartyQuestStableStorageStatus::Unsupported ? PartyQuestPreRepairAuthorizationCommitPublishStatus::StableStorageUnsupported
+                                                                 : PartyQuestPreRepairAuthorizationCommitPublishStatus::StableStorageFailure;
 }
 
-PartyQuestPreRepairAuthorizationCommitPublishStatus ReestablishExistingDurability(
-    const std::filesystem::path& acFinalPath,
-    const PartyQuestPreRepairAuthorizationCommit& acCanonical) noexcept
+PartyQuestPreRepairAuthorizationCommitPublishStatus
+ReestablishExistingDurability(const std::filesystem::path& acFinalPath, const PartyQuestPreRepairAuthorizationCommit& acCanonical) noexcept
 {
-    auto stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(
-        acFinalPath.parent_path());
+    auto stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(acFinalPath.parent_path());
     if (stable != PartyQuestStableStorageStatus::Success)
         return MapStableFailure(stable);
 
@@ -454,16 +357,12 @@ PartyQuestPreRepairAuthorizationCommitPublishStatus ReestablishExistingDurabilit
     if (stable != PartyQuestStableStorageStatus::Success)
         return MapStableFailure(stable);
 
-    stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(
-        acFinalPath.parent_path());
+    stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(acFinalPath.parent_path());
     if (stable != PartyQuestStableStorageStatus::Success)
         return MapStableFailure(stable);
 
     const auto reloaded = DecodeFile(acFinalPath);
-    if (reloaded.Status !=
-            PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success ||
-        !reloaded.Record ||
-        *reloaded.Record != acCanonical)
+    if (reloaded.Status != PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success || !reloaded.Record || *reloaded.Record != acCanonical)
     {
         return PartyQuestPreRepairAuthorizationCommitPublishStatus::Conflict;
     }
@@ -471,29 +370,59 @@ PartyQuestPreRepairAuthorizationCommitPublishStatus ReestablishExistingDurabilit
     return PartyQuestPreRepairAuthorizationCommitPublishStatus::AlreadyCommitted;
 }
 
-bool HookContinues(
-    const PartyQuestPreRepairAuthorizationCommitHooks& acHooks,
-    PartyQuestPreRepairAuthorizationCommitBoundary aBoundary) noexcept
+bool HookContinues(const PartyQuestPreRepairAuthorizationCommitHooks& acHooks, PartyQuestPreRepairAuthorizationCommitBoundary aBoundary) noexcept
 {
-    return acHooks.Invoke(aBoundary) ==
-        PartyQuestPreRepairAuthorizationCommitDirective::Continue;
+    return acHooks.Invoke(aBoundary) == PartyQuestPreRepairAuthorizationCommitDirective::Continue;
 }
 } // namespace
 
-std::filesystem::path
-PartyQuestPreRepairAuthorizationCommitStore::GetCommitPath(
-    const PartyQuestCoopSavePaths& acPaths,
-    uint64_t aTargetWorldRevision)
+std::optional<PartyQuestPreRepairAuthorizationCommit> PartyQuestPreRepairAuthorizationCommitStore::Build(
+    const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, const PartyQuestRuntimeApplyEntry& acRuntime, uint64_t aRuntimeGeneration,
+    uint64_t aCaptureEpochId, const PartyQuestReplicaManifest& acManifest) noexcept
 {
-    return PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(
-               acPaths,
-               PartyQuestCheckpointKind::PreRepair,
-               aTargetWorldRevision) /
-        "pre_repair_commit.bin";
+    try
+    {
+        if (acManifest.CampaignId != acCampaignId || acManifest.PlayerProfileId != acPlayerProfileId ||
+            acManifest.SnapshotType != PartyQuestReplicaSnapshotType::RevisionCheckpoint || acManifest.CheckpointKind != PartyQuestCheckpointKind::PreRepair ||
+            acManifest.CampaignWorldRevision != acRuntime.TargetWorldRevision || acManifest.Durability != PartyQuestReplicaManifestDurability::PowerLossDurable ||
+            ((acRuntime.CheckpointRuntimeGeneration != 0 || acRuntime.CheckpointCaptureEpochId != 0) &&
+             (acRuntime.CheckpointRuntimeGeneration != aRuntimeGeneration || acRuntime.CheckpointCaptureEpochId != aCaptureEpochId)))
+        {
+            return std::nullopt;
+        }
+
+        PartyQuestPreRepairAuthorizationCommit commit;
+        commit.CampaignId = acCampaignId;
+        commit.PlayerProfileId = acPlayerProfileId;
+        commit.TransactionId = acRuntime.TransactionId;
+        commit.RuntimeGeneration = aRuntimeGeneration;
+        commit.CaptureEpochId = aCaptureEpochId;
+        commit.TargetWorldRevision = acRuntime.TargetWorldRevision;
+        commit.QuestId = acRuntime.QuestId;
+        commit.CanonicalDigest = acRuntime.CanonicalDigest;
+        commit.SidecarManifestFingerprint = acRuntime.SidecarManifestFingerprint;
+        commit.Actions = acRuntime.Actions;
+        commit.ExpectedVerification = acRuntime.ExpectedVerification;
+        commit.Files.reserve(acManifest.Files.size());
+        for (const auto& file : acManifest.Files)
+        {
+            commit.Files.push_back({file.Kind, file.RelativePath, file.Size, file.Digest});
+        }
+
+        return Canonicalize(commit);
+    }
+    catch (...)
+    {
+        return std::nullopt;
+    }
 }
 
-std::vector<uint8_t> PartyQuestPreRepairAuthorizationCommitStore::Encode(
-    const PartyQuestPreRepairAuthorizationCommit& acCommit)
+std::filesystem::path PartyQuestPreRepairAuthorizationCommitStore::GetCommitPath(const PartyQuestCoopSavePaths& acPaths, uint64_t aTargetWorldRevision)
+{
+    return PartyQuestCoopSaveLayout::GetCheckpointRevisionDirectory(acPaths, PartyQuestCheckpointKind::PreRepair, aTargetWorldRevision) / "pre_repair_commit.bin";
+}
+
+std::vector<uint8_t> PartyQuestPreRepairAuthorizationCommitStore::Encode(const PartyQuestPreRepairAuthorizationCommit& acCommit)
 {
     try
     {
@@ -519,17 +448,13 @@ std::vector<uint8_t> PartyQuestPreRepairAuthorizationCommitStore::Encode(
         WriteInteger(payload, static_cast<uint32_t>(canonical->Actions));
 
         WriteInteger(payload, canonical->ExpectedVerification.SchemaVersion);
-        WriteInteger(
-            payload,
-            static_cast<uint32_t>(canonical->ExpectedVerification.Required));
+        WriteInteger(payload, static_cast<uint32_t>(canonical->ExpectedVerification.Required));
         WriteInteger(payload, canonical->ExpectedVerification.QuestSnapshotDigest);
         WriteInteger(payload, canonical->ExpectedVerification.AliasDigest);
         WriteInteger(payload, canonical->ExpectedVerification.InventoryEffectsDigest);
         WriteInteger(payload, canonical->ExpectedVerification.WorldEffectsDigest);
         WriteInteger(payload, canonical->ExpectedVerification.AdapterStateDigest);
-        WriteInteger(
-            payload,
-            canonical->ExpectedVerification.CompatibilityFingerprint);
+        WriteInteger(payload, canonical->ExpectedVerification.CompatibilityFingerprint);
 
         WriteInteger(payload, static_cast<uint32_t>(canonical->Files.size()));
         for (const auto& file : canonical->Files)
@@ -545,10 +470,8 @@ std::vector<uint8_t> PartyQuestPreRepairAuthorizationCommitStore::Encode(
             WriteInteger(payload, file.Digest);
         }
 
-        const uint64_t maxArchive =
-            PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes;
-        if (payload.size() >
-            maxArchive - kHeaderBytes - kChecksumBytes)
+        const uint64_t maxArchive = PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes;
+        if (payload.size() > maxArchive - kHeaderBytes - kChecksumBytes)
         {
             return {};
         }
@@ -559,9 +482,7 @@ std::vector<uint8_t> PartyQuestPreRepairAuthorizationCommitStore::Encode(
         WriteInteger(bytes, kFormatVersion);
         WriteInteger(bytes, static_cast<uint64_t>(payload.size()));
         bytes.insert(bytes.end(), payload.begin(), payload.end());
-        WriteInteger(
-            bytes,
-            ComputeChecksum(payload.data(), payload.size()));
+        WriteInteger(bytes, ComputeChecksum(payload.data(), payload.size()));
         return bytes;
     }
     catch (...)
@@ -570,41 +491,33 @@ std::vector<uint8_t> PartyQuestPreRepairAuthorizationCommitStore::Encode(
     }
 }
 
-PartyQuestPreRepairAuthorizationCommitLoadResult
-PartyQuestPreRepairAuthorizationCommitStore::Decode(
-    const std::vector<uint8_t>& acBytes)
+PartyQuestPreRepairAuthorizationCommitLoadResult PartyQuestPreRepairAuthorizationCommitStore::Decode(const std::vector<uint8_t>& acBytes)
 {
     PartyQuestPreRepairAuthorizationCommitLoadResult result;
 
     try
     {
-        if (acBytes.size() >
-            PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes)
+        if (acBytes.size() > PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes)
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                    ResourceLimitExceeded;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::ResourceLimitExceeded;
             return result;
         }
 
         if (acBytes.size() < kMagic.size())
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
             return result;
         }
 
         if (!std::equal(kMagic.begin(), kMagic.end(), acBytes.begin()))
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidMagic;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidMagic;
             return result;
         }
 
         if (acBytes.size() < kHeaderBytes + kChecksumBytes)
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
             return result;
         }
 
@@ -612,75 +525,53 @@ PartyQuestPreRepairAuthorizationCommitStore::Decode(
         uint16_t version{};
         if (!ReadInteger(acBytes, offset, acBytes.size(), version))
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
             return result;
         }
         if (version != kFormatVersion)
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                    UnsupportedVersion;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::UnsupportedVersion;
             return result;
         }
 
         uint64_t payloadLength{};
         if (!ReadInteger(acBytes, offset, acBytes.size(), payloadLength))
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
             return result;
         }
 
-        const uint64_t maxArchive =
-            PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes;
-        if (payloadLength >
-            maxArchive - kHeaderBytes - kChecksumBytes)
+        const uint64_t maxArchive = PartyQuestDurableResourcePolicy::MaxReplicaMetadataArchiveBytes;
+        if (payloadLength > maxArchive - kHeaderBytes - kChecksumBytes)
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                    ResourceLimitExceeded;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::ResourceLimitExceeded;
             return result;
         }
 
-        const uint64_t expectedArchiveSize =
-            kHeaderBytes + payloadLength + kChecksumBytes;
+        const uint64_t expectedArchiveSize = kHeaderBytes + payloadLength + kChecksumBytes;
         if (expectedArchiveSize > acBytes.size())
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
             return result;
         }
         if (expectedArchiveSize != acBytes.size())
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
             return result;
         }
 
         const size_t payloadStart = kHeaderBytes;
-        const size_t payloadEnd =
-            payloadStart + static_cast<size_t>(payloadLength);
+        const size_t payloadEnd = payloadStart + static_cast<size_t>(payloadLength);
         size_t checksumOffset = payloadEnd;
         uint64_t encodedChecksum{};
-        if (!ReadInteger(
-                acBytes,
-                checksumOffset,
-                acBytes.size(),
-                encodedChecksum))
+        if (!ReadInteger(acBytes, checksumOffset, acBytes.size(), encodedChecksum))
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
             return result;
         }
-        if (encodedChecksum !=
-            ComputeChecksum(
-                acBytes.data() + payloadStart,
-                static_cast<size_t>(payloadLength)))
+        if (encodedChecksum != ComputeChecksum(acBytes.data() + payloadStart, static_cast<size_t>(payloadLength)))
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                    ChecksumMismatch;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::ChecksumMismatch;
             return result;
         }
 
@@ -688,87 +579,41 @@ PartyQuestPreRepairAuthorizationCommitStore::Decode(
         offset = payloadStart;
         uint32_t actions{};
         uint32_t required{};
-        if (!ReadInteger(acBytes, offset, payloadEnd, record.CampaignId.High) ||
-            !ReadInteger(acBytes, offset, payloadEnd, record.CampaignId.Low) ||
-            !ReadInteger(acBytes, offset, payloadEnd, record.PlayerProfileId.High) ||
-            !ReadInteger(acBytes, offset, payloadEnd, record.PlayerProfileId.Low) ||
-            !ReadInteger(acBytes, offset, payloadEnd, record.TransactionId) ||
-            !ReadInteger(acBytes, offset, payloadEnd, record.RuntimeGeneration) ||
-            !ReadInteger(acBytes, offset, payloadEnd, record.CaptureEpochId) ||
-            !ReadInteger(acBytes, offset, payloadEnd, record.TargetWorldRevision) ||
-            !ReadInteger(acBytes, offset, payloadEnd, record.QuestId.ModId) ||
-            !ReadInteger(acBytes, offset, payloadEnd, record.QuestId.BaseId) ||
-            !ReadInteger(acBytes, offset, payloadEnd, record.CanonicalDigest) ||
-            !ReadInteger(
-                acBytes,
-                offset,
-                payloadEnd,
-                record.SidecarManifestFingerprint) ||
-            !ReadInteger(acBytes, offset, payloadEnd, actions) ||
-            !ReadInteger(
-                acBytes,
-                offset,
-                payloadEnd,
-                record.ExpectedVerification.SchemaVersion) ||
-            !ReadInteger(acBytes, offset, payloadEnd, required) ||
-            !ReadInteger(
-                acBytes,
-                offset,
-                payloadEnd,
-                record.ExpectedVerification.QuestSnapshotDigest) ||
-            !ReadInteger(
-                acBytes,
-                offset,
-                payloadEnd,
-                record.ExpectedVerification.AliasDigest) ||
-            !ReadInteger(
-                acBytes,
-                offset,
-                payloadEnd,
-                record.ExpectedVerification.InventoryEffectsDigest) ||
-            !ReadInteger(
-                acBytes,
-                offset,
-                payloadEnd,
-                record.ExpectedVerification.WorldEffectsDigest) ||
-            !ReadInteger(
-                acBytes,
-                offset,
-                payloadEnd,
-                record.ExpectedVerification.AdapterStateDigest) ||
-            !ReadInteger(
-                acBytes,
-                offset,
-                payloadEnd,
-                record.ExpectedVerification.CompatibilityFingerprint))
+        if (!ReadInteger(acBytes, offset, payloadEnd, record.CampaignId.High) || !ReadInteger(acBytes, offset, payloadEnd, record.CampaignId.Low) ||
+            !ReadInteger(acBytes, offset, payloadEnd, record.PlayerProfileId.High) || !ReadInteger(acBytes, offset, payloadEnd, record.PlayerProfileId.Low) ||
+            !ReadInteger(acBytes, offset, payloadEnd, record.TransactionId) || !ReadInteger(acBytes, offset, payloadEnd, record.RuntimeGeneration) ||
+            !ReadInteger(acBytes, offset, payloadEnd, record.CaptureEpochId) || !ReadInteger(acBytes, offset, payloadEnd, record.TargetWorldRevision) ||
+            !ReadInteger(acBytes, offset, payloadEnd, record.QuestId.ModId) || !ReadInteger(acBytes, offset, payloadEnd, record.QuestId.BaseId) ||
+            !ReadInteger(acBytes, offset, payloadEnd, record.CanonicalDigest) || !ReadInteger(acBytes, offset, payloadEnd, record.SidecarManifestFingerprint) ||
+            !ReadInteger(acBytes, offset, payloadEnd, actions) || !ReadInteger(acBytes, offset, payloadEnd, record.ExpectedVerification.SchemaVersion) ||
+            !ReadInteger(acBytes, offset, payloadEnd, required) || !ReadInteger(acBytes, offset, payloadEnd, record.ExpectedVerification.QuestSnapshotDigest) ||
+            !ReadInteger(acBytes, offset, payloadEnd, record.ExpectedVerification.AliasDigest) ||
+            !ReadInteger(acBytes, offset, payloadEnd, record.ExpectedVerification.InventoryEffectsDigest) ||
+            !ReadInteger(acBytes, offset, payloadEnd, record.ExpectedVerification.WorldEffectsDigest) ||
+            !ReadInteger(acBytes, offset, payloadEnd, record.ExpectedVerification.AdapterStateDigest) ||
+            !ReadInteger(acBytes, offset, payloadEnd, record.ExpectedVerification.CompatibilityFingerprint))
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
             return result;
         }
 
         record.Actions = static_cast<PartyQuestApplyAction>(actions);
-        record.ExpectedVerification.Required =
-            static_cast<PartyQuestVerificationComponent>(required);
+        record.ExpectedVerification.Required = static_cast<PartyQuestVerificationComponent>(required);
 
         uint32_t fileCount{};
         if (!ReadInteger(acBytes, offset, payloadEnd, fileCount))
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
             return result;
         }
         if (fileCount > kMaxFiles)
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                    ResourceLimitExceeded;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::ResourceLimitExceeded;
             return result;
         }
         if (fileCount == 0)
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
             return result;
         }
 
@@ -777,54 +622,38 @@ PartyQuestPreRepairAuthorizationCommitStore::Decode(
         {
             uint8_t kind{};
             uint32_t pathLength{};
-            if (!ReadInteger(acBytes, offset, payloadEnd, kind) ||
-                !ReadInteger(acBytes, offset, payloadEnd, pathLength))
+            if (!ReadInteger(acBytes, offset, payloadEnd, kind) || !ReadInteger(acBytes, offset, payloadEnd, pathLength))
             {
-                result.Status =
-                    PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                        Truncated;
+                result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
                 return result;
             }
 
             if (pathLength > kMaxPathBytes)
             {
-                result.Status =
-                    PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                        ResourceLimitExceeded;
+                result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::ResourceLimitExceeded;
                 return result;
             }
-            if (pathLength == 0 ||
-                offset > payloadEnd ||
-                pathLength > payloadEnd - offset)
+            if (pathLength == 0 || offset > payloadEnd || pathLength > payloadEnd - offset)
             {
-                result.Status =
-                    PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                        InvalidData;
+                result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
                 return result;
             }
 
-            const std::string pathText(
-                reinterpret_cast<const char*>(acBytes.data() + offset),
-                pathLength);
+            const std::string pathText(reinterpret_cast<const char*>(acBytes.data() + offset), pathLength);
             offset += pathLength;
             const auto relativePath = Utf8ToPath(pathText);
             if (!relativePath)
             {
-                result.Status =
-                    PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                        InvalidData;
+                result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
                 return result;
             }
 
             PartyQuestPreRepairAuthorizationCommitFile file;
             file.Kind = static_cast<PartyQuestReplicaFileKind>(kind);
             file.RelativePath = *relativePath;
-            if (!ReadInteger(acBytes, offset, payloadEnd, file.Size) ||
-                !ReadInteger(acBytes, offset, payloadEnd, file.Digest))
+            if (!ReadInteger(acBytes, offset, payloadEnd, file.Size) || !ReadInteger(acBytes, offset, payloadEnd, file.Digest))
             {
-                result.Status =
-                    PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                        Truncated;
+                result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Truncated;
                 return result;
             }
             record.Files.push_back(std::move(file));
@@ -832,79 +661,57 @@ PartyQuestPreRepairAuthorizationCommitStore::Decode(
 
         if (offset != payloadEnd || !ValidateRecord(record, true))
         {
-            result.Status =
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
+            result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
             return result;
         }
 
-        result.Status =
-            PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success;
+        result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success;
         result.Record = std::move(record);
         return result;
     }
     catch (...)
     {
-        result.Status =
-            PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
+        result.Status = PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData;
         result.Record.reset();
         return result;
     }
 }
 
-PartyQuestPreRepairAuthorizationCommitLoadResult
-PartyQuestPreRepairAuthorizationCommitStore::Load(
-    const std::filesystem::path& acFinalPath)
+PartyQuestPreRepairAuthorizationCommitLoadResult PartyQuestPreRepairAuthorizationCommitStore::Load(const std::filesystem::path& acFinalPath)
 {
     return DecodeFile(acFinalPath);
 }
 
-PartyQuestPreRepairAuthorizationCommitPublishStatus
-PartyQuestPreRepairAuthorizationCommitStore::PublishDurably(
-    const PartyQuestCoopSavePaths& acPaths,
-    const PartyQuestPreRepairAuthorizationCommit& acCommit,
-    PartyQuestPreRepairAuthorizationCommitHooks aHooks) noexcept
+PartyQuestPreRepairAuthorizationCommitPublishStatus PartyQuestPreRepairAuthorizationCommitStore::PublishDurably(
+    const PartyQuestCoopSavePaths& acPaths, const PartyQuestPreRepairAuthorizationCommit& acCommit, PartyQuestPreRepairAuthorizationCommitHooks aHooks) noexcept
 {
     try
     {
         const auto canonical = Canonicalize(acCommit);
-        if (!canonical ||
-            !PartyQuestCoopSaveLayout::Matches(
-                acPaths,
-                canonical->CampaignId,
-                canonical->PlayerProfileId))
+        if (!canonical || !PartyQuestCoopSaveLayout::Matches(acPaths, canonical->CampaignId, canonical->PlayerProfileId))
         {
-            return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                InvalidCommit;
+            return PartyQuestPreRepairAuthorizationCommitPublishStatus::InvalidCommit;
         }
 
-        const auto finalPath =
-            GetCommitPath(acPaths, canonical->TargetWorldRevision);
+        const auto finalPath = GetCommitPath(acPaths, canonical->TargetWorldRevision);
         auto temporaryPath = finalPath;
         temporaryPath += ".tmp";
 
-        if (!PartyQuestDurableResourcePolicy::
-                IsMutableFilesystemPathWithinBudget(finalPath) ||
-            !PartyQuestDurableResourcePolicy::
-                IsFilesystemPathWithinBudget(temporaryPath))
+        if (!PartyQuestDurableResourcePolicy::IsMutableFilesystemPathWithinBudget(finalPath) || !PartyQuestDurableResourcePolicy::IsFilesystemPathWithinBudget(temporaryPath))
         {
-            return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                ResourceLimitExceeded;
+            return PartyQuestPreRepairAuthorizationCommitPublishStatus::ResourceLimitExceeded;
         }
 
         const auto existing = DecodeFile(finalPath);
-        if (existing.Status ==
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success)
+        if (existing.Status == PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success)
         {
             if (!existing.Record || *existing.Record != *canonical)
             {
-                return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                    Conflict;
+                return PartyQuestPreRepairAuthorizationCommitPublishStatus::Conflict;
             }
             return ReestablishExistingDurability(finalPath, *canonical);
         }
-        if (existing.Status !=
-            PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                FileNotFound)
+        if (existing.Status != PartyQuestPreRepairAuthorizationCommitPersistenceStatus::FileNotFound)
         {
             return PartyQuestPreRepairAuthorizationCommitPublishStatus::Conflict;
         }
@@ -912,113 +719,70 @@ PartyQuestPreRepairAuthorizationCommitStore::PublishDurably(
         const auto encoded = Encode(*canonical);
         if (encoded.empty())
         {
-            return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                InvalidCommit;
+            return PartyQuestPreRepairAuthorizationCommitPublishStatus::InvalidCommit;
         }
 
-        auto stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(
-            finalPath.parent_path());
+        auto stable = PartyQuestStableStorage::EnsureDirectoryTreeDurably(finalPath.parent_path());
         if (stable != PartyQuestStableStorageStatus::Success)
             return MapStableFailure(stable);
-        if (!HookContinues(
-                aHooks,
-                PartyQuestPreRepairAuthorizationCommitBoundary::
-                    DirectoryDurable))
+        if (!HookContinues(aHooks, PartyQuestPreRepairAuthorizationCommitBoundary::DirectoryDurable))
         {
-            return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                Interrupted;
+            return PartyQuestPreRepairAuthorizationCommitPublishStatus::Interrupted;
         }
 
-        stable = PartyQuestStableStorage::WriteFileDurably(
-            temporaryPath,
-            encoded.data(),
-            encoded.size());
+        stable = PartyQuestStableStorage::WriteFileDurably(temporaryPath, encoded.data(), encoded.size());
         if (stable != PartyQuestStableStorageStatus::Success)
             return MapStableFailure(stable);
-        if (!HookContinues(
-                aHooks,
-                PartyQuestPreRepairAuthorizationCommitBoundary::
-                    TemporaryDurablyWritten))
+        if (!HookContinues(aHooks, PartyQuestPreRepairAuthorizationCommitBoundary::TemporaryDurablyWritten))
         {
-            return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                Interrupted;
+            return PartyQuestPreRepairAuthorizationCommitPublishStatus::Interrupted;
         }
 
         const auto temporary = DecodeFile(temporaryPath);
-        if (temporary.Status !=
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success ||
-            !temporary.Record ||
-            *temporary.Record != *canonical)
+        if (temporary.Status != PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success || !temporary.Record || *temporary.Record != *canonical)
         {
-            return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                StableStorageFailure;
+            return PartyQuestPreRepairAuthorizationCommitPublishStatus::StableStorageFailure;
         }
-        if (!HookContinues(
-                aHooks,
-                PartyQuestPreRepairAuthorizationCommitBoundary::
-                    TemporaryVerified))
+        if (!HookContinues(aHooks, PartyQuestPreRepairAuthorizationCommitBoundary::TemporaryVerified))
         {
-            return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                Interrupted;
+            return PartyQuestPreRepairAuthorizationCommitPublishStatus::Interrupted;
         }
 
-        stable = PartyQuestStableStorage::PublishFileRename(
-            temporaryPath,
-            finalPath,
-            false);
+        stable = PartyQuestStableStorage::PublishFileRename(temporaryPath, finalPath, false);
         if (stable != PartyQuestStableStorageStatus::Success)
         {
             const auto afterFailure = DecodeFile(finalPath);
-            if (afterFailure.Status ==
-                    PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                        Success &&
-                afterFailure.Record &&
-                *afterFailure.Record == *canonical)
+            if (afterFailure.Status == PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success && afterFailure.Record && *afterFailure.Record == *canonical)
             {
                 return ReestablishExistingDurability(finalPath, *canonical);
             }
-            if (afterFailure.Status !=
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::
-                    FileNotFound)
+            if (afterFailure.Status != PartyQuestPreRepairAuthorizationCommitPersistenceStatus::FileNotFound)
             {
-                return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                    Conflict;
+                return PartyQuestPreRepairAuthorizationCommitPublishStatus::Conflict;
             }
             return MapStableFailure(stable);
         }
 
-        if (!HookContinues(
-                aHooks,
-                PartyQuestPreRepairAuthorizationCommitBoundary::
-                    FinalPublished))
+        if (!HookContinues(aHooks, PartyQuestPreRepairAuthorizationCommitBoundary::FinalPublished))
         {
-            return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                Interrupted;
+            return PartyQuestPreRepairAuthorizationCommitPublishStatus::Interrupted;
         }
 
         const auto final = DecodeFile(finalPath);
-        if (final.Status !=
-                PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success ||
-            !final.Record ||
-            *final.Record != *canonical)
+        if (final.Status != PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success || !final.Record || *final.Record != *canonical)
         {
             return PartyQuestPreRepairAuthorizationCommitPublishStatus::Conflict;
         }
 
-        if (!HookContinues(
-                aHooks,
-                PartyQuestPreRepairAuthorizationCommitBoundary::
-                    FinalVerified))
+        if (!HookContinues(aHooks, PartyQuestPreRepairAuthorizationCommitBoundary::FinalVerified))
         {
-            return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-                Interrupted;
+            return PartyQuestPreRepairAuthorizationCommitPublishStatus::Interrupted;
         }
 
         return PartyQuestPreRepairAuthorizationCommitPublishStatus::Published;
     }
     catch (...)
     {
-        return PartyQuestPreRepairAuthorizationCommitPublishStatus::
-            StableStorageFailure;
+        return PartyQuestPreRepairAuthorizationCommitPublishStatus::StableStorageFailure;
     }
 }

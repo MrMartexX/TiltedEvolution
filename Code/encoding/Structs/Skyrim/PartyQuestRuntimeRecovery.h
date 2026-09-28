@@ -3,6 +3,7 @@
 #include <Structs/Skyrim/PartyQuestReplicaDurableRestoreExecutor.h>
 #include <Structs/Skyrim/PartyQuestReplicaDurableRestorePreparation.h>
 #include <Structs/Skyrim/PartyQuestReplicaRestoreExecutor.h>
+#include <Structs/Skyrim/PartyQuestPreRepairAuthorizationCommit.h>
 #include <Structs/Skyrim/PartyQuestRuntimeApplySession.h>
 #include <Structs/Skyrim/PartyQuestRuntimeRestoreAttempt.h>
 
@@ -31,7 +32,10 @@ enum class PartyQuestRuntimeRecoveryStatus : uint8_t
     RestorePlanInvalid,
     RestoreJournalConflict,
     RestoreFailed,
-    RuntimeStatePersistenceFailed
+    RuntimeStatePersistenceFailed,
+    CheckpointAuthorizationMissing,
+    CheckpointAuthorizationInvalid,
+    CheckpointAuthorizationMismatch
 };
 
 enum class PartyQuestRuntimeRestoreDurabilityDomain : uint8_t
@@ -43,24 +47,17 @@ enum class PartyQuestRuntimeRestoreDurabilityDomain : uint8_t
 
 struct PartyQuestRuntimeRecoveryResult
 {
-    PartyQuestRuntimeRecoveryStatus Status{
-        PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState};
-    PartyQuestReplicaManifestPersistenceStatus ManifestStatus{
-        PartyQuestReplicaManifestPersistenceStatus::InvalidData};
-    PartyQuestReplicaManifestVerificationStatus VerificationStatus{
-        PartyQuestReplicaManifestVerificationStatus::InvalidManifest};
-    PartyQuestReplicaRestorePlanStatus RestorePlanStatus{
-        PartyQuestReplicaRestorePlanStatus::InvalidIdentity};
-    PartyQuestReplicaRestoreExecutionStatus RestoreStatus{
-        PartyQuestReplicaRestoreExecutionStatus::InvalidPlan};
+    PartyQuestRuntimeRecoveryStatus Status{PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState};
+    PartyQuestReplicaManifestPersistenceStatus ManifestStatus{PartyQuestReplicaManifestPersistenceStatus::InvalidData};
+    PartyQuestReplicaManifestVerificationStatus VerificationStatus{PartyQuestReplicaManifestVerificationStatus::InvalidManifest};
+    PartyQuestPreRepairAuthorizationCommitPersistenceStatus AuthorizationStatus{PartyQuestPreRepairAuthorizationCommitPersistenceStatus::InvalidData};
+    PartyQuestReplicaRestorePlanStatus RestorePlanStatus{PartyQuestReplicaRestorePlanStatus::InvalidIdentity};
+    PartyQuestReplicaRestoreExecutionStatus RestoreStatus{PartyQuestReplicaRestoreExecutionStatus::InvalidPlan};
     std::optional<PartyQuestRuntimeRestoreAttemptStatus> RestoreAttemptStatus;
-    std::optional<PartyQuestReplicaDurableRestorePreparationStatus>
-        DurablePreparationStatus;
+    std::optional<PartyQuestReplicaDurableRestorePreparationStatus> DurablePreparationStatus;
     std::optional<PartyQuestReplicaDurableRestoreStatus> DurableRestoreStatus;
-    PartyQuestRuntimeRestoreDurabilityDomain RestoreDomain{
-        PartyQuestRuntimeRestoreDurabilityDomain::None};
-    PartyQuestRuntimeDurableTransitionStatus RuntimeTransition{
-        PartyQuestRuntimeDurableTransitionStatus::InvalidState};
+    PartyQuestRuntimeRestoreDurabilityDomain RestoreDomain{PartyQuestRuntimeRestoreDurabilityDomain::None};
+    PartyQuestRuntimeDurableTransitionStatus RuntimeTransition{PartyQuestRuntimeDurableTransitionStatus::InvalidState};
     uint64_t TransactionId{};
     uint64_t TargetWorldRevision{};
     // Legacy v3 recovery uses TransactionId. Strong recovery reports the exact
@@ -69,11 +66,7 @@ struct PartyQuestRuntimeRecoveryResult
     std::filesystem::path ManifestPath;
     std::filesystem::path RestoreJournalPath;
 
-    [[nodiscard]] bool IsResolved() const noexcept
-    {
-        return Status == PartyQuestRuntimeRecoveryStatus::Restored ||
-            Status == PartyQuestRuntimeRecoveryStatus::AlreadyRestored;
-    }
+    [[nodiscard]] bool IsResolved() const noexcept { return Status == PartyQuestRuntimeRecoveryStatus::Restored || Status == PartyQuestRuntimeRecoveryStatus::AlreadyRestored; }
 };
 
 /**
@@ -139,13 +132,9 @@ struct PartyQuestRuntimeRecoveryResult
 class PartyQuestRuntimeRecoveryCoordinator final
 {
 private:
-    [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveCrashRecovery(
-        PartyQuestRuntimeApplySession& aSession,
-        const PartyQuestCoopSavePaths& acPaths) noexcept;
+    [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveCrashRecovery(PartyQuestRuntimeApplySession& aSession, const PartyQuestCoopSavePaths& acPaths) noexcept;
 
-    [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveLiveRecovery(
-        PartyQuestRuntimeApplySession& aSession,
-        const PartyQuestCoopSavePaths& acPaths) noexcept;
+    [[nodiscard]] static PartyQuestRuntimeRecoveryResult ResolveLiveRecovery(PartyQuestRuntimeApplySession& aSession, const PartyQuestCoopSavePaths& acPaths) noexcept;
 
     friend class PartyQuestRuntimeGuardedSession;
     // Defined only in Code/tests; isolated filesystem recovery tests use it

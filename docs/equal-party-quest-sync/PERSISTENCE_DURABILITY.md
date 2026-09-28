@@ -173,6 +173,36 @@ individual filesystem restore attempt. A retry must receive a new deterministic
 or otherwise durable attempt identity without changing the higher-level repair
 transaction and without reusing a terminal restore-attempt ID.
 
+### Immutable PreRepair runtime authorization binding
+
+The full PreRepair checkpoint assembler now binds its controlled core-save
+evidence to the current process runtime generation and holds that generation
+stable through checkpoint publication. After the exact revision manifest is
+promoted to `PowerLossDurable`, the checkpoint coordinator builds and durably
+publishes the immutable final `pre_repair_commit.bin` before persisting
+`CheckpointCreated`. The runtime record and commit carry the same capture epoch
+and runtime generation.
+
+Crash/restart recovery records with non-zero checkpoint provenance must load
+that exact final record and match campaign, profile, transaction, runtime
+generation, capture epoch, target revision, quest, canonical digest, sidecar
+manifest fingerprint, actions, verification envelope and the exact bounded
+manifest artifact set. Missing, malformed, oversized or mismatched records fail
+before restore-plan execution. Sibling `.tmp` and `.bak` records are never read
+or promoted as authorization. Provenance-free legacy runtime records retain
+their existing recovery behavior; they cannot manufacture the new strong
+authorization claim.
+
+The record remains only one conjunctive gate. It does not bypass manifest-byte
+verification, workspace ownership, restore-attempt identity, restore-journal
+domain checks or post-restore verification, and it grants no native mutation
+authority by itself. Active in-process live recovery is not claimed as
+independent crash/restart evidence by this binding.
+
+Task 08 remains open. Hosted tests do not prove physical Windows/Skyrim power
+interruption behavior, and Windows/live power-loss evidence plus human review
+are still required before acceptance.
+
 The Linux strong restore classes remain intentionally separate from legacy
 `PartyQuestReplicaRestoreExecutor::Execute/Recover`. A v4 `BackupsReady` journal
 cannot be interpreted as permission for ordinary `SaveAtomically` transitions.

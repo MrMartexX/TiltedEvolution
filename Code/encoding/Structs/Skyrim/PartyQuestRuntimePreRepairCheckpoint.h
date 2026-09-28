@@ -25,32 +25,23 @@ public:
 
     [[nodiscard]] bool IsVerified() const noexcept { return m_verified; }
     [[nodiscard]] uint64_t GetCaptureEpochId() const noexcept { return m_captureEpochId; }
+    [[nodiscard]] uint64_t GetRuntimeGeneration() const noexcept { return m_runtimeGeneration; }
 
     /** Legacy diagnostic match; does not prove temporal coherence. */
-    [[nodiscard]] bool Matches(
-        uint64_t aTransactionId,
-        uint64_t aTargetWorldRevision,
-        const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) const noexcept;
+    [[nodiscard]] bool Matches(uint64_t aTransactionId, uint64_t aTargetWorldRevision, const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) const noexcept;
 
     /** Production gate: exact active capture epoch + exact core file set. */
-    [[nodiscard]] bool Matches(
-        const PartyQuestCheckpointCaptureEpoch& acEpoch,
-        const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) const noexcept;
+    [[nodiscard]] bool Matches(const PartyQuestCheckpointCaptureEpoch& acEpoch, const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) const noexcept;
 
 private:
-    PartyQuestRuntimePreRepairCoreAuthorization(
-        uint64_t aTransactionId,
-        uint64_t aTargetWorldRevision,
-        const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept;
+    PartyQuestRuntimePreRepairCoreAuthorization(uint64_t aTransactionId, uint64_t aTargetWorldRevision, const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept;
 
-    PartyQuestRuntimePreRepairCoreAuthorization(
-        const PartyQuestCheckpointCaptureEpoch& acEpoch,
-        const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept;
+    PartyQuestRuntimePreRepairCoreAuthorization(const PartyQuestCheckpointCaptureEpoch& acEpoch, const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept;
 
-    [[nodiscard]] static uint64_t ComputeFilesFingerprint(
-        const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept;
+    [[nodiscard]] static uint64_t ComputeFilesFingerprint(const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles) noexcept;
 
     uint64_t m_captureEpochId{};
+    uint64_t m_runtimeGeneration{};
     uint64_t m_transactionId{};
     uint64_t m_targetWorldRevision{};
     uint64_t m_sidecarManifestFingerprint{};
@@ -76,22 +67,17 @@ enum class PartyQuestRuntimePreRepairCheckpointStatus : uint8_t
     InvalidSidecarFileSet,
     InvalidCheckpointPlan,
     CheckpointFailed,
-    CaptureEpochCloseFailed
+    CaptureEpochCloseFailed,
+    InvalidRuntimeGeneration
 };
 
 struct PartyQuestRuntimePreRepairCheckpointResult
 {
-    PartyQuestRuntimePreRepairCheckpointStatus Status{
-        PartyQuestRuntimePreRepairCheckpointStatus::InvalidRuntimeState};
-    PartyQuestReplicaCopyPlanStatus PlanStatus{
-        PartyQuestReplicaCopyPlanStatus::InvalidSource};
+    PartyQuestRuntimePreRepairCheckpointStatus Status{PartyQuestRuntimePreRepairCheckpointStatus::InvalidRuntimeState};
+    PartyQuestReplicaCopyPlanStatus PlanStatus{PartyQuestReplicaCopyPlanStatus::InvalidSource};
     PartyQuestRuntimeCheckpointResult Checkpoint;
 
-    [[nodiscard]] bool IsReady() const noexcept
-    {
-        return Status == PartyQuestRuntimePreRepairCheckpointStatus::Ready &&
-            Checkpoint.IsReady();
-    }
+    [[nodiscard]] bool IsReady() const noexcept { return Status == PartyQuestRuntimePreRepairCheckpointStatus::Ready && Checkpoint.IsReady(); }
 };
 
 /**
@@ -114,11 +100,7 @@ class PartyQuestRuntimePreRepairCheckpointAssembler final
 {
 public:
     [[nodiscard]] static PartyQuestRuntimePreRepairCheckpointResult Complete(
-        PartyQuestRuntimeGuardedSession& aGuardedSession,
-        const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestCheckpointCaptureEpoch& acEpoch,
-        const PartyQuestRuntimePreRepairCoreAuthorization& acCoreAuthorization,
-        const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles,
-        const PartyQuestCheckpointSidecarManifest& acSidecarManifest,
-        const PartyQuestCheckpointSidecarMirrorResult& acSidecars) noexcept;
+        PartyQuestRuntimeGuardedSession& aGuardedSession, const PartyQuestCoopSavePaths& acPaths, const PartyQuestCheckpointCaptureEpoch& acEpoch,
+        const PartyQuestRuntimePreRepairCoreAuthorization& acCoreAuthorization, const std::vector<PartyQuestReplicaFileSpec>& acCoreFiles,
+        const PartyQuestCheckpointSidecarManifest& acSidecarManifest, const PartyQuestCheckpointSidecarMirrorResult& acSidecars) noexcept;
 };

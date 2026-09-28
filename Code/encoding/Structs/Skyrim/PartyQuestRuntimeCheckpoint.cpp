@@ -21,8 +21,7 @@ void HashBytes(uint64_t& aHash, const void* apData, size_t aSize) noexcept
     }
 }
 
-template <class T>
-void HashValue(uint64_t& aHash, const T& acValue) noexcept
+template <class T> void HashValue(uint64_t& aHash, const T& acValue) noexcept
 {
     static_assert(std::is_trivially_copyable_v<T>);
     HashBytes(aHash, &acValue, sizeof(T));
@@ -36,10 +35,8 @@ void HashString(uint64_t& aHash, const std::string& acValue) noexcept
         HashBytes(aHash, acValue.data(), acValue.size());
 }
 
-PartyQuestRuntimeCheckpointResult MakeResult(
-    PartyQuestRuntimeCheckpointStatus aStatus,
-    const PartyQuestRuntimeApplyEntry* apActive,
-    const std::filesystem::path& acManifestPath = {})
+PartyQuestRuntimeCheckpointResult
+MakeResult(PartyQuestRuntimeCheckpointStatus aStatus, const PartyQuestRuntimeApplyEntry* apActive, const std::filesystem::path& acManifestPath = {})
 {
     PartyQuestRuntimeCheckpointResult result;
     result.Status = aStatus;
@@ -54,23 +51,35 @@ PartyQuestRuntimeCheckpointResult MakeResult(
 
 bool IsCheckpointReadyState(const PartyQuestRuntimeApplyEntry& acActive) noexcept
 {
-    return acActive.State == PartyQuestRuntimeApplyState::ReadyToApply &&
-        acActive.SaveGuardActive &&
-        acActive.CheckpointCreated &&
-        !acActive.RuntimeMutationMayHaveOccurred;
+    return acActive.State == PartyQuestRuntimeApplyState::ReadyToApply && acActive.SaveGuardActive && acActive.CheckpointCreated && !acActive.RuntimeMutationMayHaveOccurred;
 }
 
 bool IsAwaitingCheckpointState(const PartyQuestRuntimeApplyEntry& acActive) noexcept
 {
-    return acActive.State == PartyQuestRuntimeApplyState::AwaitingCheckpoint &&
-        acActive.SaveGuardActive &&
-        !acActive.CheckpointCreated &&
-        !acActive.RuntimeMutationMayHaveOccurred;
+    return acActive.State == PartyQuestRuntimeApplyState::AwaitingCheckpoint && acActive.SaveGuardActive && !acActive.CheckpointCreated && !acActive.RuntimeMutationMayHaveOccurred;
+}
+
+bool PublishAuthorizationCommit(
+    const PartyQuestRuntimeApplySession& acSession, const PartyQuestCoopSavePaths& acPaths, const PartyQuestRuntimeApplyEntry& acActive, uint64_t aRuntimeGeneration,
+    uint64_t aCaptureEpochId, const std::filesystem::path& acManifestPath) noexcept
+{
+    const auto loaded = PartyQuestReplicaManifestStore::Load(acManifestPath);
+    if (loaded.Status != PartyQuestReplicaManifestPersistenceStatus::Success || !loaded.Manifest)
+    {
+        return false;
+    }
+
+    const auto commit = PartyQuestPreRepairAuthorizationCommitStore::Build(
+        acSession.GetCampaignId(), acSession.GetPlayerProfileId(), acActive, aRuntimeGeneration, aCaptureEpochId, *loaded.Manifest);
+    if (!commit)
+        return false;
+
+    const auto status = PartyQuestPreRepairAuthorizationCommitStore::PublishDurably(acPaths, *commit);
+    return status == PartyQuestPreRepairAuthorizationCommitPublishStatus::Published || status == PartyQuestPreRepairAuthorizationCommitPublishStatus::AlreadyCommitted;
 }
 } // namespace
 
-uint64_t PartyQuestRuntimeCheckpointCoverageAuthorization::ComputePlanFingerprint(
-    const PartyQuestReplicaCopyPlan& acPlan) noexcept
+uint64_t PartyQuestRuntimeCheckpointCoverageAuthorization::ComputePlanFingerprint(const PartyQuestReplicaCopyPlan& acPlan) noexcept
 {
     try
     {
@@ -101,36 +110,34 @@ uint64_t PartyQuestRuntimeCheckpointCoverageAuthorization::ComputePlanFingerprin
     }
 }
 
-PartyQuestRuntimeCheckpointCoverageAuthorization::
-PartyQuestRuntimeCheckpointCoverageAuthorization(
-    uint64_t aTransactionId,
-    uint64_t aTargetWorldRevision,
-    const PartyQuestReplicaCopyPlan& acPlan) noexcept
+PartyQuestRuntimeCheckpointCoverageAuthorization::PartyQuestRuntimeCheckpointCoverageAuthorization(
+    uint64_t aTransactionId, uint64_t aTargetWorldRevision, const PartyQuestReplicaCopyPlan& acPlan) noexcept
     : m_transactionId(aTransactionId)
     , m_targetWorldRevision(aTargetWorldRevision)
     , m_planFingerprint(ComputePlanFingerprint(acPlan))
     , m_operationCount(acPlan.Operations.size())
+    , m_verified(aTransactionId != 0 && aTargetWorldRevision != 0 && acPlan.IsReady() && !acPlan.Operations.empty() && m_planFingerprint != 0)
+{
+}
+
+PartyQuestRuntimeCheckpointCoverageAuthorization::PartyQuestRuntimeCheckpointCoverageAuthorization(
+    uint64_t aTransactionId, uint64_t aTargetWorldRevision, uint64_t aRuntimeGeneration, uint64_t aCaptureEpochId, const PartyQuestReplicaCopyPlan& acPlan) noexcept
+    : m_transactionId(aTransactionId)
+    , m_targetWorldRevision(aTargetWorldRevision)
+    , m_runtimeGeneration(aRuntimeGeneration)
+    , m_captureEpochId(aCaptureEpochId)
+    , m_planFingerprint(ComputePlanFingerprint(acPlan))
+    , m_operationCount(acPlan.Operations.size())
     , m_verified(
-          aTransactionId != 0 &&
-          aTargetWorldRevision != 0 &&
-          acPlan.IsReady() &&
-          !acPlan.Operations.empty() &&
+          aTransactionId != 0 && aTargetWorldRevision != 0 && aRuntimeGeneration != 0 && aCaptureEpochId != 0 && acPlan.IsReady() && !acPlan.Operations.empty() &&
           m_planFingerprint != 0)
 {
 }
 
-bool PartyQuestRuntimeCheckpointCoverageAuthorization::Matches(
-    uint64_t aTransactionId,
-    uint64_t aTargetWorldRevision,
-    const PartyQuestReplicaCopyPlan& acPlan) const noexcept
+bool PartyQuestRuntimeCheckpointCoverageAuthorization::Matches(uint64_t aTransactionId, uint64_t aTargetWorldRevision, const PartyQuestReplicaCopyPlan& acPlan) const noexcept
 {
-    if (!m_verified ||
-        aTransactionId == 0 ||
-        aTargetWorldRevision == 0 ||
-        aTransactionId != m_transactionId ||
-        aTargetWorldRevision != m_targetWorldRevision ||
-        !acPlan.IsReady() ||
-        acPlan.Operations.size() != m_operationCount)
+    if (!m_verified || aTransactionId == 0 || aTargetWorldRevision == 0 || aTransactionId != m_transactionId || aTargetWorldRevision != m_targetWorldRevision ||
+        !acPlan.IsReady() || acPlan.Operations.size() != m_operationCount)
     {
         return false;
     }
@@ -139,75 +146,50 @@ bool PartyQuestRuntimeCheckpointCoverageAuthorization::Matches(
     return fingerprint != 0 && fingerprint == m_planFingerprint;
 }
 
-PartyQuestRuntimeCheckpointResult
-PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
-    PartyQuestRuntimeApplySession& aSession,
-    const PartyQuestCoopSavePaths& acPaths,
-    const PartyQuestReplicaCopyPlan& acCheckpointPlan,
-    const PartyQuestRuntimeCheckpointCoverageAuthorization& acCoverage,
-    const PartyQuestReplicaWorkspacePublicationCapability* apPublicationCapability) noexcept
+PartyQuestRuntimeCheckpointResult PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
+    PartyQuestRuntimeApplySession& aSession, const PartyQuestCoopSavePaths& acPaths, const PartyQuestReplicaCopyPlan& acCheckpointPlan,
+    const PartyQuestRuntimeCheckpointCoverageAuthorization& acCoverage, const PartyQuestReplicaWorkspacePublicationCapability* apPublicationCapability) noexcept
 {
     try
     {
-        if (!aSession.GetCampaignId().IsValid() ||
-            !aSession.GetPlayerProfileId().IsValid())
+        if (!aSession.GetCampaignId().IsValid() || !aSession.GetPlayerProfileId().IsValid())
         {
-            return MakeResult(
-                PartyQuestRuntimeCheckpointStatus::InvalidIdentity,
-                aSession.GetCoordinator().GetActive());
+            return MakeResult(PartyQuestRuntimeCheckpointStatus::InvalidIdentity, aSession.GetCoordinator().GetActive());
         }
 
-        if (!PartyQuestCoopSaveLayout::Matches(
-                acPaths,
-                aSession.GetCampaignId(),
-                aSession.GetPlayerProfileId()))
+        if (!PartyQuestCoopSaveLayout::Matches(acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId()))
         {
-            return MakeResult(
-                PartyQuestRuntimeCheckpointStatus::InvalidLayout,
-                aSession.GetCoordinator().GetActive());
+            return MakeResult(PartyQuestRuntimeCheckpointStatus::InvalidLayout, aSession.GetCoordinator().GetActive());
         }
 
-        const PartyQuestRuntimeApplyEntry* pActive =
-            aSession.GetCoordinator().GetActive();
-        if (!pActive ||
-            pActive->TransactionId == 0 ||
-            pActive->TargetWorldRevision == 0)
+        const PartyQuestRuntimeApplyEntry* pActive = aSession.GetCoordinator().GetActive();
+        if (!pActive || pActive->TransactionId == 0 || pActive->TargetWorldRevision == 0)
         {
-            return MakeResult(
-                PartyQuestRuntimeCheckpointStatus::InvalidRuntimeState,
-                pActive);
+            return MakeResult(PartyQuestRuntimeCheckpointStatus::InvalidRuntimeState, pActive);
         }
 
         const uint64_t transactionId = pActive->TransactionId;
         const uint64_t targetWorldRevision = pActive->TargetWorldRevision;
-        const auto manifestPath =
-            PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
-                acPaths,
-                PartyQuestCheckpointKind::PreRepair,
-                targetWorldRevision);
+        const auto manifestPath = PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(acPaths, PartyQuestCheckpointKind::PreRepair, targetWorldRevision);
 
-        if (!acCoverage.Matches(
-                transactionId,
-                targetWorldRevision,
-                acCheckpointPlan))
+        if (!acCoverage.Matches(transactionId, targetWorldRevision, acCheckpointPlan))
         {
-            return MakeResult(
-                PartyQuestRuntimeCheckpointStatus::InvalidCoverageAuthorization,
-                pActive,
-                manifestPath);
+            return MakeResult(PartyQuestRuntimeCheckpointStatus::InvalidCoverageAuthorization, pActive, manifestPath);
         }
 
-        PartyQuestReplicaSnapshotManager manager(
-            acPaths,
-            aSession.GetCampaignId(),
-            aSession.GetPlayerProfileId());
+        if (pActive->CheckpointCreated && (pActive->CheckpointRuntimeGeneration != 0 || pActive->CheckpointCaptureEpochId != 0) &&
+            (!acCoverage.HasStrongAuthorization() || pActive->CheckpointRuntimeGeneration != acCoverage.GetRuntimeGeneration() ||
+             pActive->CheckpointCaptureEpochId != acCoverage.GetCaptureEpochId()))
+        {
+            return MakeResult(PartyQuestRuntimeCheckpointStatus::InvalidCoverageAuthorization, pActive, manifestPath);
+        }
+
+        PartyQuestReplicaSnapshotManager manager(acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId());
 
         PartyQuestReplicaWorkspacePublicationCapability ownerCapability;
         if (!apPublicationCapability)
         {
-            ownerCapability = PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
-                aSession,
-                acPaths);
+            ownerCapability = PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(aSession, acPaths);
             if (ownerCapability.IsVerified())
                 apPublicationCapability = &ownerCapability;
         }
@@ -215,30 +197,16 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
         const auto promoteDurably = [&]() noexcept
         {
             return apPublicationCapability
-                ? PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpointAuthorized(
-                      acPaths,
-                      aSession.GetCampaignId(),
-                      aSession.GetPlayerProfileId(),
-                      PartyQuestCheckpointKind::PreRepair,
-                      targetWorldRevision,
-                      *apPublicationCapability)
-                : PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
-                      acPaths,
-                      aSession.GetCampaignId(),
-                      aSession.GetPlayerProfileId(),
-                      PartyQuestCheckpointKind::PreRepair,
-                      targetWorldRevision);
+                       ? PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpointAuthorized(
+                             acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), PartyQuestCheckpointKind::PreRepair, targetWorldRevision, *apPublicationCapability)
+                       : PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
+                             acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), PartyQuestCheckpointKind::PreRepair, targetWorldRevision);
         };
 
         if (IsCheckpointReadyState(*pActive))
         {
-            PartyQuestRuntimeCheckpointResult result = MakeResult(
-                PartyQuestRuntimeCheckpointStatus::AlreadyReady,
-                pActive,
-                manifestPath);
-            const auto validation = manager.ValidateRevisionCheckpoint(
-                PartyQuestCheckpointKind::PreRepair,
-                targetWorldRevision);
+            PartyQuestRuntimeCheckpointResult result = MakeResult(PartyQuestRuntimeCheckpointStatus::AlreadyReady, pActive, manifestPath);
+            const auto validation = manager.ValidateRevisionCheckpoint(PartyQuestCheckpointKind::PreRepair, targetWorldRevision);
             result.SnapshotStatus = validation.Status;
             if (!validation.IsReady())
             {
@@ -249,50 +217,44 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
             const auto durable = promoteDurably();
             result.DurableSnapshotStatus = durable.Status;
             if (!durable.IsPromoted())
+            {
                 result.Status = PartyQuestRuntimeCheckpointStatus::DurablePromotionFailed;
+                return result;
+            }
+
+            if (acCoverage.HasStrongAuthorization())
+            {
+                if (!PublishAuthorizationCommit(aSession, acPaths, *pActive, acCoverage.GetRuntimeGeneration(), acCoverage.GetCaptureEpochId(), manifestPath))
+                {
+                    result.Status = PartyQuestRuntimeCheckpointStatus::AuthorizationCommitFailed;
+                }
+            }
             return result;
         }
 
         if (!IsAwaitingCheckpointState(*pActive))
         {
-            return MakeResult(
-                PartyQuestRuntimeCheckpointStatus::InvalidRuntimeState,
-                pActive,
-                manifestPath);
+            return MakeResult(PartyQuestRuntimeCheckpointStatus::InvalidRuntimeState, pActive, manifestPath);
         }
 
         if (!acCheckpointPlan.IsReady())
         {
-            return MakeResult(
-                PartyQuestRuntimeCheckpointStatus::InvalidCheckpointPlan,
-                pActive,
-                manifestPath);
+            return MakeResult(PartyQuestRuntimeCheckpointStatus::InvalidCheckpointPlan, pActive, manifestPath);
         }
 
         const auto snapshot = apPublicationCapability
-            ? manager.EnsureRevisionCheckpoint(
-                  PartyQuestCheckpointKind::PreRepair,
-                  targetWorldRevision,
-                  acCheckpointPlan,
-                  *apPublicationCapability)
-            : manager.EnsureRevisionCheckpoint(
-                  PartyQuestCheckpointKind::PreRepair,
-                  targetWorldRevision,
-                  acCheckpointPlan);
+                                  ? manager.EnsureRevisionCheckpoint(PartyQuestCheckpointKind::PreRepair, targetWorldRevision, acCheckpointPlan, *apPublicationCapability)
+                                  : manager.EnsureRevisionCheckpoint(PartyQuestCheckpointKind::PreRepair, targetWorldRevision, acCheckpointPlan);
 
         PartyQuestRuntimeCheckpointResult result = MakeResult(
-            snapshot.Status == PartyQuestReplicaSnapshotStatus::AlreadyReady
-                ? PartyQuestRuntimeCheckpointStatus::AlreadyReady
-                : PartyQuestRuntimeCheckpointStatus::Ready,
-            pActive,
+            snapshot.Status == PartyQuestReplicaSnapshotStatus::AlreadyReady ? PartyQuestRuntimeCheckpointStatus::AlreadyReady : PartyQuestRuntimeCheckpointStatus::Ready, pActive,
             manifestPath);
         result.SnapshotStatus = snapshot.Status;
 
         if (!snapshot.IsReady())
         {
-            result.Status = snapshot.Status == PartyQuestReplicaSnapshotStatus::InvalidPlan
-                ? PartyQuestRuntimeCheckpointStatus::InvalidCheckpointPlan
-                : PartyQuestRuntimeCheckpointStatus::SnapshotFailed;
+            result.Status = snapshot.Status == PartyQuestReplicaSnapshotStatus::InvalidPlan ? PartyQuestRuntimeCheckpointStatus::InvalidCheckpointPlan
+                                                                                            : PartyQuestRuntimeCheckpointStatus::SnapshotFailed;
             return result;
         }
 
@@ -304,30 +266,31 @@ PartyQuestRuntimeCheckpointCoordinator::EnsurePreRepairCheckpoint(
             return result;
         }
 
-        result.RuntimeTransition =
-            aSession.MarkCheckpointCreatedInternal(transactionId);
+        if (acCoverage.HasStrongAuthorization() &&
+            !PublishAuthorizationCommit(aSession, acPaths, *pActive, acCoverage.GetRuntimeGeneration(), acCoverage.GetCaptureEpochId(), manifestPath))
+        {
+            result.Status = PartyQuestRuntimeCheckpointStatus::AuthorizationCommitFailed;
+            return result;
+        }
+
+        result.RuntimeTransition = acCoverage.HasStrongAuthorization()
+                                       ? aSession.MarkCheckpointCreatedInternal(transactionId, acCoverage.GetRuntimeGeneration(), acCoverage.GetCaptureEpochId())
+                                       : aSession.MarkCheckpointCreatedInternal(transactionId);
         switch (result.RuntimeTransition)
         {
-        case PartyQuestRuntimeDurableTransitionStatus::Applied:
-            break;
+        case PartyQuestRuntimeDurableTransitionStatus::Applied: break;
 
-        case PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure:
-            result.Status = PartyQuestRuntimeCheckpointStatus::RuntimeStatePersistenceFailed;
-            break;
+        case PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure: result.Status = PartyQuestRuntimeCheckpointStatus::RuntimeStatePersistenceFailed; break;
 
         case PartyQuestRuntimeDurableTransitionStatus::InvalidState:
         case PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired:
-        case PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability:
-            result.Status = PartyQuestRuntimeCheckpointStatus::InvalidRuntimeState;
-            break;
+        case PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability: result.Status = PartyQuestRuntimeCheckpointStatus::InvalidRuntimeState; break;
         }
 
         return result;
     }
     catch (...)
     {
-        return MakeResult(
-            PartyQuestRuntimeCheckpointStatus::SnapshotFailed,
-            aSession.GetCoordinator().GetActive());
+        return MakeResult(PartyQuestRuntimeCheckpointStatus::SnapshotFailed, aSession.GetCoordinator().GetActive());
     }
 }

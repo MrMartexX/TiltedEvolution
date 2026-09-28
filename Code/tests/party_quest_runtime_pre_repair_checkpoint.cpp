@@ -1,4 +1,5 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimePreRepairCheckpoint.h>
 
 #include <party_quest_pre_repair_checkpoint_test_access.h>
@@ -9,16 +10,13 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <string>
 
 namespace
 {
-const PartyQuestCampaignId kAssemblerCampaign{
-    0x0102030405060708ull,
-    0x1112131415161718ull};
-const PartyQuestPlayerProfileId kAssemblerPlayer{
-    0x2122232425262728ull,
-    0x3132333435363738ull};
+const PartyQuestCampaignId kAssemblerCampaign{0x0102030405060708ull, 0x1112131415161718ull};
+const PartyQuestPlayerProfileId kAssemblerPlayer{0x2122232425262728ull, 0x3132333435363738ull};
 
 struct AssemblerSandbox
 {
@@ -28,15 +26,11 @@ struct AssemblerSandbox
     AssemblerSandbox()
     {
         const auto nonce = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-        TempRoot = std::filesystem::temp_directory_path() /
-            ("tp_party_quest_pre_repair_assembler_" + std::to_string(nonce));
+        TempRoot = std::filesystem::temp_directory_path() / ("tp_party_quest_pre_repair_assembler_" + std::to_string(nonce));
         std::error_code ec;
         std::filesystem::remove_all(TempRoot, ec);
 
-        const auto paths = PartyQuestCoopSaveLayout::Build(
-            TempRoot / "CoopCampaigns",
-            kAssemblerCampaign,
-            kAssemblerPlayer);
+        const auto paths = PartyQuestCoopSaveLayout::Build(TempRoot / "CoopCampaigns", kAssemblerCampaign, kAssemblerPlayer);
         REQUIRE(paths.has_value());
         Paths = *paths;
 
@@ -66,10 +60,14 @@ void WriteBytes(const std::filesystem::path& acPath, const char* acBytes)
     REQUIRE(stream.good());
 }
 
-PartyQuestRuntimeApplyRequest BuildAssemblerRequest(
-    uint64_t aTransactionId,
-    uint64_t aWorldRevision,
-    const PartyQuestCheckpointSidecarManifest& acSidecarManifest = {})
+std::string ReadBytes(const std::filesystem::path& acPath)
+{
+    std::ifstream stream(acPath, std::ios::binary);
+    REQUIRE(stream.is_open());
+    return std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
+}
+
+PartyQuestRuntimeApplyRequest BuildAssemblerRequest(uint64_t aTransactionId, uint64_t aWorldRevision, const PartyQuestCheckpointSidecarManifest& acSidecarManifest = {})
 {
     QuestSnapshot snapshot;
     snapshot.QuestId = GameId(81, static_cast<uint32_t>(0x4000 + aTransactionId));
@@ -88,9 +86,7 @@ PartyQuestRuntimeApplyRequest BuildAssemblerRequest(
     request.CanonicalSnapshot = snapshot;
     request.Plan.Safety.Status = PartyQuestRuntimeSafetyStatus::RuntimeSafe;
     request.Plan.Safety.Reason = PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;
-    request.Plan.Actions = PartyQuestApplyAction::StageTransition |
-        PartyQuestApplyAction::WaitForPapyrusQuiescence |
-        PartyQuestApplyAction::ResnapshotAndVerify;
+    request.Plan.Actions = PartyQuestApplyAction::StageTransition | PartyQuestApplyAction::WaitForPapyrusQuiescence | PartyQuestApplyAction::ResnapshotAndVerify;
     PartyQuestRuntimeSafetyTestAccess::AuthorizePlan(request.Plan, snapshot);
     return request;
 }
@@ -98,17 +94,10 @@ PartyQuestRuntimeApplyRequest BuildAssemblerRequest(
 PartyQuestRuntimeApplySession BuildAssemblerSession()
 {
     return PartyQuestRuntimeApplySession(
-        kAssemblerCampaign,
-        kAssemblerPlayer,
-        [](const PartyQuestRuntimeRecoveryState&)
-        {
-            return true;
-        },
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
+        kAssemblerCampaign, kAssemblerPlayer, [](const PartyQuestRuntimeRecoveryState&) { return true; }, PartyQuestPersistenceGuarantee::ProcessCrashResilient);
 }
 
-PartyQuestCheckpointCaptureEpoch BeginCaptureEpoch(
-    PartyQuestRuntimeGuardedSession& aGuarded)
+PartyQuestCheckpointCaptureEpoch BeginCaptureEpoch(PartyQuestRuntimeGuardedSession& aGuarded)
 {
     const auto epoch = aGuarded.BeginCheckpointCaptureEpoch();
     REQUIRE(epoch.IsReady());
@@ -116,22 +105,15 @@ PartyQuestCheckpointCaptureEpoch BeginCaptureEpoch(
     return epoch.Epoch;
 }
 
-std::vector<PartyQuestReplicaFileSpec> BuildCoreFiles(
-    AssemblerSandbox& aSandbox)
+std::vector<PartyQuestReplicaFileSpec> BuildCoreFiles(AssemblerSandbox& aSandbox)
 {
     const auto essPath = aSandbox.Paths.SavesDirectory / "Controlled.ess";
     const auto sksePath = aSandbox.Paths.SavesDirectory / "Controlled.skse";
     WriteBytes(essPath, "CONTROLLED_CORE_ESS");
     WriteBytes(sksePath, "CONTROLLED_CORE_SKSE");
 
-    const auto ess = PartyQuestReplicaFileExecutor::InspectSource(
-        PartyQuestReplicaFileKind::SkyrimSave,
-        essPath,
-        essPath.filename());
-    const auto skse = PartyQuestReplicaFileExecutor::InspectSource(
-        PartyQuestReplicaFileKind::SkseCosave,
-        sksePath,
-        sksePath.filename());
+    const auto ess = PartyQuestReplicaFileExecutor::InspectSource(PartyQuestReplicaFileKind::SkyrimSave, essPath, essPath.filename());
+    const auto skse = PartyQuestReplicaFileExecutor::InspectSource(PartyQuestReplicaFileKind::SkseCosave, sksePath, sksePath.filename());
     REQUIRE(ess.has_value());
     REQUIRE(skse.has_value());
     return {*ess, *skse};
@@ -148,8 +130,7 @@ PartyQuestCheckpointSidecarRequirement BuildRequiredSidecarRequirement()
     return requirement;
 }
 
-PartyQuestCheckpointSidecarAuthorization AuthorizeSidecar(
-    const PartyQuestCheckpointSidecarRequirement& acRequirement)
+PartyQuestCheckpointSidecarAuthorization AuthorizeSidecar(const PartyQuestCheckpointSidecarRequirement& acRequirement)
 {
     PartyQuestCheckpointSidecarFacts facts;
     facts.CapabilityId = acRequirement.CapabilityId;
@@ -159,32 +140,22 @@ PartyQuestCheckpointSidecarAuthorization AuthorizeSidecar(
     facts.CaptureConsistency = PartyQuestCheckpointSidecarCaptureConsistency::AtomicSnapshot;
     facts.CaptureAvailable = true;
     facts.RestoreAvailable = true;
-    const auto decision = PartyQuestCheckpointSidecarPolicy::Evaluate(
-        acRequirement,
-        &facts);
+    const auto decision = PartyQuestCheckpointSidecarPolicy::Evaluate(acRequirement, &facts);
     REQUIRE(decision.IsAuthorized());
     return decision.Authorization;
 }
 
-std::filesystem::path BuildSidecarRelativePath(
-    const PartyQuestCheckpointSidecarRequirement& acRequirement)
+std::filesystem::path BuildSidecarRelativePath(const PartyQuestCheckpointSidecarRequirement& acRequirement)
 {
-    return std::filesystem::path(
-               PartyQuestCheckpointSidecarMirrorCollector::FormatCapabilityDirectory(
-                   acRequirement.CapabilityId)) /
-        "state.bin";
+    return std::filesystem::path(PartyQuestCheckpointSidecarMirrorCollector::FormatCapabilityDirectory(acRequirement.CapabilityId)) / "state.bin";
 }
 
 PartyQuestCheckpointSidecarMirrorResult CollectRequiredSidecar(
-    AssemblerSandbox& aSandbox,
-    const PartyQuestCheckpointSidecarManifest& acManifest,
-    const PartyQuestCheckpointSidecarRequirement& acRequirement,
+    AssemblerSandbox& aSandbox, const PartyQuestCheckpointSidecarManifest& acManifest, const PartyQuestCheckpointSidecarRequirement& acRequirement,
     const PartyQuestCheckpointCaptureEpoch& acEpoch)
 {
     const auto relative = BuildSidecarRelativePath(acRequirement);
-    WriteBytes(
-        aSandbox.Paths.SidecarsDirectory / "external" / relative,
-        "RESTORABLE_EXTERNAL_STATE");
+    WriteBytes(aSandbox.Paths.SidecarsDirectory / "external" / relative, "RESTORABLE_EXTERNAL_STATE");
 
     PartyQuestCheckpointSidecarCapture capture;
     capture.Authorization = AuthorizeSidecar(acRequirement);
@@ -193,11 +164,7 @@ PartyQuestCheckpointSidecarMirrorResult CollectRequiredSidecar(
     capture.TargetWorldRevision = acEpoch.GetTargetWorldRevision();
     capture.MirrorRelativeFiles = {relative};
 
-    return PartyQuestCheckpointSidecarMirrorCollector::Collect(
-        aSandbox.Paths,
-        acManifest,
-        acEpoch,
-        {capture});
+    return PartyQuestCheckpointSidecarMirrorCollector::Collect(aSandbox.Paths, acManifest, acEpoch, {capture});
 }
 } // namespace
 
@@ -212,38 +179,37 @@ TEST_CASE("Full PreRepair assembler is the gate from one capture epoch to ReadyT
     const auto epoch = BeginCaptureEpoch(guarded);
 
     const auto coreFiles = BuildCoreFiles(sandbox);
-    const auto coreAuthorization =
-        PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(
-            epoch,
-            coreFiles);
+    const auto coreAuthorization = PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(epoch, coreFiles);
     REQUIRE(coreAuthorization.IsVerified());
     REQUIRE(coreAuthorization.GetCaptureEpochId() == epoch.GetEpochId());
 
     PartyQuestCheckpointSidecarManifest emptyManifest;
-    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(
-        sandbox.Paths,
-        emptyManifest,
-        epoch,
-        {});
+    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(sandbox.Paths, emptyManifest, epoch, {});
     REQUIRE(sidecars.IsReady());
     REQUIRE(sidecars.Authorization.GetCaptureEpochId() == epoch.GetEpochId());
 
-    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
-        guarded,
-        sandbox.Paths,
-        epoch,
-        coreAuthorization,
-        coreFiles,
-        emptyManifest,
-        sidecars);
+    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, epoch, coreAuthorization, coreFiles, emptyManifest, sidecars);
     REQUIRE(result.Status == PartyQuestRuntimePreRepairCheckpointStatus::Ready);
     REQUIRE(result.PlanStatus == PartyQuestReplicaCopyPlanStatus::Ready);
     REQUIRE(result.Checkpoint.IsReady());
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::ReadyToApply);
     REQUIRE(session.GetCoordinator().GetActive()->CheckpointCreated);
+    REQUIRE(session.GetCoordinator().GetActive()->CheckpointRuntimeGeneration == coreAuthorization.GetRuntimeGeneration());
+    REQUIRE(session.GetCoordinator().GetActive()->CheckpointCaptureEpochId == epoch.GetEpochId());
     REQUIRE(saveGuard.GetTransactionId() == request.TransactionId);
     REQUIRE_FALSE(guarded.IsCheckpointCaptureEpochActive(epoch));
+
+    const auto manifestPath = PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(sandbox.Paths, PartyQuestCheckpointKind::PreRepair, request.TargetWorldRevision);
+    const auto manifest = PartyQuestReplicaManifestStore::Load(manifestPath);
+    REQUIRE(manifest.Status == PartyQuestReplicaManifestPersistenceStatus::Success);
+    REQUIRE(manifest.Manifest.has_value());
+    const auto expected = PartyQuestPreRepairAuthorizationCommitStore::Build(
+        kAssemblerCampaign, kAssemblerPlayer, *session.GetCoordinator().GetActive(), coreAuthorization.GetRuntimeGeneration(), epoch.GetEpochId(), *manifest.Manifest);
+    REQUIRE(expected.has_value());
+    const auto commit = PartyQuestPreRepairAuthorizationCommitStore::Load(PartyQuestPreRepairAuthorizationCommitStore::GetCommitPath(sandbox.Paths, request.TargetWorldRevision));
+    REQUIRE(commit.Status == PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success);
+    REQUIRE(commit.Record == expected);
 }
 
 TEST_CASE("Required sidecar absence cannot advance full PreRepair coverage", "[quest.party-state.pre-repair-assembler][capture-epoch]")
@@ -259,32 +225,15 @@ TEST_CASE("Required sidecar absence cannot advance full PreRepair coverage", "[q
     const auto epoch = BeginCaptureEpoch(guarded);
 
     const auto coreFiles = BuildCoreFiles(sandbox);
-    const auto coreAuthorization =
-        PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(
-            epoch,
-            coreFiles);
+    const auto coreAuthorization = PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(epoch, coreFiles);
 
-    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(
-        sandbox.Paths,
-        manifest,
-        epoch,
-        {});
+    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(sandbox.Paths, manifest, epoch, {});
     REQUIRE_FALSE(sidecars.IsReady());
-    REQUIRE(sidecars.Status ==
-        PartyQuestCheckpointSidecarMirrorStatus::MissingRequiredCapture);
+    REQUIRE(sidecars.Status == PartyQuestCheckpointSidecarMirrorStatus::MissingRequiredCapture);
 
-    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
-        guarded,
-        sandbox.Paths,
-        epoch,
-        coreAuthorization,
-        coreFiles,
-        manifest,
-        sidecars);
-    REQUIRE(result.Status ==
-        PartyQuestRuntimePreRepairCheckpointStatus::InvalidSidecarAuthorization);
-    REQUIRE(session.GetCoordinator().GetActive()->State ==
-        PartyQuestRuntimeApplyState::AwaitingCheckpoint);
+    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, epoch, coreAuthorization, coreFiles, manifest, sidecars);
+    REQUIRE(result.Status == PartyQuestRuntimePreRepairCheckpointStatus::InvalidSidecarAuthorization);
+    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::AwaitingCheckpoint);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->CheckpointCreated);
     REQUIRE(guarded.IsCheckpointCaptureEpochActive(epoch));
 }
@@ -303,34 +252,17 @@ TEST_CASE("Exact required sidecar mirror is included before checkpoint publicati
     const auto epoch = BeginCaptureEpoch(guarded);
 
     const auto coreFiles = BuildCoreFiles(sandbox);
-    const auto coreAuthorization =
-        PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(
-            epoch,
-            coreFiles);
+    const auto coreAuthorization = PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(epoch, coreFiles);
 
-    const auto sidecars = CollectRequiredSidecar(
-        sandbox,
-        manifest,
-        requirement,
-        epoch);
+    const auto sidecars = CollectRequiredSidecar(sandbox, manifest, requirement, epoch);
     REQUIRE(sidecars.IsReady());
     REQUIRE(sidecars.Files.size() == 1);
 
-    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
-        guarded,
-        sandbox.Paths,
-        epoch,
-        coreAuthorization,
-        coreFiles,
-        manifest,
-        sidecars);
+    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, epoch, coreAuthorization, coreFiles, manifest, sidecars);
     REQUIRE(result.IsReady());
     REQUIRE_FALSE(guarded.IsCheckpointCaptureEpochActive(epoch));
 
-    const auto manifestPath = PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
-        sandbox.Paths,
-        PartyQuestCheckpointKind::PreRepair,
-        request.TargetWorldRevision);
+    const auto manifestPath = PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(sandbox.Paths, PartyQuestCheckpointKind::PreRepair, request.TargetWorldRevision);
     const auto loaded = PartyQuestReplicaManifestStore::Load(manifestPath);
     REQUIRE(loaded.Status == PartyQuestReplicaManifestPersistenceStatus::Success);
     REQUIRE(loaded.Manifest.has_value());
@@ -348,33 +280,44 @@ TEST_CASE("Core authorization is invalidated by any file-spec change", "[quest.p
     const auto epoch = BeginCaptureEpoch(guarded);
 
     auto coreFiles = BuildCoreFiles(sandbox);
-    const auto coreAuthorization =
-        PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(
-            epoch,
-            coreFiles);
+    const auto coreAuthorization = PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(epoch, coreFiles);
     REQUIRE(coreAuthorization.IsVerified());
 
     PartyQuestCheckpointSidecarManifest emptyManifest;
-    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(
-        sandbox.Paths,
-        emptyManifest,
-        epoch,
-        {});
+    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(sandbox.Paths, emptyManifest, epoch, {});
     REQUIRE(sidecars.IsReady());
 
     ++coreFiles.front().Digest;
-    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
-        guarded,
-        sandbox.Paths,
-        epoch,
-        coreAuthorization,
-        coreFiles,
-        emptyManifest,
-        sidecars);
-    REQUIRE(result.Status ==
-        PartyQuestRuntimePreRepairCheckpointStatus::InvalidCoreAuthorization);
-    REQUIRE(session.GetCoordinator().GetActive()->State ==
-        PartyQuestRuntimeApplyState::AwaitingCheckpoint);
+    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, epoch, coreAuthorization, coreFiles, emptyManifest, sidecars);
+    REQUIRE(result.Status == PartyQuestRuntimePreRepairCheckpointStatus::InvalidCoreAuthorization);
+    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::AwaitingCheckpoint);
+    REQUIRE_FALSE(session.GetCoordinator().GetActive()->CheckpointCreated);
+    REQUIRE(guarded.IsCheckpointCaptureEpochActive(epoch));
+}
+
+TEST_CASE("Runtime generation change invalidates captured core authorization before checkpoint publication", "[quest.party-state.pre-repair-assembler][capture-epoch]")
+{
+    AssemblerSandbox sandbox;
+    auto session = BuildAssemblerSession();
+    PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
+    const auto request = BuildAssemblerRequest(26011, 36011);
+    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
+    const auto epoch = BeginCaptureEpoch(guarded);
+    const auto coreFiles = BuildCoreFiles(sandbox);
+    const auto coreAuthorization = PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(epoch, coreFiles);
+    PartyQuestCheckpointSidecarManifest emptyManifest;
+    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(sandbox.Paths, emptyManifest, epoch, {});
+    REQUIRE(sidecars.IsReady());
+
+    {
+        auto invalidation = PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
+        REQUIRE(invalidation.has_value());
+        REQUIRE(invalidation->IsValid());
+    }
+
+    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, epoch, coreAuthorization, coreFiles, emptyManifest, sidecars);
+    REQUIRE(result.Status == PartyQuestRuntimePreRepairCheckpointStatus::InvalidRuntimeGeneration);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->CheckpointCreated);
     REQUIRE(guarded.IsCheckpointCaptureEpochActive(epoch));
 }
@@ -390,26 +333,15 @@ TEST_CASE("Forged Ready sidecar status without collector token is rejected", "[q
     const auto epoch = BeginCaptureEpoch(guarded);
 
     const auto coreFiles = BuildCoreFiles(sandbox);
-    const auto coreAuthorization =
-        PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(
-            epoch,
-            coreFiles);
+    const auto coreAuthorization = PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(epoch, coreFiles);
 
     PartyQuestCheckpointSidecarManifest emptyManifest;
     PartyQuestCheckpointSidecarMirrorResult forged;
     forged.Status = PartyQuestCheckpointSidecarMirrorStatus::Ready;
     REQUIRE_FALSE(forged.IsReady());
 
-    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
-        guarded,
-        sandbox.Paths,
-        epoch,
-        coreAuthorization,
-        coreFiles,
-        emptyManifest,
-        forged);
-    REQUIRE(result.Status ==
-        PartyQuestRuntimePreRepairCheckpointStatus::InvalidSidecarAuthorization);
+    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, epoch, coreAuthorization, coreFiles, emptyManifest, forged);
+    REQUIRE(result.Status == PartyQuestRuntimePreRepairCheckpointStatus::InvalidSidecarAuthorization);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->CheckpointCreated);
     REQUIRE(guarded.IsCheckpointCaptureEpochActive(epoch));
 }
@@ -425,33 +357,19 @@ TEST_CASE("Core from an abandoned epoch cannot be mixed with sidecars from a fre
 
     const auto firstEpoch = BeginCaptureEpoch(guarded);
     const auto coreFiles = BuildCoreFiles(sandbox);
-    const auto firstCoreAuthorization =
-        PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(
-            firstEpoch,
-            coreFiles);
+    const auto firstCoreAuthorization = PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(firstEpoch, coreFiles);
     REQUIRE(firstCoreAuthorization.IsVerified());
     REQUIRE(guarded.AbortCheckpointCaptureEpoch(firstEpoch));
 
     const auto secondEpoch = BeginCaptureEpoch(guarded);
     REQUIRE(secondEpoch.GetEpochId() != firstEpoch.GetEpochId());
     PartyQuestCheckpointSidecarManifest emptyManifest;
-    const auto secondSidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(
-        sandbox.Paths,
-        emptyManifest,
-        secondEpoch,
-        {});
+    const auto secondSidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(sandbox.Paths, emptyManifest, secondEpoch, {});
     REQUIRE(secondSidecars.IsReady());
 
-    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
-        guarded,
-        sandbox.Paths,
-        secondEpoch,
-        firstCoreAuthorization,
-        coreFiles,
-        emptyManifest,
-        secondSidecars);
-    REQUIRE(result.Status ==
-        PartyQuestRuntimePreRepairCheckpointStatus::InvalidCoreAuthorization);
+    const auto result =
+        PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, secondEpoch, firstCoreAuthorization, coreFiles, emptyManifest, secondSidecars);
+    REQUIRE(result.Status == PartyQuestRuntimePreRepairCheckpointStatus::InvalidCoreAuthorization);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->CheckpointCreated);
     REQUIRE(guarded.IsCheckpointCaptureEpochActive(secondEpoch));
 }
@@ -470,9 +388,7 @@ TEST_CASE("Sidecar provider receipt must name the active capture epoch", "[quest
     const auto epoch = BeginCaptureEpoch(guarded);
 
     const auto relative = BuildSidecarRelativePath(requirement);
-    WriteBytes(
-        sandbox.Paths.SidecarsDirectory / "external" / relative,
-        "WRONG_EPOCH_EXTERNAL_STATE");
+    WriteBytes(sandbox.Paths.SidecarsDirectory / "external" / relative, "WRONG_EPOCH_EXTERNAL_STATE");
 
     PartyQuestCheckpointSidecarCapture capture;
     capture.Authorization = AuthorizeSidecar(requirement);
@@ -481,14 +397,9 @@ TEST_CASE("Sidecar provider receipt must name the active capture epoch", "[quest
     capture.TargetWorldRevision = epoch.GetTargetWorldRevision();
     capture.MirrorRelativeFiles = {relative};
 
-    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(
-        sandbox.Paths,
-        manifest,
-        epoch,
-        {capture});
+    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(sandbox.Paths, manifest, epoch, {capture});
     REQUIRE_FALSE(sidecars.IsReady());
-    REQUIRE(sidecars.Status ==
-        PartyQuestCheckpointSidecarMirrorStatus::CaptureEpochMismatch);
+    REQUIRE(sidecars.Status == PartyQuestCheckpointSidecarMirrorStatus::CaptureEpochMismatch);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->CheckpointCreated);
     REQUIRE(guarded.IsCheckpointCaptureEpochActive(epoch));
 }
@@ -504,34 +415,80 @@ TEST_CASE("Epochless diagnostic authorizations cannot cross the production assem
     const auto epoch = BeginCaptureEpoch(guarded);
 
     const auto coreFiles = BuildCoreFiles(sandbox);
-    const auto epochlessCore =
-        PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(
-            request.TransactionId,
-            request.TargetWorldRevision,
-            coreFiles);
+    const auto epochlessCore = PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(request.TransactionId, request.TargetWorldRevision, coreFiles);
     REQUIRE(epochlessCore.IsVerified());
     REQUIRE(epochlessCore.GetCaptureEpochId() == 0);
 
     PartyQuestCheckpointSidecarManifest emptyManifest;
-    const auto epochlessSidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(
-        sandbox.Paths,
-        emptyManifest,
-        request.TransactionId,
-        request.TargetWorldRevision,
-        {});
+    const auto epochlessSidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(sandbox.Paths, emptyManifest, request.TransactionId, request.TargetWorldRevision, {});
     REQUIRE(epochlessSidecars.IsReady());
     REQUIRE(epochlessSidecars.Authorization.GetCaptureEpochId() == 0);
 
-    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(
-        guarded,
-        sandbox.Paths,
-        epoch,
-        epochlessCore,
-        coreFiles,
-        emptyManifest,
-        epochlessSidecars);
-    REQUIRE(result.Status ==
-        PartyQuestRuntimePreRepairCheckpointStatus::InvalidCoreAuthorization);
+    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, epoch, epochlessCore, coreFiles, emptyManifest, epochlessSidecars);
+    REQUIRE(result.Status == PartyQuestRuntimePreRepairCheckpointStatus::InvalidRuntimeGeneration);
     REQUIRE_FALSE(session.GetCoordinator().GetActive()->CheckpointCreated);
     REQUIRE(guarded.IsCheckpointCaptureEpochActive(epoch));
+}
+
+TEST_CASE("Conflicting final authorization blocks ReadyToApply and keeps the capture epoch active", "[quest.party-state.pre-repair-assembler][pre-repair-authorization]")
+{
+    AssemblerSandbox sandbox;
+    auto session = BuildAssemblerSession();
+    PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
+    const auto request = BuildAssemblerRequest(26009, 36009);
+    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
+    const auto epoch = BeginCaptureEpoch(guarded);
+    const auto coreFiles = BuildCoreFiles(sandbox);
+    const auto coreAuthorization = PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(epoch, coreFiles);
+    PartyQuestCheckpointSidecarManifest emptyManifest;
+    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(sandbox.Paths, emptyManifest, epoch, {});
+    REQUIRE(sidecars.IsReady());
+
+    WriteBytes(PartyQuestPreRepairAuthorizationCommitStore::GetCommitPath(sandbox.Paths, request.TargetWorldRevision), "CONFLICTING_FINAL_AUTHORIZATION");
+    const auto result = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, epoch, coreAuthorization, coreFiles, emptyManifest, sidecars);
+
+    REQUIRE(result.Status == PartyQuestRuntimePreRepairCheckpointStatus::CheckpointFailed);
+    REQUIRE(result.Checkpoint.Status == PartyQuestRuntimeCheckpointStatus::AuthorizationCommitFailed);
+    REQUIRE(session.GetCoordinator().GetActive() != nullptr);
+    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::AwaitingCheckpoint);
+    REQUIRE_FALSE(session.GetCoordinator().GetActive()->CheckpointCreated);
+    REQUIRE(guarded.IsCheckpointCaptureEpochActive(epoch));
+}
+
+TEST_CASE("Retry after runtime persistence failure reuses immutable authorization bytes", "[quest.party-state.pre-repair-assembler][pre-repair-authorization][retry]")
+{
+    AssemblerSandbox sandbox;
+    bool allowPersistence{};
+    PartyQuestRuntimeApplySession session(
+        kAssemblerCampaign, kAssemblerPlayer, [&allowPersistence](const PartyQuestRuntimeRecoveryState&) { return allowPersistence; },
+        PartyQuestPersistenceGuarantee::ProcessCrashResilient);
+    PartyQuestSaveGuard saveGuard;
+    PartyQuestRuntimeGuardedSession guarded(session, saveGuard);
+    const auto request = BuildAssemblerRequest(26010, 36010);
+    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::PersistenceFailure);
+
+    allowPersistence = true;
+    REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
+    const auto epoch = BeginCaptureEpoch(guarded);
+    const auto coreFiles = BuildCoreFiles(sandbox);
+    const auto coreAuthorization = PartyQuestRuntimePreRepairCheckpointTestAccess::MakeCoreAuthorization(epoch, coreFiles);
+    PartyQuestCheckpointSidecarManifest emptyManifest;
+    const auto sidecars = PartyQuestCheckpointSidecarMirrorCollector::Collect(sandbox.Paths, emptyManifest, epoch, {});
+    REQUIRE(sidecars.IsReady());
+
+    allowPersistence = false;
+    const auto first = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, epoch, coreAuthorization, coreFiles, emptyManifest, sidecars);
+    REQUIRE(first.Status == PartyQuestRuntimePreRepairCheckpointStatus::CheckpointFailed);
+    REQUIRE(first.Checkpoint.Status == PartyQuestRuntimeCheckpointStatus::RuntimeStatePersistenceFailed);
+    REQUIRE(guarded.IsCheckpointCaptureEpochActive(epoch));
+    const auto commitPath = PartyQuestPreRepairAuthorizationCommitStore::GetCommitPath(sandbox.Paths, request.TargetWorldRevision);
+    const auto firstBytes = ReadBytes(commitPath);
+    REQUIRE_FALSE(firstBytes.empty());
+
+    allowPersistence = true;
+    const auto second = PartyQuestRuntimePreRepairCheckpointAssembler::Complete(guarded, sandbox.Paths, epoch, coreAuthorization, coreFiles, emptyManifest, sidecars);
+    REQUIRE(second.IsReady());
+    REQUIRE(ReadBytes(commitPath) == firstBytes);
+    REQUIRE_FALSE(guarded.IsCheckpointCaptureEpochActive(epoch));
 }
