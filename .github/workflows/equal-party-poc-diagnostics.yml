@@ -195,6 +195,9 @@ jobs:
             $env:TMP = $testTemp
             xmake run TPTests *> poc-windows-test.log
             $status = $LASTEXITCODE
+            if (Test-Path poc-windows-test.log) {
+              Get-Content poc-windows-test.log -Tail 25 | Write-Host
+            }
           }
 
           $logs = @("poc-windows-build.log", "poc-windows-test.log") |

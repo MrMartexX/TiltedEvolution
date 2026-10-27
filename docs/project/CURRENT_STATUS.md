@@ -2,9 +2,20 @@
 
 Status: consolidated integration; P0 NOT CLOSED
 
-Last verified: **2026-09-24**
+Last verified: **2026-10-27**
 
-## Consolidation accepted (supersedes historical snapshot below)
+## Latest accepted integration & local Task 08/09 progress
+
+- **Integration baseline (`feature/equal-party-quest-poc`)**: `96a0877b5ebb8943ff083a0ff7f4a7766d257819` (PR #19 merged tested candidate `dd9cfca39129f6626f9d1d1273197f8de7ac0153`, resolving the two Windows `PartyQuestSkyrimNativeLoadBridgeCoordinator` cancellation regressions from `4c85e209` with all four CI jobs green: Build Linux `36052130392`, Build Windows `36052130495`, Diagnostics Linux `36052126500` at `283539 assertions / 888 cases`, Diagnostics Windows `36052126500` at `284312 assertions / 929 cases`).
+- **Active local Task 08/09 stack (`aih/task08-runtime-authorization-integration`)**:
+  - Completes Windows NTFS durable directory-tree promotion (`NtFlushBuffersFileEx`), `CopyFileDurably`, `RemoveFileDurably`, and `RemoveEmptyDirectoryDurably` in `PartyQuestStableStorage`.
+  - Routes both crash recovery (`PartyQuestRuntimeRecoveryCoordinator::Recover`) and active in-process live recovery (`PartyQuestRuntimeLiveRecoveryCoordinator::ResolveLiveRecovery`) on Linux/POSIX and Windows NTFS through `PartyQuestRuntimeRestoreAttemptStore`, `PartyQuestReplicaDurableRestorePreparation`, and `PartyQuestReplicaDurableRestoreExecutor` (`PowerLossDurable`), separating stable `RuntimeTransactionId` from monotonic `RestoreAttemptId` tombstones.
+  - Binds immutable `pre_repair_commit.bin` checkpoint authorization to both crash recovery and active in-process live recovery before any restore plan executes, while preserving `PartyQuestSaveGuard` and the runtime barrier on any missing, corrupt, or mismatched authorization record.
+  - Hardens `.github/workflows/equal-party-poc-diagnostics.yml` (`build-poc-windows`) to echo the `TPTests` summary tail into the permanent GitHub Actions job log in addition to the 7-day diagnostic artifact.
+  - Local Windows x64 `releasedbg` verification (`manage.py check --profile cpp`): all product targets built (`SkyrimTogetherClient`, `SkyrimTogetherServer`, `SkyrimImmersiveLauncher`, `PartyQuestCompatibilityAnalyzer`) and `TPTests` passed with **286,666 assertions in 974 test cases**.
+  - Tasks 07, 08, and 09 remain **not accepted** until fresh four-job CI on the candidate branch, exact-runtime 1.6.1170 live/fault-injection evidence, and physical power-loss validation are completed.
+
+## Consolidation accepted on 2026-09-24 (supersedes historical snapshot below)
 
 PR #18 merged the load-bridge stack through `311e5322`, PR #10 inventory
 recreation safety, PR #12 checked inventory arithmetic, PR #8 ecosystem
@@ -89,9 +100,9 @@ HEAD.
 | 04 Offline compatibility analyzer | Accepted | Merged through PR #4 |
 | 05 Compatibility admission | Accepted | Merged through PR #5 |
 | 06 Verification envelope | Accepted | Merged through PR #6; current integration HEAD |
-| 07 Skyrim/SKSE async save contract | Local implementation | Local head `7be2562b`; requires independent review, four CI jobs and exact-runtime live/fault evidence |
-| 08 Power-loss-durable checkpoint | Local implementation | Local head `6dbb27ec`; depends on accepted Task 07 and unresolved Windows durability proof |
-| 09 Deterministic recovery | Planned | Start only after Task 08 acceptance |
+| 07 Skyrim/SKSE async save contract | Local implementation | Load-bridge follow-up merged in `96a0877b` (PR #19); full Task 07 still requires exact-runtime live/fault acceptance |
+| 08 Power-loss-durable checkpoint | Local implementation | Cross-platform NTFS/POSIX durability + immutable `pre_repair_commit.bin` authorization verified locally (`286,666 assertions / 974 cases`); awaits four-job CI and physical power-loss acceptance |
+| 09 Deterministic recovery | Local implementation | Crash and live recovery strong restore-attempt routing + authorization binding verified locally; awaits Task 08 acceptance and live crash validation |
 | 10 Production dry-run pipeline | Planned | Requires Tasks 01–09 |
 | 11 Divergent-save reconciliation | Planned | Requires production dry-run observations |
 | 12 Reviewed quest profiles | Planned | Requires accepted reconciliation model |
