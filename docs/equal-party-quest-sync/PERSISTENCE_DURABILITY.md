@@ -42,12 +42,12 @@ commit and falls back to the same exact rollback path if verification fails;
 `Committed` and `RolledBack` are terminal tombstones whose postconditions are
 reverified before cleanup is resumed.
 
-This remains a filesystem proof surface, not production native-mutation
-activation. Existing runtime/server callers are not automatically converted
-merely because the stronger functions exist. The server canonical-state/campaign
-bootstrap and other production persistence paths still contain legacy
-crash-resilient writers. Strong restore is not production-routed and grants no
-Skyrim/Papyrus/world mutation authority.
+This remains a filesystem durability surface, not production native-mutation
+activation. Although server canonical-state/campaign persistence and fresh
+crash/live runtime recovery now route through the `PowerLossDurable` writers and
+strong v4 restore pipeline on Linux/POSIX and Windows NTFS, strong restore and
+durable checkpoints grant no Skyrim/Papyrus/world mutation authority while P0
+remains open.
 
 ## Authoritative persistence graph
 
@@ -142,14 +142,15 @@ the durable record.
 
 ### Production wiring still open
 
-Having strong writer APIs and an isolated strong restore executor is not
-end-to-end production activation. Production P0-H still requires each owner to
-prove its surrounding directory namespace before choosing the strong path.
-Current canonical server persistence still uses legacy
-`PartyQuestStatePersistence::SaveAtomically` and
-`PartyQuestCampaignPersistence::SaveAtomically`; switching those calls without a
-cross-platform parent-directory contract would incorrectly make Windows startup
-fail or overclaim durability.
+Having strong writer APIs and a strong restore executor is not end-to-end
+native-mutation activation. Production P0-H requires each owner to establish its
+surrounding directory namespace before choosing the strong path. Server
+canonical persistence (`QuestService::InitializePartyQuestPersistence` and
+`PersistPartyQuestState`) establishes its parent directory tree with
+`PartyQuestStableStorage::EnsureDirectoryTreeDurably` before publishing via
+`PartyQuestStatePersistence::SavePowerLossDurably` and
+`PartyQuestCampaignPersistence::SavePowerLossDurably`, failing closed if the
+underlying filesystem does not support the durable namespace contract.
 
 Crash and live runtime recovery now separate stable higher-level
 `RuntimeTransactionId` from individual filesystem restore-attempt identity via
@@ -437,11 +438,12 @@ later journal transition.
 - Windows: `Unsupported` as a generic primitive.
 
 `PartyQuestStableStorage::RemoveFileDurably` and
-`RemoveEmptyDirectoryDurably` remain:
+`RemoveEmptyDirectoryDurably` supply durable node removal:
 
 - Linux: `unlink`/`rmdir` the validated final node, then `fsync(parent)`;
-- Windows: `Unsupported` until file/directory deletion and metadata publication
-  semantics are accepted to the same standard.
+- Windows: validate an existing non-reparse regular file or empty directory on
+  NTFS, delete the exact node and flush the containing directory metadata via
+  `NtFlushBuffersFileEx(FLUSH_FLAGS_FILE_DATA_SYNC_ONLY)`.
 
 ## P0-H closure conditions
 

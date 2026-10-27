@@ -1,4 +1,8 @@
 #include <Structs/Skyrim/PartyQuestCheckpointSidecars.h>
+#include <Structs/Skyrim/PartyQuestPreRepairAuthorizationCommit.h>
+#include <Structs/Skyrim/PartyQuestReplicaDurableSnapshot.h>
+#include <Structs/Skyrim/PartyQuestReplicaSnapshotManager.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 #include <party_quest_runtime_safety_test_access.h>
@@ -20,12 +24,8 @@
 
 namespace
 {
-const PartyQuestCampaignId kOwnerCampaign{
-    0x5152535455565758ull,
-    0x6162636465666768ull};
-const PartyQuestPlayerProfileId kOwnerPlayer{
-    0x7172737475767778ull,
-    0x8182838485868788ull};
+const PartyQuestCampaignId kOwnerCampaign{0x5152535455565758ull, 0x6162636465666768ull};
+const PartyQuestPlayerProfileId kOwnerPlayer{0x7172737475767778ull, 0x8182838485868788ull};
 
 struct OwnerSandbox
 {
@@ -34,8 +34,7 @@ struct OwnerSandbox
     OwnerSandbox()
     {
         const auto nonce = std::chrono::high_resolution_clock::now().time_since_epoch().count();
-        Root = std::filesystem::temp_directory_path() /
-            ("tp_party_quest_runtime_owner_" + std::to_string(nonce));
+        Root = std::filesystem::temp_directory_path() / ("tp_party_quest_runtime_owner_" + std::to_string(nonce));
         std::error_code ec;
         std::filesystem::remove_all(Root, ec);
         std::filesystem::create_directories(Root, ec);
@@ -49,42 +48,29 @@ struct OwnerSandbox
     }
 };
 
-PartyQuestCoopSavePaths BuildOwnerPaths(
-    const std::filesystem::path& acRoot,
-    const PartyQuestCampaignId& acCampaign = kOwnerCampaign,
-    const PartyQuestPlayerProfileId& acPlayer = kOwnerPlayer)
+PartyQuestCoopSavePaths
+BuildOwnerPaths(const std::filesystem::path& acRoot, const PartyQuestCampaignId& acCampaign = kOwnerCampaign, const PartyQuestPlayerProfileId& acPlayer = kOwnerPlayer)
 {
-    const auto paths = PartyQuestCoopSaveLayout::Build(
-        acRoot / "CoopCampaigns",
-        acCampaign,
-        acPlayer);
+    const auto paths = PartyQuestCoopSaveLayout::Build(acRoot / "CoopCampaigns", acCampaign, acPlayer);
     REQUIRE(paths.has_value());
     return *paths;
 }
 
-void WriteOwnerBytes(
-    const std::filesystem::path& acPath,
-    const std::vector<uint8_t>& acBytes)
+void WriteOwnerBytes(const std::filesystem::path& acPath, const std::vector<uint8_t>& acBytes)
 {
     std::error_code ec;
     std::filesystem::create_directories(acPath.parent_path(), ec);
     REQUIRE_FALSE(ec);
     std::ofstream file(acPath, std::ios::binary | std::ios::trunc);
     REQUIRE(file.is_open());
-    file.write(
-        reinterpret_cast<const char*>(acBytes.data()),
-        static_cast<std::streamsize>(acBytes.size()));
+    file.write(reinterpret_cast<const char*>(acBytes.data()), static_cast<std::streamsize>(acBytes.size()));
     file.flush();
     REQUIRE(file.good());
 }
 
-void WriteOwnerFile(
-    const std::filesystem::path& acPath,
-    const std::string& acBytes)
+void WriteOwnerFile(const std::filesystem::path& acPath, const std::string& acBytes)
 {
-    WriteOwnerBytes(
-        acPath,
-        std::vector<uint8_t>(acBytes.begin(), acBytes.end()));
+    WriteOwnerBytes(acPath, std::vector<uint8_t>(acBytes.begin(), acBytes.end()));
 }
 
 bool SetWorkspaceLeaseEnvironment(const char* apName, const std::string& acValue)
@@ -105,9 +91,7 @@ void ClearWorkspaceLeaseEnvironment(const char* apName)
 #endif
 }
 
-bool WaitForWorkspaceLeaseMarker(
-    const std::filesystem::path& acMarker,
-    std::chrono::steady_clock::duration aTimeout)
+bool WaitForWorkspaceLeaseMarker(const std::filesystem::path& acMarker, std::chrono::steady_clock::duration aTimeout)
 {
     const auto deadline = std::chrono::steady_clock::now() + aTimeout;
     do
@@ -129,9 +113,7 @@ uint64_t ExpireWorkspaceRecovery(void* apContext) noexcept
 {
     auto& clock = *static_cast<ExpiringWorkspaceRecoveryClock*>(apContext);
     ++clock.Calls;
-    return clock.Calls == 1
-        ? 1
-        : PartyQuestReplicaWorkspaceRecovery::MaxRecoveryNanoseconds + 1;
+    return clock.Calls == 1 ? 1 : PartyQuestReplicaWorkspaceRecovery::MaxRecoveryNanoseconds + 1;
 }
 
 PartyQuestRuntimeRecoveryState BuildOwnerState()
@@ -142,22 +124,16 @@ PartyQuestRuntimeRecoveryState BuildOwnerState()
     return state;
 }
 
-PartyQuestRuntimeApplyEntry BuildOwnerRecoveryEntry(
-    uint64_t aTransactionId,
-    uint64_t aWorldRevision)
+PartyQuestRuntimeApplyEntry BuildOwnerRecoveryEntry(uint64_t aTransactionId, uint64_t aWorldRevision)
 {
     PartyQuestRuntimeApplyEntry active;
     active.TransactionId = aTransactionId;
     active.TargetWorldRevision = aWorldRevision;
     active.QuestId = GameId(99, 0x3300);
     active.CanonicalDigest = 0x1234ABCDEF987654ull;
-    active.SidecarManifestFingerprint =
-        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
-    active.Actions = PartyQuestApplyAction::StageTransition |
-        PartyQuestApplyAction::WaitForPapyrusQuiescence |
-        PartyQuestApplyAction::ResnapshotAndVerify;
-    active.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
-        active.Actions, active.CanonicalDigest, 0x99003301);
+    active.SidecarManifestFingerprint = PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
+    active.Actions = PartyQuestApplyAction::StageTransition | PartyQuestApplyAction::WaitForPapyrusQuiescence | PartyQuestApplyAction::ResnapshotAndVerify;
+    active.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(active.Actions, active.CanonicalDigest, 0x99003301);
     active.State = PartyQuestRuntimeApplyState::WaitingForPapyrus;
     active.SaveGuardActive = true;
     active.CheckpointCreated = true;
@@ -180,14 +156,11 @@ PartyQuestRuntimeApplyRequest BuildOwnerRequest(uint64_t aTransactionId)
     PartyQuestRuntimeApplyRequest request;
     request.TransactionId = aTransactionId;
     request.TargetWorldRevision = 3400;
-    request.SidecarManifestFingerprint =
-        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
+    request.SidecarManifestFingerprint = PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     request.CanonicalSnapshot = snapshot;
     request.Plan.Safety.Status = PartyQuestRuntimeSafetyStatus::RuntimeSafe;
     request.Plan.Safety.Reason = PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;
-    request.Plan.Actions = PartyQuestApplyAction::StageTransition |
-        PartyQuestApplyAction::WaitForPapyrusQuiescence |
-        PartyQuestApplyAction::ResnapshotAndVerify;
+    request.Plan.Actions = PartyQuestApplyAction::StageTransition | PartyQuestApplyAction::WaitForPapyrusQuiescence | PartyQuestApplyAction::ResnapshotAndVerify;
     PartyQuestRuntimeSafetyTestAccess::AuthorizePlan(request.Plan, snapshot);
     REQUIRE(request.Plan.MutationAuthorization.IsVerified());
     return request;
@@ -224,8 +197,7 @@ TEST_CASE("Runtime session owner binds only after exact store hydration", "[ques
     REQUIRE(duplicate.IsBound());
     REQUIRE(owner.IsBound());
 
-    const auto released = owner.PrepareAndRelease(
-        PartyQuestRuntimeLifecycleEvent::Disconnect);
+    const auto released = owner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Disconnect);
     REQUIRE(released.Status == PartyQuestRuntimeLifecycleFenceStatus::Allowed);
     REQUIRE(released.CanProceed());
     REQUIRE_FALSE(owner.IsBound());
@@ -242,29 +214,21 @@ TEST_CASE("Runtime session owner preserves committed transaction idempotency acr
     committed.TargetWorldRevision = 3300;
     committed.QuestId = GameId(99, 0x3301);
     committed.CanonicalDigest = 0xABCDEF1234567890ull;
-    committed.SidecarManifestFingerprint =
-        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
-    committed.Actions = PartyQuestApplyAction::StageTransition |
-        PartyQuestApplyAction::WaitForPapyrusQuiescence |
-        PartyQuestApplyAction::ResnapshotAndVerify;
-    committed.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(
-        committed.Actions, committed.CanonicalDigest, 0x99003302);
+    committed.SidecarManifestFingerprint = PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
+    committed.Actions = PartyQuestApplyAction::StageTransition | PartyQuestApplyAction::WaitForPapyrusQuiescence | PartyQuestApplyAction::ResnapshotAndVerify;
+    committed.ExpectedVerification = *PartyQuestVerificationPolicy::BuildExpected(committed.Actions, committed.CanonicalDigest, 0x99003302);
     state.Committed.push_back(committed);
 
-    REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(
-                paths.RuntimeApplySidecar,
-                state) == PartyQuestRuntimeApplyPersistenceStatus::Success);
+    REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(paths.RuntimeApplySidecar, state) == PartyQuestRuntimeApplyPersistenceStatus::Success);
 
     PartyQuestRuntimeSessionOwner owner;
     const auto bound = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
     REQUIRE(bound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
     REQUIRE(bound.Store.Status == PartyQuestRuntimeSessionStoreStatus::Clean);
     REQUIRE(owner.GetRuntimeSession() != nullptr);
-    REQUIRE(owner.GetRuntimeSession()->GetCoordinator().IsCommitted(
-        committed.TransactionId));
+    REQUIRE(owner.GetRuntimeSession()->GetCoordinator().IsCommitted(committed.TransactionId));
 
-    REQUIRE(owner.PrepareAndRelease(
-                PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
+    REQUIRE(owner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
     REQUIRE_FALSE(owner.IsBound());
 }
 
@@ -276,32 +240,22 @@ TEST_CASE("Runtime session owner holds an exclusive kernel-backed workspace leas
     PartyQuestRuntimeSessionOwner first;
     const auto firstBind = first.Bind(kOwnerCampaign, kOwnerPlayer, paths);
     REQUIRE(firstBind.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
-    REQUIRE(firstBind.LeaseStatus ==
-        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    REQUIRE(firstBind.LeaseStatus == PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
 
     PartyQuestRuntimeSessionOwner competing;
     const auto blocked = competing.Bind(kOwnerCampaign, kOwnerPlayer, paths);
-    REQUIRE(blocked.Status ==
-        PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceBusy);
+    REQUIRE(blocked.Status == PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceBusy);
     REQUIRE(blocked.LeaseStatus == PartyQuestReplicaWorkspaceLeaseStatus::Busy);
     REQUIRE_FALSE(competing.IsBound());
 
-    REQUIRE(first.PrepareAndRelease(
-                PartyQuestRuntimeLifecycleEvent::Disconnect).CanProceed());
+    REQUIRE(first.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Disconnect).CanProceed());
 
-    const auto acquiredAfterRelease = competing.Bind(
-        kOwnerCampaign,
-        kOwnerPlayer,
-        paths);
-    REQUIRE(acquiredAfterRelease.Status ==
-        PartyQuestRuntimeSessionOwnerBindStatus::Bound);
-    REQUIRE(acquiredAfterRelease.LeaseStatus ==
-        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
-    REQUIRE(competing.PrepareAndRelease(
-                PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
+    const auto acquiredAfterRelease = competing.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(acquiredAfterRelease.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(acquiredAfterRelease.LeaseStatus == PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    REQUIRE(competing.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
 
-    REQUIRE(std::filesystem::exists(
-        paths.MetadataDirectory / "party_quest_workspace.lock"));
+    REQUIRE(std::filesystem::exists(paths.MetadataDirectory / "party_quest_workspace.lock"));
 }
 
 TEST_CASE("Workspace lease rejects a hard-linked lock file", "[quest.party-state.runtime-owner][workspace-lease][confinement]")
@@ -316,14 +270,12 @@ TEST_CASE("Workspace lease rejects a hard-linked lock file", "[quest.party-state
     std::ofstream(external).put('x');
     REQUIRE(std::filesystem::is_regular_file(external));
 
-    const auto lockPath =
-        paths.MetadataDirectory / "party_quest_workspace.lock";
+    const auto lockPath = paths.MetadataDirectory / "party_quest_workspace.lock";
     std::filesystem::create_hard_link(external, lockPath, ec);
     REQUIRE_FALSE(ec);
 
     PartyQuestReplicaWorkspaceLease lease;
-    REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
-        PartyQuestReplicaWorkspaceLeaseStatus::InvalidNamespace);
+    REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) == PartyQuestReplicaWorkspaceLeaseStatus::InvalidNamespace);
     REQUIRE_FALSE(lease.IsHeld());
 }
 
@@ -335,13 +287,10 @@ TEST_CASE("Workspace lease subprocess crash helper", "[.][quest.party-state.runt
     const auto root = std::filesystem::path(rootValue);
     const auto paths = BuildOwnerPaths(root);
     PartyQuestReplicaWorkspaceLease lease;
-    REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
-        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) == PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
     WriteOwnerFile(root / "lease-ready", "ready");
 
-    if (WaitForWorkspaceLeaseMarker(
-            root / "lease-crash",
-            std::chrono::seconds(15)))
+    if (WaitForWorkspaceLeaseMarker(root / "lease-crash", std::chrono::seconds(15)))
     {
         std::_Exit(97);
     }
@@ -352,23 +301,13 @@ TEST_CASE("Workspace lease is released by abrupt subprocess termination", "[ques
 {
     OwnerSandbox sandbox;
     const auto paths = BuildOwnerPaths(sandbox.Root);
-    REQUIRE(SetWorkspaceLeaseEnvironment(
-        "TP_WORKSPACE_LEASE_CRASH_ROOT",
-        sandbox.Root.string()));
+    REQUIRE(SetWorkspaceLeaseEnvironment("TP_WORKSPACE_LEASE_CRASH_ROOT", sandbox.Root.string()));
 
-    auto child = std::async(std::launch::async, []
-    {
-        return RunTPTestsSubprocess(
-            "Workspace lease subprocess crash helper");
-    });
+    auto child = std::async(std::launch::async, [] { return RunTPTestsSubprocess("Workspace lease subprocess crash helper"); });
 
-    const bool ready = WaitForWorkspaceLeaseMarker(
-        sandbox.Root / "lease-ready",
-        std::chrono::seconds(10));
+    const bool ready = WaitForWorkspaceLeaseMarker(sandbox.Root / "lease-ready", std::chrono::seconds(10));
     PartyQuestReplicaWorkspaceLease competing;
-    const auto whileChildAlive = ready
-        ? competing.Acquire(paths, kOwnerCampaign, kOwnerPlayer)
-        : PartyQuestReplicaWorkspaceLeaseStatus::IoError;
+    const auto whileChildAlive = ready ? competing.Acquire(paths, kOwnerCampaign, kOwnerPlayer) : PartyQuestReplicaWorkspaceLeaseStatus::IoError;
     WriteOwnerFile(sandbox.Root / "lease-crash", "crash");
     const int childExitCode = child.get();
     ClearWorkspaceLeaseEnvironment("TP_WORKSPACE_LEASE_CRASH_ROOT");
@@ -376,138 +315,94 @@ TEST_CASE("Workspace lease is released by abrupt subprocess termination", "[ques
     REQUIRE(ready);
     REQUIRE(whileChildAlive == PartyQuestReplicaWorkspaceLeaseStatus::Busy);
     REQUIRE(childExitCode != 0);
-    REQUIRE(competing.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
-        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
-    REQUIRE(std::filesystem::exists(
-        paths.MetadataDirectory / "party_quest_workspace.lock"));
+    REQUIRE(competing.Acquire(paths, kOwnerCampaign, kOwnerPlayer) == PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    REQUIRE(std::filesystem::exists(paths.MetadataDirectory / "party_quest_workspace.lock"));
 }
 
 TEST_CASE("Runtime session owner quarantines only exact orphan copy temporaries", "[quest.party-state.runtime-owner][workspace-recovery]")
 {
     OwnerSandbox sandbox;
     const auto paths = BuildOwnerPaths(sandbox.Root);
-    const auto saveTemporary =
-        paths.SavesDirectory / "Hero.ess.tpqtmp-123-0";
-    const auto checkpointTemporary = paths.CheckpointsDirectory /
-        "PreRepair" / "Revision_0000000000000001" / "saves" /
-        "Hero.skse.tpqtmp-456-1";
-    const auto malformedTemporary =
-        paths.SidecarsDirectory / "provider.bin.tpqtmp-456-invalid";
+    const auto saveTemporary = paths.SavesDirectory / "Hero.ess.tpqtmp-123-0";
+    const auto checkpointTemporary = paths.CheckpointsDirectory / "PreRepair" / "Revision_0000000000000001" / "saves" / "Hero.skse.tpqtmp-456-1";
+    const auto malformedTemporary = paths.SidecarsDirectory / "provider.bin.tpqtmp-456-invalid";
     WriteOwnerFile(saveTemporary, "UNPUBLISHED_SAVE_BYTES");
     WriteOwnerFile(checkpointTemporary, "UNPUBLISHED_CHECKPOINT_BYTES");
     WriteOwnerFile(malformedTemporary, "NOT_AN_EXACT_TEMPORARY");
 
     auto runtimeTemporary = paths.RuntimeApplySidecar;
     runtimeTemporary += ".tmp";
-    WriteOwnerBytes(
-        runtimeTemporary,
-        PartyQuestRuntimeApplyPersistence::Encode(BuildOwnerState()));
+    WriteOwnerBytes(runtimeTemporary, PartyQuestRuntimeApplyPersistence::Encode(BuildOwnerState()));
 
     PartyQuestRuntimeSessionOwner owner;
     const auto bound = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
     REQUIRE(bound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
-    REQUIRE(bound.WorkspaceRecovery.Status ==
-        PartyQuestReplicaWorkspaceRecoveryStatus::Quarantined);
+    REQUIRE(bound.WorkspaceRecovery.Status == PartyQuestReplicaWorkspaceRecoveryStatus::Quarantined);
     REQUIRE(bound.WorkspaceRecovery.QuarantinedFiles == 2);
     REQUIRE(bound.WorkspaceRecovery.QuarantineFiles == 2);
-    REQUIRE(bound.WorkspaceRecovery.QuarantineBytes ==
-        std::string("UNPUBLISHED_SAVE_BYTES").size() +
-            std::string("UNPUBLISHED_CHECKPOINT_BYTES").size());
+    REQUIRE(bound.WorkspaceRecovery.QuarantineBytes == std::string("UNPUBLISHED_SAVE_BYTES").size() + std::string("UNPUBLISHED_CHECKPOINT_BYTES").size());
     REQUIRE(owner.IsBound());
 
-    const auto quarantine =
-        paths.MetadataDirectory / "orphan_copy_quarantine";
+    const auto quarantine = paths.MetadataDirectory / "orphan_copy_quarantine";
     REQUIRE_FALSE(std::filesystem::exists(saveTemporary));
     REQUIRE_FALSE(std::filesystem::exists(checkpointTemporary));
-    REQUIRE(std::filesystem::exists(
-        quarantine / "saves" / saveTemporary.filename()));
-    REQUIRE(std::filesystem::exists(
-        quarantine / checkpointTemporary.lexically_relative(
-            paths.PlayerDirectory)));
+    REQUIRE(std::filesystem::exists(quarantine / "saves" / saveTemporary.filename()));
+    REQUIRE(std::filesystem::exists(quarantine / checkpointTemporary.lexically_relative(paths.PlayerDirectory)));
     REQUIRE(std::filesystem::exists(malformedTemporary));
     REQUIRE(std::filesystem::exists(runtimeTemporary));
 
-    REQUIRE(owner.PrepareAndRelease(
-                PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
+    REQUIRE(owner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
 }
 
 TEST_CASE("Workspace recovery requires the exact live lease capability", "[quest.party-state.runtime-owner][workspace-recovery][capability]")
 {
     OwnerSandbox sandbox;
     const auto paths = BuildOwnerPaths(sandbox.Root);
-    const auto temporary =
-        paths.SavesDirectory / "Hero.ess.tpqtmp-654-0";
+    const auto temporary = paths.SavesDirectory / "Hero.ess.tpqtmp-654-0";
     WriteOwnerFile(temporary, "UNOWNED_ORPHAN_BYTES");
 
     PartyQuestReplicaWorkspaceLease unheldLease;
-    const auto rejected =
-        PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
-            paths,
-            kOwnerCampaign,
-            kOwnerPlayer,
-            unheldLease);
-    REQUIRE(rejected.Status ==
-        PartyQuestReplicaWorkspaceRecoveryStatus::InvalidLease);
+    const auto rejected = PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(paths, kOwnerCampaign, kOwnerPlayer, unheldLease);
+    REQUIRE(rejected.Status == PartyQuestReplicaWorkspaceRecoveryStatus::InvalidLease);
     REQUIRE(std::filesystem::exists(temporary));
-    REQUIRE_FALSE(std::filesystem::exists(
-        paths.MetadataDirectory / "orphan_copy_quarantine"));
+    REQUIRE_FALSE(std::filesystem::exists(paths.MetadataDirectory / "orphan_copy_quarantine"));
 }
 
 TEST_CASE("Workspace recovery deadline fails before moving orphan bytes", "[quest.party-state.runtime-owner][workspace-recovery][deadline]")
 {
     OwnerSandbox sandbox;
     const auto paths = BuildOwnerPaths(sandbox.Root);
-    const auto temporary =
-        paths.SavesDirectory / "Hero.ess.tpqtmp-655-0";
+    const auto temporary = paths.SavesDirectory / "Hero.ess.tpqtmp-655-0";
     WriteOwnerFile(temporary, "DEADLINE_PROTECTED_BYTES");
 
     PartyQuestReplicaWorkspaceLease lease;
-    REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
-        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    REQUIRE(lease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) == PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
 
     ExpiringWorkspaceRecoveryClock clock;
     PartyQuestReplicaWorkspaceRecoveryHooks hooks;
     hooks.MonotonicNow = &ExpireWorkspaceRecovery;
     hooks.Context = &clock;
-    const auto expired =
-        PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
-            paths,
-            kOwnerCampaign,
-            kOwnerPlayer,
-            lease,
-            hooks);
-    REQUIRE(expired.Status ==
-        PartyQuestReplicaWorkspaceRecoveryStatus::DeadlineExceeded);
+    const auto expired = PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(paths, kOwnerCampaign, kOwnerPlayer, lease, hooks);
+    REQUIRE(expired.Status == PartyQuestReplicaWorkspaceRecoveryStatus::DeadlineExceeded);
     REQUIRE(std::filesystem::exists(temporary));
-    REQUIRE_FALSE(std::filesystem::exists(
-        paths.MetadataDirectory / "orphan_copy_quarantine"));
+    REQUIRE_FALSE(std::filesystem::exists(paths.MetadataDirectory / "orphan_copy_quarantine"));
 }
 
 TEST_CASE("Workspace recovery blocks an over-quota evidence quarantine", "[quest.party-state.runtime-owner][workspace-recovery][quota]")
 {
     OwnerSandbox sandbox;
     const auto paths = BuildOwnerPaths(sandbox.Root);
-    const auto quarantine =
-        paths.MetadataDirectory / "orphan_copy_quarantine" / "saves";
-    for (size_t i = 0;
-         i <= PartyQuestReplicaWorkspaceRecovery::MaxQuarantineFiles;
-         ++i)
+    const auto quarantine = paths.MetadataDirectory / "orphan_copy_quarantine" / "saves";
+    for (size_t i = 0; i <= PartyQuestReplicaWorkspaceRecovery::MaxQuarantineFiles; ++i)
     {
-        WriteOwnerFile(
-            quarantine /
-                ("Hero" + std::to_string(i) + ".ess.tpqtmp-" +
-                    std::to_string(i + 1) + "-0"),
-            "x");
+        WriteOwnerFile(quarantine / ("Hero" + std::to_string(i) + ".ess.tpqtmp-" + std::to_string(i + 1) + "-0"), "x");
     }
 
     PartyQuestRuntimeSessionOwner owner;
     const auto blocked = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
-    REQUIRE(blocked.Status ==
-        PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
-    REQUIRE(blocked.WorkspaceRecovery.Status ==
-        PartyQuestReplicaWorkspaceRecoveryStatus::QuarantineQuotaExceeded);
-    REQUIRE(blocked.WorkspaceRecovery.QuarantineFiles ==
-        PartyQuestReplicaWorkspaceRecovery::MaxQuarantineFiles);
+    REQUIRE(blocked.Status == PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
+    REQUIRE(blocked.WorkspaceRecovery.Status == PartyQuestReplicaWorkspaceRecoveryStatus::QuarantineQuotaExceeded);
+    REQUIRE(blocked.WorkspaceRecovery.QuarantineFiles == PartyQuestReplicaWorkspaceRecovery::MaxQuarantineFiles);
     REQUIRE(blocked.WorkspaceRecovery.QuarantinedFiles == 0);
     REQUIRE_FALSE(owner.IsBound());
 }
@@ -516,23 +411,16 @@ TEST_CASE("Workspace recovery rejects oversized quarantine evidence", "[quest.pa
 {
     OwnerSandbox sandbox;
     const auto paths = BuildOwnerPaths(sandbox.Root);
-    const auto evidence = paths.MetadataDirectory /
-        "orphan_copy_quarantine" / "saves" /
-        "Hero.ess.tpqtmp-900-0";
+    const auto evidence = paths.MetadataDirectory / "orphan_copy_quarantine" / "saves" / "Hero.ess.tpqtmp-900-0";
     WriteOwnerFile(evidence, "x");
     std::error_code ec;
-    std::filesystem::resize_file(
-        evidence,
-        PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes + 1,
-        ec);
+    std::filesystem::resize_file(evidence, PartyQuestReplicaResourcePolicy::MaxIndividualFileBytes + 1, ec);
     REQUIRE_FALSE(ec);
 
     PartyQuestRuntimeSessionOwner owner;
     const auto blocked = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
-    REQUIRE(blocked.Status ==
-        PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
-    REQUIRE(blocked.WorkspaceRecovery.Status ==
-        PartyQuestReplicaWorkspaceRecoveryStatus::QuarantineQuotaExceeded);
+    REQUIRE(blocked.Status == PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
+    REQUIRE(blocked.WorkspaceRecovery.Status == PartyQuestReplicaWorkspaceRecoveryStatus::QuarantineQuotaExceeded);
     REQUIRE(blocked.WorkspaceRecovery.QuarantinedFiles == 0);
     REQUIRE(std::filesystem::exists(evidence));
 }
@@ -541,16 +429,13 @@ TEST_CASE("Workspace recovery does not adopt unknown quarantine content", "[ques
 {
     OwnerSandbox sandbox;
     const auto paths = BuildOwnerPaths(sandbox.Root);
-    const auto unknown = paths.MetadataDirectory /
-        "orphan_copy_quarantine" / "saves" / "operator-notes.txt";
+    const auto unknown = paths.MetadataDirectory / "orphan_copy_quarantine" / "saves" / "operator-notes.txt";
     WriteOwnerFile(unknown, "MUST_NOT_BE_ADOPTED_AS_ORPHAN_EVIDENCE");
 
     PartyQuestRuntimeSessionOwner owner;
     const auto blocked = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
-    REQUIRE(blocked.Status ==
-        PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
-    REQUIRE(blocked.WorkspaceRecovery.Status ==
-        PartyQuestReplicaWorkspaceRecoveryStatus::QuarantineInvalid);
+    REQUIRE(blocked.Status == PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
+    REQUIRE(blocked.WorkspaceRecovery.Status == PartyQuestReplicaWorkspaceRecoveryStatus::QuarantineInvalid);
     REQUIRE_FALSE(owner.IsBound());
     REQUIRE(std::filesystem::exists(unknown));
 }
@@ -559,26 +444,21 @@ TEST_CASE("Workspace recovery fails closed on quarantine destination conflict", 
 {
     OwnerSandbox sandbox;
     const auto paths = BuildOwnerPaths(sandbox.Root);
-    const auto temporary =
-        paths.SavesDirectory / "Hero.ess.tpqtmp-777-0";
-    const auto quarantined = paths.MetadataDirectory /
-        "orphan_copy_quarantine" / "saves" / temporary.filename();
+    const auto temporary = paths.SavesDirectory / "Hero.ess.tpqtmp-777-0";
+    const auto quarantined = paths.MetadataDirectory / "orphan_copy_quarantine" / "saves" / temporary.filename();
     WriteOwnerFile(temporary, "CURRENT_ORPHAN_BYTES");
     WriteOwnerFile(quarantined, "PRIOR_QUARANTINE_BYTES");
 
     PartyQuestRuntimeSessionOwner owner;
     const auto blocked = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
-    REQUIRE(blocked.Status ==
-        PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
-    REQUIRE(blocked.WorkspaceRecovery.Status ==
-        PartyQuestReplicaWorkspaceRecoveryStatus::DestinationConflict);
+    REQUIRE(blocked.Status == PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure);
+    REQUIRE(blocked.WorkspaceRecovery.Status == PartyQuestReplicaWorkspaceRecoveryStatus::DestinationConflict);
     REQUIRE_FALSE(owner.IsBound());
     REQUIRE(std::filesystem::exists(temporary));
     REQUIRE(std::filesystem::exists(quarantined));
 
     PartyQuestReplicaWorkspaceLease retryLease;
-    REQUIRE(retryLease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) ==
-        PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
+    REQUIRE(retryLease.Acquire(paths, kOwnerCampaign, kOwnerPlayer) == PartyQuestReplicaWorkspaceLeaseStatus::Acquired);
 }
 
 TEST_CASE("Runtime session owner refuses invalid layout and mismatched durable identity", "[quest.party-state.runtime-owner][identity]")
@@ -603,15 +483,12 @@ TEST_CASE("Runtime session owner refuses invalid layout and mismatched durable i
         auto state = BuildOwnerState();
         state.PlayerProfileId.Low ^= 1;
         REQUIRE(state.PlayerProfileId.IsValid());
-        REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(
-                    paths.RuntimeApplySidecar,
-                    state) == PartyQuestRuntimeApplyPersistenceStatus::Success);
+        REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(paths.RuntimeApplySidecar, state) == PartyQuestRuntimeApplyPersistenceStatus::Success);
 
         PartyQuestRuntimeSessionOwner owner;
         const auto result = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
         REQUIRE(result.Status == PartyQuestRuntimeSessionOwnerBindStatus::StoreRejected);
-        REQUIRE(result.Store.Status ==
-            PartyQuestRuntimeSessionStoreStatus::JournalIdentityMismatch);
+        REQUIRE(result.Store.Status == PartyQuestRuntimeSessionStoreStatus::JournalIdentityMismatch);
         REQUIRE_FALSE(owner.IsBound());
         REQUIRE_FALSE(PartyQuestSaveGuard::GetProcessGuard().IsActive());
     }
@@ -624,9 +501,7 @@ TEST_CASE("Runtime session owner reconstructs process guard for durable recovery
     constexpr uint64_t transactionId = 33002;
     auto state = BuildOwnerState();
     state.Active = BuildOwnerRecoveryEntry(transactionId, 3310);
-    REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(
-                paths.RuntimeApplySidecar,
-                state) == PartyQuestRuntimeApplyPersistenceStatus::Success);
+    REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(paths.RuntimeApplySidecar, state) == PartyQuestRuntimeApplyPersistenceStatus::Success);
 
     PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
     auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
@@ -635,18 +510,15 @@ TEST_CASE("Runtime session owner reconstructs process guard for durable recovery
 
     const auto bound = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
     REQUIRE(bound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
-    REQUIRE(bound.Store.Status ==
-        PartyQuestRuntimeSessionStoreStatus::RecoveryRequired);
+    REQUIRE(bound.Store.Status == PartyQuestRuntimeSessionStoreStatus::RecoveryRequired);
     REQUIRE(bound.RecoveryRequired());
     REQUIRE(bound.GuardHeld);
     REQUIRE(owner.IsBound());
     REQUIRE(owner.IsRecoveryBlocked());
     REQUIRE(processGuard.GetTransactionId() == transactionId);
 
-    const auto blocked = owner.PrepareAndRelease(
-        PartyQuestRuntimeLifecycleEvent::Shutdown);
-    REQUIRE(blocked.Status ==
-        PartyQuestRuntimeLifecycleFenceStatus::RecoveryBlocked);
+    const auto blocked = owner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Shutdown);
+    REQUIRE(blocked.Status == PartyQuestRuntimeLifecycleFenceStatus::RecoveryBlocked);
     REQUIRE_FALSE(blocked.CanProceed());
     REQUIRE(blocked.GuardHeld);
     REQUIRE(owner.IsBound());
@@ -666,8 +538,7 @@ TEST_CASE("Runtime session owner forbids silent identity or root rebinding", "[q
     const auto otherRoot = BuildOwnerPaths(sandbox.Root / "second");
 
     PartyQuestRuntimeSessionOwner owner;
-    REQUIRE(owner.Bind(kOwnerCampaign, kOwnerPlayer, paths).Status ==
-        PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(owner.Bind(kOwnerCampaign, kOwnerPlayer, paths).Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
 
     const auto conflict = owner.Bind(kOwnerCampaign, kOwnerPlayer, otherRoot);
     REQUIRE(conflict.Status == PartyQuestRuntimeSessionOwnerBindStatus::BindConflict);
@@ -676,16 +547,14 @@ TEST_CASE("Runtime session owner forbids silent identity or root rebinding", "[q
     REQUIRE(owner.GetPaths() != nullptr);
     REQUIRE(*owner.GetPaths() == paths);
 
-    REQUIRE(owner.PrepareAndRelease(
-                PartyQuestRuntimeLifecycleEvent::CampaignSwitch).CanProceed());
+    REQUIRE(owner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::CampaignSwitch).CanProceed());
     REQUIRE_FALSE(owner.IsBound());
 
     const auto rebound = owner.Bind(kOwnerCampaign, kOwnerPlayer, otherRoot);
     REQUIRE(rebound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
     REQUIRE(owner.GetPaths() != nullptr);
     REQUIRE(*owner.GetPaths() == otherRoot);
-    REQUIRE(owner.PrepareAndRelease(
-                PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
+    REQUIRE(owner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Shutdown).CanProceed());
 }
 
 TEST_CASE("Runtime session owner releases pre-mutation work only through lifecycle fence", "[quest.party-state.runtime-owner][lifecycle]")
@@ -698,8 +567,7 @@ TEST_CASE("Runtime session owner releases pre-mutation work only through lifecyc
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
     REQUIRE_FALSE(processGuard.IsActive());
 
-    REQUIRE(owner.Bind(kOwnerCampaign, kOwnerPlayer, paths).Status ==
-        PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(owner.Bind(kOwnerCampaign, kOwnerPlayer, paths).Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
     auto* guarded = owner.GetGuardedSession();
     REQUIRE(guarded != nullptr);
 
@@ -708,17 +576,14 @@ TEST_CASE("Runtime session owner releases pre-mutation work only through lifecyc
     REQUIRE(processGuard.GetTransactionId() == request.TransactionId);
     REQUIRE(std::filesystem::exists(paths.RuntimeApplySidecar));
 
-    const auto released = owner.PrepareAndRelease(
-        PartyQuestRuntimeLifecycleEvent::MainMenu);
-    REQUIRE(released.Status ==
-        PartyQuestRuntimeLifecycleFenceStatus::SafeAbortApplied);
+    const auto released = owner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::MainMenu);
+    REQUIRE(released.Status == PartyQuestRuntimeLifecycleFenceStatus::SafeAbortApplied);
     REQUIRE(released.CanProceed());
     REQUIRE_FALSE(released.GuardHeld);
     REQUIRE_FALSE(owner.IsBound());
     REQUIRE_FALSE(processGuard.IsActive());
 
-    const auto durable = PartyQuestRuntimeApplyPersistence::Load(
-        paths.RuntimeApplySidecar);
+    const auto durable = PartyQuestRuntimeApplyPersistence::Load(paths.RuntimeApplySidecar);
     REQUIRE(durable.Status == PartyQuestRuntimeApplyPersistenceStatus::Success);
     REQUIRE(durable.State.has_value());
     REQUIRE_FALSE(durable.State->Active.has_value());
@@ -734,11 +599,95 @@ TEST_CASE("Orphan process guard prevents a new runtime owner from binding", "[qu
 
     PartyQuestRuntimeSessionOwner owner;
     const auto result = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
-    REQUIRE(result.Status ==
-        PartyQuestRuntimeSessionOwnerBindStatus::ProcessGuardBusy);
+    REQUIRE(result.Status == PartyQuestRuntimeSessionOwnerBindStatus::ProcessGuardBusy);
     REQUIRE_FALSE(result.IsBound());
     REQUIRE_FALSE(owner.IsBound());
     REQUIRE(result.GuardHeld);
     REQUIRE(processGuard.GetTransactionId() == 33999);
     REQUIRE(processGuard.Release(33999));
+}
+
+TEST_CASE("Runtime session owner resolves crash recovery, refreshes store status, and honors generation fence", "[quest.party-state.runtime-owner][recovery]")
+{
+    OwnerSandbox sandbox;
+    const auto paths = BuildOwnerPaths(sandbox.Root);
+
+    PartyQuestRuntimeSessionOwner unbound;
+    REQUIRE(unbound.ResolveCrashRecovery().Status == PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState);
+    REQUIRE(unbound.ResolveLiveRecovery().Status == PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState);
+
+    constexpr uint64_t kTransactionId = 33042;
+    constexpr uint64_t kWorldRevision = 3342;
+    constexpr uint64_t kRuntimeGeneration = 17;
+    constexpr uint64_t kCaptureEpoch = 29;
+
+    WriteOwnerFile(paths.SavesDirectory / "Hero.ess", "PRE_REPAIR_3342");
+    PartyQuestReplicaSnapshotManager snapshotManager(paths, kOwnerCampaign, kOwnerPlayer);
+    const auto sourceSpec = PartyQuestReplicaFileExecutor::InspectSource(PartyQuestReplicaFileKind::SkyrimSave, paths.SavesDirectory / "Hero.ess", "Hero.ess");
+    REQUIRE(sourceSpec.has_value());
+    const auto checkpointPlan = PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(paths, PartyQuestCheckpointKind::PreRepair, kWorldRevision, {*sourceSpec});
+    REQUIRE(checkpointPlan.IsReady());
+    REQUIRE(snapshotManager.EnsureRevisionCheckpoint(PartyQuestCheckpointKind::PreRepair, kWorldRevision, checkpointPlan).Status == PartyQuestReplicaSnapshotStatus::Ready);
+    REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(paths, kOwnerCampaign, kOwnerPlayer, PartyQuestCheckpointKind::PreRepair, kWorldRevision).IsPromoted());
+
+    auto state = BuildOwnerState();
+    auto entry = BuildOwnerRecoveryEntry(kTransactionId, kWorldRevision);
+    entry.CheckpointRuntimeGeneration = kRuntimeGeneration;
+    entry.CheckpointCaptureEpochId = kCaptureEpoch;
+    state.Active = entry;
+
+    const auto manifestLoaded =
+        PartyQuestReplicaManifestStore::Load(PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(paths, PartyQuestCheckpointKind::PreRepair, kWorldRevision));
+    REQUIRE(manifestLoaded.Status == PartyQuestReplicaManifestPersistenceStatus::Success);
+    REQUIRE(manifestLoaded.Manifest.has_value());
+    const auto commitRecord = PartyQuestPreRepairAuthorizationCommitStore::Build(kOwnerCampaign, kOwnerPlayer, entry, kRuntimeGeneration, kCaptureEpoch, *manifestLoaded.Manifest);
+    REQUIRE(commitRecord.has_value());
+    REQUIRE(PartyQuestPreRepairAuthorizationCommitStore::PublishDurably(paths, *commitRecord) == PartyQuestPreRepairAuthorizationCommitPublishStatus::Published);
+
+    WriteOwnerFile(paths.SavesDirectory / "Hero.ess", "MUTATED_AFTER_3342");
+    REQUIRE(PartyQuestRuntimeApplyPersistence::SaveAtomically(paths.RuntimeApplySidecar, state) == PartyQuestRuntimeApplyPersistenceStatus::Success);
+
+    PartyQuestRuntimeSessionOwnerTestAccess::ForceClearProcessOwner();
+    auto& owner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
+    REQUIRE_FALSE(processGuard.IsActive());
+
+    const auto bound = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(bound.Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound);
+    REQUIRE(bound.RecoveryRequired());
+    REQUIRE(owner.IsBound());
+    REQUIRE(owner.IsRecoveryBlocked());
+    REQUIRE(processGuard.GetTransactionId() == kTransactionId);
+
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const auto pendingTicket = fence.BeginLifecycleTransition();
+    REQUIRE(pendingTicket.IsValid());
+
+    const auto fencedCrash = owner.ResolveCrashRecovery();
+    REQUIRE(fencedCrash.Status == PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState);
+    REQUIRE(fencedCrash.TransactionId == kTransactionId);
+    REQUIRE(fencedCrash.TargetWorldRevision == kWorldRevision);
+    REQUIRE(owner.IsRecoveryBlocked());
+    REQUIRE(processGuard.IsActive());
+
+    REQUIRE(fence.CompleteLifecycleTransition(pendingTicket));
+
+    const auto resolved = owner.ResolveCrashRecovery();
+    REQUIRE(resolved.Status == PartyQuestRuntimeRecoveryStatus::Restored);
+    REQUIRE(resolved.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
+    REQUIRE_FALSE(owner.IsRecoveryBlocked());
+    REQUIRE_FALSE(processGuard.IsActive());
+    REQUIRE(owner.GetStoreResult() != nullptr);
+    REQUIRE(owner.GetStoreResult()->Status == PartyQuestRuntimeSessionStoreStatus::Clean);
+    REQUIRE(owner.GetStoreResult()->RecoveryDisposition == PartyQuestRuntimeRecoveryDisposition::Clean);
+
+    PartyQuestRuntimeSessionOwnerTestAccess::AuthorizeNextDirectProcessBindForTesting();
+    const auto rebound = owner.Bind(kOwnerCampaign, kOwnerPlayer, paths);
+    REQUIRE(rebound.Status == PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound);
+    REQUIRE_FALSE(rebound.RecoveryRequired());
+
+    const auto released = owner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Shutdown);
+    REQUIRE(released.Status == PartyQuestRuntimeLifecycleFenceStatus::Allowed);
+    REQUIRE(released.CanProceed());
+    REQUIRE_FALSE(owner.IsBound());
 }

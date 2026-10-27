@@ -5,9 +5,7 @@
 
 namespace
 {
-PartyQuestRuntimeSessionOwnerBindResult MakeEarlyFailure(
-    PartyQuestRuntimeSessionOwnerBindStatus aStatus,
-    PartyQuestRuntimeSessionStoreStatus aStoreStatus) noexcept
+PartyQuestRuntimeSessionOwnerBindResult MakeEarlyFailure(PartyQuestRuntimeSessionOwnerBindStatus aStatus, PartyQuestRuntimeSessionStoreStatus aStoreStatus) noexcept
 {
     PartyQuestRuntimeSessionOwnerBindResult result;
     result.Status = aStatus;
@@ -20,8 +18,7 @@ PartyQuestRuntimeSessionOwnerBindResult MakeEarlyFailure(
 }
 } // namespace
 
-PartyQuestRuntimeSessionOwner&
-PartyQuestRuntimeSessionOwner::GetProcessOwner() noexcept
+PartyQuestRuntimeSessionOwner& PartyQuestRuntimeSessionOwner::GetProcessOwner() noexcept
 {
     // There is exactly one production ownership graph. The durable session owner
     // is a nested component of PartyQuestRuntimeOwner rather than an independent
@@ -35,23 +32,18 @@ PartyQuestRuntimeSessionOwner::~PartyQuestRuntimeSessionOwner() noexcept
     // to hold the same exclusive barrier used by live lifecycle transitions; on
     // failure the fence is poisoned first, which at least prevents any new
     // execution lease from being admitted while process resources are released.
-    auto generationInvalidation =
-        PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
+    auto generationInvalidation = PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
     Clear();
 }
 
-PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::Bind(
-    const PartyQuestCampaignId& acCampaignId,
-    const PartyQuestPlayerProfileId& acPlayerProfileId,
-    const PartyQuestCoopSavePaths& acPaths) noexcept
+PartyQuestRuntimeSessionOwnerBindResult
+PartyQuestRuntimeSessionOwner::Bind(const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, const PartyQuestCoopSavePaths& acPaths) noexcept
 {
     if (this == &GetProcessOwner())
     {
         if (!m_allowNextDirectProcessBindForTesting)
         {
-            return MakeEarlyFailure(
-                PartyQuestRuntimeSessionOwnerBindStatus::ProcessBootstrapRequired,
-                PartyQuestRuntimeSessionStoreStatus::InvalidIdentity);
+            return MakeEarlyFailure(PartyQuestRuntimeSessionOwnerBindStatus::ProcessBootstrapRequired, PartyQuestRuntimeSessionStoreStatus::InvalidIdentity);
         }
 
         // Test-only friend authorization is deliberately one-shot so a prior
@@ -62,56 +54,41 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::Bind(
     return BindInternal(acCampaignId, acPlayerProfileId, acPaths);
 }
 
-PartyQuestRuntimeSessionOwnerBindResult
-PartyQuestRuntimeSessionOwner::BindVerifiedProcessOwner(
-    const PartyQuestCampaignId& acCampaignId,
-    const PartyQuestPlayerProfileId& acPlayerProfileId,
-    const PartyQuestCoopSavePaths& acPaths) noexcept
+PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindVerifiedProcessOwner(
+    const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, const PartyQuestCoopSavePaths& acPaths) noexcept
 {
     if (this != &GetProcessOwner())
     {
-        return MakeEarlyFailure(
-            PartyQuestRuntimeSessionOwnerBindStatus::ProcessBootstrapRequired,
-            PartyQuestRuntimeSessionStoreStatus::InvalidIdentity);
+        return MakeEarlyFailure(PartyQuestRuntimeSessionOwnerBindStatus::ProcessBootstrapRequired, PartyQuestRuntimeSessionStoreStatus::InvalidIdentity);
     }
 
     return BindInternal(acCampaignId, acPlayerProfileId, acPaths);
 }
 
 PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInternal(
-    const PartyQuestCampaignId& acCampaignId,
-    const PartyQuestPlayerProfileId& acPlayerProfileId,
-    const PartyQuestCoopSavePaths& acPaths) noexcept
+    const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, const PartyQuestCoopSavePaths& acPaths) noexcept
 {
     try
     {
         if (!acCampaignId.IsValid() || !acPlayerProfileId.IsValid())
         {
-            return MakeEarlyFailure(
-                PartyQuestRuntimeSessionOwnerBindStatus::InvalidIdentity,
-                PartyQuestRuntimeSessionStoreStatus::InvalidIdentity);
+            return MakeEarlyFailure(PartyQuestRuntimeSessionOwnerBindStatus::InvalidIdentity, PartyQuestRuntimeSessionStoreStatus::InvalidIdentity);
         }
 
-        if (!PartyQuestCoopSaveLayout::Matches(
-                acPaths,
-                acCampaignId,
-                acPlayerProfileId))
+        if (!PartyQuestCoopSaveLayout::Matches(acPaths, acCampaignId, acPlayerProfileId))
         {
-            return MakeEarlyFailure(
-                PartyQuestRuntimeSessionOwnerBindStatus::InvalidLayout,
-                PartyQuestRuntimeSessionStoreStatus::InvalidLayout);
+            return MakeEarlyFailure(PartyQuestRuntimeSessionOwnerBindStatus::InvalidLayout, PartyQuestRuntimeSessionStoreStatus::InvalidLayout);
         }
 
         if (IsBound())
         {
+            RefreshStoreStateAfterRecovery();
             PartyQuestRuntimeSessionOwnerBindResult result;
             result.Store = *m_storeResult;
             result.LeaseStatus = PartyQuestReplicaWorkspaceLeaseStatus::Acquired;
             result.WorkspaceRecovery = *m_workspaceRecoveryResult;
 
-            if (m_session->GetCampaignId() != acCampaignId ||
-                m_session->GetPlayerProfileId() != acPlayerProfileId ||
-                *m_paths != acPaths)
+            if (m_session->GetCampaignId() != acCampaignId || m_session->GetPlayerProfileId() != acPlayerProfileId || *m_paths != acPaths)
             {
                 result.Status = PartyQuestRuntimeSessionOwnerBindStatus::BindConflict;
                 result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
@@ -122,9 +99,8 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
             const auto reconciled = m_guardedSession->ReconcileLoadedState();
             result.ReconcileStatus = reconciled.Status;
             result.GuardHeld = reconciled.GuardHeld;
-            result.Status = reconciled.Status == PartyQuestRuntimeGuardStatus::Ready
-                ? PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound
-                : PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked;
+            result.Status = reconciled.Status == PartyQuestRuntimeGuardStatus::Ready ? PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound
+                                                                                     : PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked;
             return result;
         }
 
@@ -139,36 +115,25 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
         }
 
         PartyQuestReplicaWorkspaceLease workspaceLease;
-        const auto leaseStatus = workspaceLease.Acquire(
-            acPaths,
-            acCampaignId,
-            acPlayerProfileId);
+        const auto leaseStatus = workspaceLease.Acquire(acPaths, acCampaignId, acPlayerProfileId);
         if (leaseStatus != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
         {
             PartyQuestRuntimeSessionOwnerBindResult result;
-            result.Status = leaseStatus == PartyQuestReplicaWorkspaceLeaseStatus::Busy
-                ? PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceBusy
-                : PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure;
+            result.Status = leaseStatus == PartyQuestReplicaWorkspaceLeaseStatus::Busy ? PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceBusy
+                                                                                       : PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure;
             result.Store.Status = PartyQuestRuntimeSessionStoreStatus::InvalidLayout;
-            result.Store.PersistenceStatus =
-                PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
+            result.Store.PersistenceStatus = PartyQuestRuntimeApplyPersistenceStatus::InvalidData;
             result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
             result.GuardHeld = false;
             result.LeaseStatus = leaseStatus;
             return result;
         }
 
-        const auto workspaceRecovery =
-            PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(
-                acPaths,
-                acCampaignId,
-                acPlayerProfileId,
-                workspaceLease);
+        const auto workspaceRecovery = PartyQuestReplicaWorkspaceRecovery::QuarantineOrphanCopyTemporaries(acPaths, acCampaignId, acPlayerProfileId, workspaceLease);
         if (!workspaceRecovery.IsSuccess())
         {
             PartyQuestRuntimeSessionOwnerBindResult result;
-            result.Status =
-                PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure;
+            result.Status = PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure;
             result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
             result.GuardHeld = false;
             result.LeaseStatus = leaseStatus;
@@ -176,15 +141,11 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
             return result;
         }
 
-        auto publicationCapability = workspaceLease.CreatePublicationCapability(
-            acPaths,
-            acCampaignId,
-            acPlayerProfileId);
+        auto publicationCapability = workspaceLease.CreatePublicationCapability(acPaths, acCampaignId, acPlayerProfileId);
         if (!publicationCapability.IsVerified())
         {
             PartyQuestRuntimeSessionOwnerBindResult result;
-            result.Status =
-                PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure;
+            result.Status = PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure;
             result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
             result.GuardHeld = false;
             result.LeaseStatus = leaseStatus;
@@ -193,13 +154,8 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
         }
 
         PartyQuestCoopSavePaths ownedPaths = acPaths;
-        auto session = std::make_unique<PartyQuestRuntimeApplySession>(
-            acCampaignId,
-            acPlayerProfileId);
-        const auto store = PartyQuestRuntimeSessionStore::BindAndLoad(
-            *session,
-            acPaths,
-            publicationCapability);
+        auto session = std::make_unique<PartyQuestRuntimeApplySession>(acCampaignId, acPlayerProfileId);
+        const auto store = PartyQuestRuntimeSessionStore::BindAndLoad(*session, acPaths, publicationCapability);
 
         PartyQuestRuntimeSessionOwnerBindResult result;
         result.Store = store;
@@ -213,8 +169,7 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
             return result;
         }
 
-        auto guardedSession =
-            std::make_unique<PartyQuestRuntimeGuardedSession>(*session);
+        auto guardedSession = std::make_unique<PartyQuestRuntimeGuardedSession>(*session);
 
         m_paths.emplace(std::move(ownedPaths));
         m_storeResult = store;
@@ -223,13 +178,9 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
         m_session = std::move(session);
         m_guardedSession = std::move(guardedSession);
 
-        if (!PartyQuestRuntimeWorkspacePublicationAuthority::Bind(
-                *m_session,
-                acPaths,
-                std::move(publicationCapability)))
+        if (!PartyQuestRuntimeWorkspacePublicationAuthority::Bind(*m_session, acPaths, std::move(publicationCapability)))
         {
-            result.Status =
-                PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure;
+            result.Status = PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure;
             result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
             result.GuardHeld = processGuard.IsActive();
             Clear();
@@ -239,22 +190,17 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
         const auto reconciled = m_guardedSession->ReconcileLoadedState();
         result.ReconcileStatus = reconciled.Status;
         result.GuardHeld = reconciled.GuardHeld;
-        result.Status = reconciled.Status == PartyQuestRuntimeGuardStatus::Ready
-            ? PartyQuestRuntimeSessionOwnerBindStatus::Bound
-            : PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked;
+        result.Status =
+            reconciled.Status == PartyQuestRuntimeGuardStatus::Ready ? PartyQuestRuntimeSessionOwnerBindStatus::Bound : PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked;
         return result;
     }
     catch (...)
     {
         PartyQuestRuntimeSessionOwnerBindResult result;
-        result.Status = IsBound()
-            ? PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked
-            : PartyQuestRuntimeSessionOwnerBindStatus::StoreRejected;
+        result.Status = IsBound() ? PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked : PartyQuestRuntimeSessionOwnerBindStatus::StoreRejected;
         result.ReconcileStatus = PartyQuestRuntimeGuardStatus::InvalidState;
         result.GuardHeld = PartyQuestSaveGuard::GetProcessGuard().IsActive();
-        result.LeaseStatus = m_workspaceLease.IsHeld()
-            ? PartyQuestReplicaWorkspaceLeaseStatus::Acquired
-            : PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted;
+        result.LeaseStatus = m_workspaceLease.IsHeld() ? PartyQuestReplicaWorkspaceLeaseStatus::Acquired : PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted;
         if (m_storeResult)
             result.Store = *m_storeResult;
         if (m_workspaceRecoveryResult)
@@ -263,12 +209,9 @@ PartyQuestRuntimeSessionOwnerBindResult PartyQuestRuntimeSessionOwner::BindInter
     }
 }
 
-PartyQuestRuntimeLifecycleFenceResult
-PartyQuestRuntimeSessionOwner::PrepareAndRelease(
-    PartyQuestRuntimeLifecycleEvent aEvent) noexcept
+PartyQuestRuntimeLifecycleFenceResult PartyQuestRuntimeSessionOwner::PrepareAndRelease(PartyQuestRuntimeLifecycleEvent aEvent) noexcept
 {
-    auto generationInvalidation =
-        PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
+    auto generationInvalidation = PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
     if (!generationInvalidation || !generationInvalidation->IsValid())
     {
         PartyQuestRuntimeLifecycleFenceResult result;
@@ -288,15 +231,12 @@ PartyQuestRuntimeSessionOwner::PrepareAndRelease(
         result.Status = PartyQuestRuntimeLifecycleFenceStatus::Allowed;
         if (processOwner)
         {
-            PartyQuestRuntimeOwner::GetProcessOwner()
-                .ObserveSessionLifecycleBoundary(aEvent, generation);
+            PartyQuestRuntimeOwner::GetProcessOwner().ObserveSessionLifecycleBoundary(aEvent, generation);
         }
         return result;
     }
 
-    auto result = PartyQuestRuntimeLifecycleFence::Prepare(
-        *m_guardedSession,
-        aEvent);
+    auto result = PartyQuestRuntimeLifecycleFence::Prepare(*m_guardedSession, aEvent);
     if (result.CanProceed())
         Clear();
 
@@ -305,10 +245,105 @@ PartyQuestRuntimeSessionOwner::PrepareAndRelease(
     // not a reason to let new Skyrim work enter a recovery-blocked owner.
     if (processOwner)
     {
-        PartyQuestRuntimeOwner::GetProcessOwner()
-            .ObserveSessionLifecycleBoundary(aEvent, generation);
+        PartyQuestRuntimeOwner::GetProcessOwner().ObserveSessionLifecycleBoundary(aEvent, generation);
     }
     return result;
+}
+
+PartyQuestRuntimeRecoveryResult PartyQuestRuntimeSessionOwner::ResolveCrashRecovery() noexcept
+{
+    if (!IsBound())
+    {
+        PartyQuestRuntimeRecoveryResult result;
+        result.Status = PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState;
+        return result;
+    }
+
+    std::optional<PartyQuestRuntimeGenerationFence::ExecutionLease> generationLease;
+    if (this == &GetProcessOwner())
+    {
+        auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+        bool leaseReady = false;
+        if (fence.IsExecutionLeaseHeldByCurrentThread())
+        {
+            leaseReady = !fence.IsPoisoned() && !fence.IsLifecycleTransitionPending();
+        }
+        else
+        {
+            generationLease = fence.TryAcquire(fence.GetGeneration());
+            leaseReady = generationLease && generationLease->IsValid();
+        }
+
+        if (!leaseReady)
+        {
+            PartyQuestRuntimeRecoveryResult result;
+            result.Status = PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState;
+            if (const auto* recovery = m_session->GetCoordinator().GetRecoveryRecord())
+            {
+                result.TransactionId = recovery->TransactionId;
+                result.TargetWorldRevision = recovery->TargetWorldRevision;
+            }
+            return result;
+        }
+    }
+
+    auto result = m_guardedSession->ResolveCrashRecovery(*m_paths);
+    if (result.IsResolved())
+        RefreshStoreStateAfterRecovery();
+    return result;
+}
+
+PartyQuestRuntimeRecoveryResult PartyQuestRuntimeSessionOwner::ResolveLiveRecovery() noexcept
+{
+    if (!IsBound())
+    {
+        PartyQuestRuntimeRecoveryResult result;
+        result.Status = PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState;
+        return result;
+    }
+
+    std::optional<PartyQuestRuntimeGenerationFence::ExecutionLease> generationLease;
+    if (this == &GetProcessOwner())
+    {
+        auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+        bool leaseReady = false;
+        if (fence.IsExecutionLeaseHeldByCurrentThread())
+        {
+            leaseReady = !fence.IsPoisoned() && !fence.IsLifecycleTransitionPending();
+        }
+        else
+        {
+            generationLease = fence.TryAcquire(fence.GetGeneration());
+            leaseReady = generationLease && generationLease->IsValid();
+        }
+
+        if (!leaseReady)
+        {
+            PartyQuestRuntimeRecoveryResult result;
+            result.Status = PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState;
+            if (const auto* active = m_session->GetCoordinator().GetActive())
+            {
+                result.TransactionId = active->TransactionId;
+                result.TargetWorldRevision = active->TargetWorldRevision;
+            }
+            return result;
+        }
+    }
+
+    auto result = m_guardedSession->ResolveLiveRecovery(*m_paths);
+    if (result.IsResolved())
+        RefreshStoreStateAfterRecovery();
+    return result;
+}
+
+void PartyQuestRuntimeSessionOwner::RefreshStoreStateAfterRecovery() noexcept
+{
+    if (m_storeResult && m_storeResult->Status == PartyQuestRuntimeSessionStoreStatus::RecoveryRequired && !IsRecoveryBlocked())
+    {
+        m_storeResult->Status = PartyQuestRuntimeSessionStoreStatus::Clean;
+        m_storeResult->PersistenceStatus = PartyQuestRuntimeApplyPersistenceStatus::Success;
+        m_storeResult->RecoveryDisposition = PartyQuestRuntimeRecoveryDisposition::Clean;
+    }
 }
 
 void PartyQuestRuntimeSessionOwner::Clear() noexcept

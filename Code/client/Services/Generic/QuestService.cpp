@@ -36,8 +36,7 @@ static TESQuest* FindQuestByNameId(const String& name)
 QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
     : m_world(aWorld)
 {
-    m_partyQuestRuntimeCompatibilityManifest =
-        PartyQuestSkyrimRuntimeCompatibilityEvidence::BuildReviewedManifest();
+    m_partyQuestRuntimeCompatibilityManifest = PartyQuestSkyrimRuntimeCompatibilityEvidence::BuildReviewedManifest();
 
     m_joinedConnection = aDispatcher.sink<ConnectedEvent>().connect<&QuestService::OnConnected>(this);
     m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&QuestService::OnDisconnected>(this);
@@ -62,19 +61,14 @@ QuestService::QuestService(World& aWorld, entt::dispatcher& aDispatcher)
     }
 
     spdlog::info(
-        "PartyQuestRuntime reviewed compatibility registry loaded: profiles={} nativeAdapter={:016X}",
-        m_partyQuestRuntimeCompatibilityManifest.GetRequirementCount(),
+        "PartyQuestRuntime reviewed compatibility registry loaded: profiles={} nativeAdapter={:016X}", m_partyQuestRuntimeCompatibilityManifest.GetRequirementCount(),
         PartyQuestSkyrimRuntimeCompatibilityEvidence::NativeAdapterFingerprint);
 }
 
 QuestService::~QuestService() noexcept
 {
-    PartyQuestReleaseExternalSink(
-        m_pQuestStageDispatcher,
-        static_cast<BSTEventSink<TESQuestStageEvent>*>(this));
-    PartyQuestReleaseExternalSink(
-        m_pQuestStartStopDispatcher,
-        static_cast<BSTEventSink<TESQuestStartStopEvent>*>(this));
+    PartyQuestReleaseExternalSink(m_pQuestStageDispatcher, static_cast<BSTEventSink<TESQuestStageEvent>*>(this));
+    PartyQuestReleaseExternalSink(m_pQuestStartStopDispatcher, static_cast<BSTEventSink<TESQuestStartStopEvent>*>(this));
 }
 
 void QuestService::OnConnected(const ConnectedEvent& acEvent) noexcept
@@ -105,48 +99,36 @@ void QuestService::OnConnected(const ConnectedEvent& acEvent) noexcept
 
     const PartyQuestCampaignId campaignId = m_partyQuestSession->GetCampaignId();
     spdlog::info(
-        "PartyQuestProtocol client connected: player={} previousPlayer={} generation={} retainedReplica={} retainedCampaign={:016X}{:016X} retainedWorldRevision={} idNamespace={:016X} queuedSubmissions={}",
-        m_localPlayerId,
-        previousPlayerId,
-        m_connectionGeneration,
-        retainedReplica,
-        campaignId.High,
-        campaignId.Low,
-        m_partyQuestSession->GetReplica().GetWorldRevision(),
-        m_partyQuestIds.GetNamespace(),
-        m_partyQuestSubmissions.GetQueuedCount());
+        "PartyQuestProtocol client connected: player={} previousPlayer={} generation={} retainedReplica={} retainedCampaign={:016X}{:016X} retainedWorldRevision={} "
+        "idNamespace={:016X} queuedSubmissions={}",
+        m_localPlayerId, previousPlayerId, m_connectionGeneration, retainedReplica, campaignId.High, campaignId.Low, m_partyQuestSession->GetReplica().GetWorldRevision(),
+        m_partyQuestIds.GetNamespace(), m_partyQuestSubmissions.GetQueuedCount());
 
     // The legacy quest-selection behavior remains intentionally disabled.
 }
 
 void QuestService::StartPartyQuestCompatibilityEnvironment() noexcept
 {
-    if (m_partyQuestCompatibilityEnvironment.GetStatus() !=
-        PartyQuestCompatibilityEnvironmentCacheStatus::Empty)
+    if (m_partyQuestCompatibilityEnvironment.GetStatus() != PartyQuestCompatibilityEnvironmentCacheStatus::Empty)
     {
         return;
     }
 
-    auto snapshot =
-        PartyQuestSkyrimRuntimeCompatibilityEvidence::CaptureEnvironmentSnapshot();
+    auto snapshot = PartyQuestSkyrimRuntimeCompatibilityEvidence::CaptureEnvironmentSnapshot();
     if (!snapshot)
     {
-        spdlog::warn(
-            "PartyQuestRuntime compatibility environment capture unavailable; planning remains fail-closed");
+        spdlog::warn("PartyQuestRuntime compatibility environment capture unavailable; planning remains fail-closed");
         return;
     }
 
     const auto pluginCount = snapshot->OrderedPlugins.size();
     if (!m_partyQuestCompatibilityEnvironment.Start(std::move(*snapshot)))
     {
-        spdlog::warn(
-            "PartyQuestRuntime compatibility environment worker did not start; planning remains fail-closed");
+        spdlog::warn("PartyQuestRuntime compatibility environment worker did not start; planning remains fail-closed");
         return;
     }
 
-    spdlog::info(
-        "PartyQuestRuntime compatibility environment hashing started off-thread: plugins={}",
-        pluginCount);
+    spdlog::info("PartyQuestRuntime compatibility environment hashing started off-thread: plugins={}", pluginCount);
 }
 
 void QuestService::OnDisconnected(const DisconnectedEvent&) noexcept
@@ -157,10 +139,8 @@ void QuestService::OnDisconnected(const DisconnectedEvent&) noexcept
     m_partyQuestRuntimeCanonicalInbox.Reset();
 
     spdlog::info(
-        "PartyQuestProtocol client disconnected: player={} retainedWorldRevision={} queuedSubmissions={}",
-        m_localPlayerId,
-        m_partyQuestSession ? m_partyQuestSession->GetReplica().GetWorldRevision() : 0,
-        m_partyQuestSubmissions.GetQueuedCount());
+        "PartyQuestProtocol client disconnected: player={} retainedWorldRevision={} queuedSubmissions={}", m_localPlayerId,
+        m_partyQuestSession ? m_partyQuestSession->GetReplica().GetWorldRevision() : 0, m_partyQuestSubmissions.GetQueuedCount());
 }
 
 void QuestService::OnPartyJoined(const PartyJoinedEvent&) noexcept
@@ -178,10 +158,8 @@ void QuestService::OnPartyLeft(const PartyLeftEvent&) noexcept
     m_partyQuestRuntimeCanonicalInbox.Reset();
 
     spdlog::info(
-        "PartyQuestProtocol party left: player={} retainedWorldRevision={} queuedSubmissions={}",
-        m_localPlayerId,
-        m_partyQuestSession ? m_partyQuestSession->GetReplica().GetWorldRevision() : 0,
-        m_partyQuestSubmissions.GetQueuedCount());
+        "PartyQuestProtocol party left: player={} retainedWorldRevision={} queuedSubmissions={}", m_localPlayerId,
+        m_partyQuestSession ? m_partyQuestSession->GetReplica().GetWorldRevision() : 0, m_partyQuestSubmissions.GetQueuedCount());
 }
 
 void QuestService::SendPartyQuestReplicaReport(bool aReconnect, const char* acReason) noexcept
@@ -194,22 +172,14 @@ void QuestService::SendPartyQuestReplicaReport(bool aReconnect, const char* acRe
     m_world.GetTransport().Send(report);
 
     spdlog::info(
-        "PartyQuestProtocol report sent: reason={} player={} report={} campaign={:016X}{:016X} reconnect={} worldRevision={} quests={} queuedSubmissions={}",
-        acReason,
-        m_localPlayerId,
-        report.ReportId,
-        report.CampaignId.High,
-        report.CampaignId.Low,
-        report.IsReconnect,
-        report.Report.WorldRevision,
-        report.Report.Quests.size(),
+        "PartyQuestProtocol report sent: reason={} player={} report={} campaign={:016X}{:016X} reconnect={} worldRevision={} quests={} queuedSubmissions={}", acReason,
+        m_localPlayerId, report.ReportId, report.CampaignId.High, report.CampaignId.Low, report.IsReconnect, report.Report.WorldRevision, report.Report.Quests.size(),
         m_partyQuestSubmissions.GetQueuedCount());
 }
 
 void QuestService::SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, const char* acReason) noexcept
 {
-    if (!m_partyQuestProtocolVerified || !m_partyQuestSession || m_localPlayerId == 0 ||
-        !m_world.GetPartyService().IsInParty())
+    if (!m_partyQuestProtocolVerified || !m_partyQuestSession || m_localPlayerId == 0 || !m_world.GetPartyService().IsInParty())
     {
         return;
     }
@@ -217,9 +187,7 @@ void QuestService::SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, con
     const auto factsIt = m_partyQuestSyncFacts.find(acSnapshot.QuestId);
     if (factsIt == m_partyQuestSyncFacts.end())
     {
-        spdlog::warn(
-            "PartyQuestProtocol transaction not sent: quest={:016X} has no admission facts; failing closed",
-            acSnapshot.QuestId.LogFormat());
+        spdlog::warn("PartyQuestProtocol transaction not sent: quest={:016X} has no admission facts; failing closed", acSnapshot.QuestId.LogFormat());
         return;
     }
 
@@ -237,8 +205,7 @@ void QuestService::SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, con
     if (!m_partyQuestSubmissions.MarkInFlight(request.Transaction.TransactionId, acSnapshot))
     {
         spdlog::warn(
-            "PartyQuestProtocol transaction not sent: quest={:016X} transaction={} already has an in-flight submission",
-            acSnapshot.QuestId.LogFormat(),
+            "PartyQuestProtocol transaction not sent: quest={:016X} transaction={} already has an in-flight submission", acSnapshot.QuestId.LogFormat(),
             request.Transaction.TransactionId);
         return;
     }
@@ -247,27 +214,16 @@ void QuestService::SubmitPartyQuestSnapshot(const QuestSnapshot& acSnapshot, con
     m_world.GetTransport().Send(request);
 
     spdlog::info(
-        "PartyQuestProtocol transaction sent: reason={} player={} request={} transaction={} quest={:016X} expectedRevision={} stage={} digest={:016X} questType={} hasStages={} hud={} named={} inFlight={} queued={}",
-        acReason,
-        m_localPlayerId,
-        request.RequestId,
-        request.Transaction.TransactionId,
-        request.Transaction.QuestId.LogFormat(),
-        request.Transaction.ExpectedQuestRevision,
-        request.Transaction.ProposedSnapshot.CurrentStage,
-        request.Transaction.ProposedSnapshot.ComputeDigest(),
-        request.SyncFacts.QuestType,
-        request.SyncFacts.HasStages,
-        request.SyncFacts.IsDisplayedInHud,
-        request.SyncFacts.HasDisplayName,
-        m_partyQuestSubmissions.GetInFlightCount(),
-        m_partyQuestSubmissions.GetQueuedCount());
+        "PartyQuestProtocol transaction sent: reason={} player={} request={} transaction={} quest={:016X} expectedRevision={} stage={} digest={:016X} questType={} hasStages={} "
+        "hud={} named={} inFlight={} queued={}",
+        acReason, m_localPlayerId, request.RequestId, request.Transaction.TransactionId, request.Transaction.QuestId.LogFormat(), request.Transaction.ExpectedQuestRevision,
+        request.Transaction.ProposedSnapshot.CurrentStage, request.Transaction.ProposedSnapshot.ComputeDigest(), request.SyncFacts.QuestType, request.SyncFacts.HasStages,
+        request.SyncFacts.IsDisplayedInHud, request.SyncFacts.HasDisplayName, m_partyQuestSubmissions.GetInFlightCount(), m_partyQuestSubmissions.GetQueuedCount());
 }
 
 void QuestService::FlushQueuedPartyQuestSnapshots(const char* acReason) noexcept
 {
-    if (!m_partyQuestProtocolVerified || !m_partyQuestSession || m_localPlayerId == 0 ||
-        !m_world.GetPartyService().IsInParty())
+    if (!m_partyQuestProtocolVerified || !m_partyQuestSession || m_localPlayerId == 0 || !m_world.GetPartyService().IsInParty())
     {
         return;
     }
@@ -275,10 +231,7 @@ void QuestService::FlushQueuedPartyQuestSnapshots(const char* acReason) noexcept
     auto ready = m_partyQuestSubmissions.TakeReady(m_partyQuestSession->GetReplica());
     if (!ready.empty())
     {
-        spdlog::info(
-            "PartyQuestProtocol flushing queued snapshots: reason={} count={}",
-            acReason,
-            ready.size());
+        spdlog::info("PartyQuestProtocol flushing queued snapshots: reason={} count={}", acReason, ready.size());
     }
 
     for (const QuestSnapshot& snapshot : ready)
@@ -298,13 +251,9 @@ void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const
     const PartyQuestSyncFacts syncFacts = QuestSnapshotCollector::CollectSyncFacts(pQuest);
     const PartyQuestSyncClassification classification = ClassifyPartyQuestSync(syncFacts);
     const auto factsIt = m_partyQuestSyncFacts.find(snapshot->QuestId);
-    if (factsIt == m_partyQuestSyncFacts.end() &&
-        m_partyQuestSyncFacts.size() >=
-            PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests)
+    if (factsIt == m_partyQuestSyncFacts.end() && m_partyQuestSyncFacts.size() >= PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests)
     {
-        spdlog::warn(
-            "PartyQuestProtocol observation suppressed: local quest fact limit reached ({})",
-            PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
+        spdlog::warn("PartyQuestProtocol observation suppressed: local quest fact limit reached ({})", PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
         return;
     }
     m_partyQuestSyncFacts.insert_or_assign(snapshot->QuestId, syncFacts);
@@ -314,12 +263,8 @@ void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const
     if (classification.Class != PartyQuestSyncClass::SharedCandidate)
     {
         spdlog::info(
-            "PartyQuestProtocol admission suppressed locally: reason={} quest={:016X} syncClass={} syncReason={} questType={}",
-            acReason,
-            snapshot->QuestId.LogFormat(),
-            static_cast<unsigned>(classification.Class),
-            static_cast<unsigned>(classification.Reason),
-            syncFacts.QuestType);
+            "PartyQuestProtocol admission suppressed locally: reason={} quest={:016X} syncClass={} syncReason={} questType={}", acReason, snapshot->QuestId.LogFormat(),
+            static_cast<unsigned>(classification.Class), static_cast<unsigned>(classification.Reason), syncFacts.QuestType);
         return;
     }
 
@@ -332,25 +277,19 @@ void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const
         if (status == PartyQuestClientSubmissionStatus::ResourceLimitExceeded)
         {
             spdlog::warn(
-                "PartyQuestProtocol snapshot suppressed pending campaign verification: reason={} tracked quest limit reached ({})",
-                acReason,
+                "PartyQuestProtocol snapshot suppressed pending campaign verification: reason={} tracked quest limit reached ({})", acReason,
                 PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
         }
         else if (status != PartyQuestClientSubmissionStatus::Duplicate)
         {
             spdlog::info(
-                "PartyQuestProtocol snapshot deferred pending campaign verification: reason={} quest={:016X} stage={} status={} queued={}",
-                acReason,
-                snapshot->QuestId.LogFormat(),
-                snapshot->CurrentStage,
-                static_cast<unsigned>(status),
-                m_partyQuestSubmissions.GetQueuedCount());
+                "PartyQuestProtocol snapshot deferred pending campaign verification: reason={} quest={:016X} stage={} status={} queued={}", acReason, snapshot->QuestId.LogFormat(),
+                snapshot->CurrentStage, static_cast<unsigned>(status), m_partyQuestSubmissions.GetQueuedCount());
         }
         return;
     }
 
-    const PartyQuestClientSubmissionDecision decision =
-        m_partyQuestSubmissions.Observe(*snapshot, m_partyQuestSession->GetReplica());
+    const PartyQuestClientSubmissionDecision decision = m_partyQuestSubmissions.Observe(*snapshot, m_partyQuestSession->GetReplica());
 
     switch (decision.Status)
     {
@@ -361,28 +300,16 @@ void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const
     case PartyQuestClientSubmissionStatus::Queued:
     case PartyQuestClientSubmissionStatus::ReplacedQueued:
         spdlog::info(
-            "PartyQuestProtocol snapshot coalesced: reason={} quest={:016X} stage={} status={} queued={}",
-            acReason,
-            snapshot->QuestId.LogFormat(),
-            snapshot->CurrentStage,
-            static_cast<unsigned>(decision.Status),
-            m_partyQuestSubmissions.GetQueuedCount());
+            "PartyQuestProtocol snapshot coalesced: reason={} quest={:016X} stage={} status={} queued={}", acReason, snapshot->QuestId.LogFormat(), snapshot->CurrentStage,
+            static_cast<unsigned>(decision.Status), m_partyQuestSubmissions.GetQueuedCount());
         break;
     case PartyQuestClientSubmissionStatus::Duplicate:
-        spdlog::debug(
-            "PartyQuestProtocol duplicate snapshot suppressed: reason={} quest={:016X} stage={}",
-            acReason,
-            snapshot->QuestId.LogFormat(),
-            snapshot->CurrentStage);
+        spdlog::debug("PartyQuestProtocol duplicate snapshot suppressed: reason={} quest={:016X} stage={}", acReason, snapshot->QuestId.LogFormat(), snapshot->CurrentStage);
         break;
-    case PartyQuestClientSubmissionStatus::InvalidSnapshot:
-        spdlog::warn("PartyQuestProtocol invalid local snapshot suppressed: reason={}", acReason);
-        break;
+    case PartyQuestClientSubmissionStatus::InvalidSnapshot: spdlog::warn("PartyQuestProtocol invalid local snapshot suppressed: reason={}", acReason); break;
     case PartyQuestClientSubmissionStatus::ResourceLimitExceeded:
         spdlog::warn(
-            "PartyQuestProtocol local submission suppressed: reason={} tracked quest limit reached ({})",
-            acReason,
-            PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
+            "PartyQuestProtocol local submission suppressed: reason={} tracked quest limit reached ({})", acReason, PartyQuestProtocolResourcePolicy::MaxClientTrackedQuests);
         break;
     }
 }
@@ -390,13 +317,8 @@ void QuestService::CollectLogAndSubmitPartyQuestSnapshot(uint32_t aFormId, const
 void QuestService::OnPartyQuestTransactionResult(const NotifyPartyQuestTransactionResult& acResult) noexcept
 {
     spdlog::info(
-        "PartyQuestProtocol transaction result: request={} valid={} status={} worldRevision={} questRevision={} canonical={}",
-        acResult.RequestId,
-        acResult.IsValid,
-        static_cast<unsigned>(acResult.Result.Status),
-        acResult.Result.WorldRevision,
-        acResult.Result.QuestRevision,
-        acResult.CanonicalSnapshot.has_value());
+        "PartyQuestProtocol transaction result: request={} valid={} status={} worldRevision={} questRevision={} canonical={}", acResult.RequestId, acResult.IsValid,
+        static_cast<unsigned>(acResult.Result.Status), acResult.Result.WorldRevision, acResult.Result.QuestRevision, acResult.CanonicalSnapshot.has_value());
 
     uint64_t transactionId{};
     const auto requestIt = m_requestTransactions.find(acResult.RequestId);
@@ -423,20 +345,15 @@ void QuestService::OnPartyQuestTransactionResult(const NotifyPartyQuestTransacti
     {
         if (transactionId != 0)
             m_partyQuestSubmissions.Discard(transactionId);
-        spdlog::info(
-            "PartyQuestProtocol admission rejection acknowledged without repair: request={} transaction={}",
-            acResult.RequestId,
-            transactionId);
+        spdlog::info("PartyQuestProtocol admission rejection acknowledged without repair: request={} transaction={}", acResult.RequestId, transactionId);
         return;
     }
 
     if (transactionId != 0)
         m_partyQuestSubmissions.Reject(transactionId);
 
-    if (acResult.Result.Status == PartyQuestApplyStatus::Duplicate ||
-        acResult.Result.Status == PartyQuestApplyStatus::RevisionMismatch ||
-        acResult.Result.Status == PartyQuestApplyStatus::TransactionConflict ||
-        acResult.Result.Status == PartyQuestApplyStatus::QuestIdMismatch ||
+    if (acResult.Result.Status == PartyQuestApplyStatus::Duplicate || acResult.Result.Status == PartyQuestApplyStatus::RevisionMismatch ||
+        acResult.Result.Status == PartyQuestApplyStatus::TransactionConflict || acResult.Result.Status == PartyQuestApplyStatus::QuestIdMismatch ||
         acResult.Result.Status == PartyQuestApplyStatus::InvalidTransactionId)
     {
         m_partyQuestProtocolVerified = false;
@@ -452,12 +369,7 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
 
     const PartyQuestCampaignId currentCampaign = m_partyQuestSession->GetCampaignId();
     const bool switchingCampaign =
-        currentCampaign.IsValid() &&
-        acPlan.IsValid &&
-        acPlan.CampaignId.IsValid() &&
-        acPlan.ReportId != 0 &&
-        acPlan.PlanId != 0 &&
-        currentCampaign != acPlan.CampaignId;
+        currentCampaign.IsValid() && acPlan.IsValid && acPlan.CampaignId.IsValid() && acPlan.ReportId != 0 && acPlan.PlanId != 0 && currentCampaign != acPlan.CampaignId;
 
     if (switchingCampaign)
     {
@@ -465,17 +377,13 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
         // transition. New-campaign repair semantics start from an empty replica,
         // so validate the exact candidate shape before touching runtime ownership.
         PartyQuestReplica candidateReplica;
-        const PartyQuestReplicaApplyStatus candidateStatus =
-            candidateReplica.Apply(acPlan.Plan);
-        const bool candidateAccepted =
-            candidateStatus == PartyQuestReplicaApplyStatus::Applied ||
-            candidateStatus == PartyQuestReplicaApplyStatus::NoChanges;
+        const PartyQuestReplicaApplyStatus candidateStatus = candidateReplica.Apply(acPlan.Plan);
+        const bool candidateAccepted = candidateStatus == PartyQuestReplicaApplyStatus::Applied || candidateStatus == PartyQuestReplicaApplyStatus::NoChanges;
 
         if (candidateAccepted)
         {
             auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
-            const auto lifecycle = runtimeOwner.PrepareAndRelease(
-                PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
+            const auto lifecycle = runtimeOwner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
             if (!lifecycle.CanProceed())
             {
                 // No wire status currently represents a local durable-recovery
@@ -487,16 +395,10 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
                 m_requestTransactions.clear();
                 m_partyQuestRuntimeCanonicalInbox.Reset();
                 spdlog::error(
-                    "PartyQuestProtocol blocked campaign switch by runtime lifecycle fence: oldCampaign={:016X}{:016X} newCampaign={:016X}{:016X} report={} plan={} status={} transaction={} guardHeld={}",
-                    currentCampaign.High,
-                    currentCampaign.Low,
-                    acPlan.CampaignId.High,
-                    acPlan.CampaignId.Low,
-                    acPlan.ReportId,
-                    acPlan.PlanId,
-                    static_cast<unsigned>(lifecycle.Status),
-                    lifecycle.TransactionId,
-                    lifecycle.GuardHeld);
+                    "PartyQuestProtocol blocked campaign switch by runtime lifecycle fence: oldCampaign={:016X}{:016X} newCampaign={:016X}{:016X} report={} plan={} status={} "
+                    "transaction={} guardHeld={}",
+                    currentCampaign.High, currentCampaign.Low, acPlan.CampaignId.High, acPlan.CampaignId.Low, acPlan.ReportId, acPlan.PlanId,
+                    static_cast<unsigned>(lifecycle.Status), lifecycle.TransactionId, lifecycle.GuardHeld);
                 return;
             }
         }
@@ -513,23 +415,13 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
         m_world.GetTransport().Send(result.Ack);
 
     spdlog::info(
-        "PartyQuestProtocol repair plan: report={} plan={} campaign={:016X}{:016X} campaignChanged={} valid={} planStatus={} items={} removals={} clientStatus={} ackStatus={} worldRevision={}",
-        acPlan.ReportId,
-        acPlan.PlanId,
-        acPlan.CampaignId.High,
-        acPlan.CampaignId.Low,
-        result.CampaignChanged,
-        acPlan.IsValid,
-        static_cast<unsigned>(acPlan.Plan.Status),
-        acPlan.Plan.Items.size(),
-        acPlan.Plan.RemovedQuestIds.size(),
-        static_cast<unsigned>(result.Status),
-        static_cast<unsigned>(result.Ack.ApplyStatus),
+        "PartyQuestProtocol repair plan: report={} plan={} campaign={:016X}{:016X} campaignChanged={} valid={} planStatus={} items={} removals={} clientStatus={} ackStatus={} "
+        "worldRevision={}",
+        acPlan.ReportId, acPlan.PlanId, acPlan.CampaignId.High, acPlan.CampaignId.Low, result.CampaignChanged, acPlan.IsValid, static_cast<unsigned>(acPlan.Plan.Status),
+        acPlan.Plan.Items.size(), acPlan.Plan.RemovedQuestIds.size(), static_cast<unsigned>(result.Status), static_cast<unsigned>(result.Ack.ApplyStatus),
         result.Ack.PostApplyReport.WorldRevision);
 
-    if (result.Ack.IsValid &&
-        (result.Ack.ApplyStatus == PartyQuestReplicaApplyStatus::Applied ||
-         result.Ack.ApplyStatus == PartyQuestReplicaApplyStatus::NoChanges))
+    if (result.Ack.IsValid && (result.Ack.ApplyStatus == PartyQuestReplicaApplyStatus::Applied || result.Ack.ApplyStatus == PartyQuestReplicaApplyStatus::NoChanges))
     {
         const PartyQuestCampaignId verifiedCampaign = m_partyQuestSession->GetCampaignId();
 
@@ -541,11 +433,8 @@ void QuestService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPl
         if (!m_partyQuestRuntimeCanonicalInbox.BindCampaign(verifiedCampaign))
         {
             spdlog::error(
-                "PartyQuestRuntime canonical evidence remains unbound after verified repair: campaign={:016X}{:016X} report={} plan={}",
-                verifiedCampaign.High,
-                verifiedCampaign.Low,
-                acPlan.ReportId,
-                acPlan.PlanId);
+                "PartyQuestRuntime canonical evidence remains unbound after verified repair: campaign={:016X}{:016X} report={} plan={}", verifiedCampaign.High,
+                verifiedCampaign.Low, acPlan.ReportId, acPlan.PlanId);
         }
 
         m_partyQuestProtocolVerified = true;
@@ -562,8 +451,7 @@ void QuestService::PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexce
 {
     try
     {
-        if (!m_partyQuestProtocolVerified || !m_partyQuestSession ||
-            !m_world.GetPartyService().IsInParty())
+        if (!m_partyQuestProtocolVerified || !m_partyQuestSession || !m_world.GetPartyService().IsInParty())
         {
             return;
         }
@@ -572,9 +460,7 @@ void QuestService::PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexce
         TESQuest* pQuest = Cast<TESQuest>(TESForm::GetById(formId));
         if (!pQuest)
         {
-            spdlog::warn(
-                "PartyQuestRuntime planning suppressed: quest={:016X} has no exact local TESQuest",
-                aQuestId.LogFormat());
+            spdlog::warn("PartyQuestRuntime planning suppressed: quest={:016X} has no exact local TESQuest", aQuestId.LogFormat());
             return;
         }
 
@@ -583,31 +469,18 @@ void QuestService::PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexce
         // Environment bytes are hashed once by an owner-bound worker. Runtime
         // planning never reads plugin/archive/script files on Skyrim's thread.
         // Until the immutable result is ready, planning remains fail-closed.
-        if (PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(
-                aQuestId) && environment)
+        if (PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(aQuestId) && environment)
         {
-            PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(
-                pQuest,
-                aQuestId,
-                m_world.GetModSystem(),
-                *environment);
+            PartyQuestP0LiveDiagnostics::RecordCompatibilityObservation(pQuest, aQuestId, m_world.GetModSystem(), *environment);
         }
 
         const auto result = PartyQuestRuntimeProcessRequestGate::PlanLatest(
-            m_partyQuestRuntimeCanonicalInbox,
-            m_partyQuestSession->GetReplica(),
-            aQuestId,
-            m_partyQuestRuntimeCompatibilityManifest,
-            [this, pQuest, environment](const PartyQuestRuntimeCanonicalCandidate& acCandidate)
-                -> std::optional<PartyQuestRuntimeProcessPlanningEvidence>
+            m_partyQuestRuntimeCanonicalInbox, m_partyQuestSession->GetReplica(), aQuestId, m_partyQuestRuntimeCompatibilityManifest,
+            [this, pQuest, environment](const PartyQuestRuntimeCanonicalCandidate& acCandidate) -> std::optional<PartyQuestRuntimeProcessPlanningEvidence>
             {
                 if (!environment)
                     return std::nullopt;
-                return PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveFresh(
-                    pQuest,
-                    m_world.GetModSystem(),
-                    acCandidate,
-                    *environment);
+                return PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveFresh(pQuest, m_world.GetModSystem(), acCandidate, *environment);
             });
 
         if (result.IsPlanned())
@@ -615,26 +488,18 @@ void QuestService::PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexce
             // P0-D ends at a process-owned dry-run request. Native mutation stays
             // physically disconnected until C/E/F and live validation are proven.
             spdlog::info(
-                "PartyQuestRuntime dry-run request planned: quest={:016X} transaction={} worldRevision={} generation={}",
-                aQuestId.LogFormat(),
-                result.Request->TransactionId,
-                result.Request->TargetWorldRevision,
-                result.RuntimeGeneration);
+                "PartyQuestRuntime dry-run request planned: quest={:016X} transaction={} worldRevision={} generation={}", aQuestId.LogFormat(), result.Request->TransactionId,
+                result.Request->TargetWorldRevision, result.RuntimeGeneration);
             return;
         }
 
         spdlog::debug(
-            "PartyQuestRuntime planning rejected fail-closed: quest={:016X} status={} plannerStatus={} generation={}",
-            aQuestId.LogFormat(),
-            static_cast<unsigned>(result.Status),
-            static_cast<unsigned>(result.Planner.Status),
-            result.RuntimeGeneration);
+            "PartyQuestRuntime planning rejected fail-closed: quest={:016X} status={} plannerStatus={} generation={}", aQuestId.LogFormat(), static_cast<unsigned>(result.Status),
+            static_cast<unsigned>(result.Planner.Status), result.RuntimeGeneration);
     }
     catch (...)
     {
-        spdlog::error(
-            "PartyQuestRuntime planning failed closed on unexpected exception: quest={:016X}",
-            aQuestId.LogFormat());
+        spdlog::error("PartyQuestRuntime planning failed closed on unexpected exception: quest={:016X}", aQuestId.LogFormat());
     }
 }
 
@@ -645,24 +510,16 @@ void QuestService::OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUp
 
     const PartyQuestClientCanonicalStatus status = m_partyQuestSession->HandleCanonicalUpdate(acUpdate);
     spdlog::info(
-        "PartyQuestProtocol canonical update: transaction={} valid={} status={} worldRevision={} quest={:016X} questRevision={} stage={} initiator={}",
-        acUpdate.TransactionId,
-        acUpdate.IsValid,
-        static_cast<unsigned>(status),
-        acUpdate.WorldRevision,
-        acUpdate.CanonicalSnapshot.QuestId.LogFormat(),
-        acUpdate.CanonicalSnapshot.Revision,
-        acUpdate.CanonicalSnapshot.CurrentStage,
-        acUpdate.InitiatorPlayerId);
+        "PartyQuestProtocol canonical update: transaction={} valid={} status={} worldRevision={} quest={:016X} questRevision={} stage={} initiator={}", acUpdate.TransactionId,
+        acUpdate.IsValid, static_cast<unsigned>(status), acUpdate.WorldRevision, acUpdate.CanonicalSnapshot.QuestId.LogFormat(), acUpdate.CanonicalSnapshot.Revision,
+        acUpdate.CanonicalSnapshot.CurrentStage, acUpdate.InitiatorPlayerId);
 
-    if (status == PartyQuestClientCanonicalStatus::Applied ||
-        status == PartyQuestClientCanonicalStatus::Duplicate)
+    if (status == PartyQuestClientCanonicalStatus::Applied || status == PartyQuestClientCanonicalStatus::Duplicate)
     {
         if (m_partyQuestProtocolVerified)
         {
             const PartyQuestCampaignId campaignId = m_partyQuestSession->GetCampaignId();
-            if (campaignId.IsValid() &&
-                m_partyQuestRuntimeCanonicalInbox.GetCampaignId() == campaignId)
+            if (campaignId.IsValid() && m_partyQuestRuntimeCanonicalInbox.GetCampaignId() == campaignId)
             {
                 PartyQuestRuntimeCanonicalCandidate candidate;
                 candidate.CampaignId = campaignId;
@@ -670,61 +527,56 @@ void QuestService::OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUp
                 candidate.WorldRevision = acUpdate.WorldRevision;
                 candidate.CanonicalSnapshot = acUpdate.CanonicalSnapshot;
 
-                const auto observeStatus =
-                    m_partyQuestRuntimeCanonicalInbox.Observe(
-                        std::move(candidate),
-                        m_partyQuestSession->GetReplica());
-                if (observeStatus == PartyQuestRuntimeCanonicalObserveStatus::TransactionConflict ||
-                    observeStatus == PartyQuestRuntimeCanonicalObserveStatus::CampaignMismatch ||
-                    observeStatus == PartyQuestRuntimeCanonicalObserveStatus::ReplicaHeadMismatch ||
-                    observeStatus == PartyQuestRuntimeCanonicalObserveStatus::InvalidInput ||
+                const auto observeStatus = m_partyQuestRuntimeCanonicalInbox.Observe(std::move(candidate), m_partyQuestSession->GetReplica());
+                if (observeStatus == PartyQuestRuntimeCanonicalObserveStatus::TransactionConflict || observeStatus == PartyQuestRuntimeCanonicalObserveStatus::CampaignMismatch ||
+                    observeStatus == PartyQuestRuntimeCanonicalObserveStatus::ReplicaHeadMismatch || observeStatus == PartyQuestRuntimeCanonicalObserveStatus::InvalidInput ||
                     observeStatus == PartyQuestRuntimeCanonicalObserveStatus::ResourceLimitExceeded)
                 {
                     spdlog::warn(
-                        "PartyQuestRuntime canonical evidence suppressed: transaction={} campaign={:016X}{:016X} status={}",
-                        acUpdate.TransactionId,
-                        campaignId.High,
-                        campaignId.Low,
-                        static_cast<unsigned>(observeStatus));
+                        "PartyQuestRuntime canonical evidence suppressed: transaction={} campaign={:016X}{:016X} status={}", acUpdate.TransactionId, campaignId.High,
+                        campaignId.Low, static_cast<unsigned>(observeStatus));
                 }
-                else if (observeStatus == PartyQuestRuntimeCanonicalObserveStatus::Accepted ||
-                         observeStatus == PartyQuestRuntimeCanonicalObserveStatus::Superseded ||
-                         observeStatus == PartyQuestRuntimeCanonicalObserveStatus::Duplicate)
+                else if (
+                    observeStatus == PartyQuestRuntimeCanonicalObserveStatus::Accepted || observeStatus == PartyQuestRuntimeCanonicalObserveStatus::Superseded ||
+                    observeStatus == PartyQuestRuntimeCanonicalObserveStatus::Duplicate)
                 {
                     // Canonical network delivery owns no Skyrim observation
-                    // authority. Move the final consumption/evidence sampling to
-                    // the process update runner; PlanLatest revalidates the exact
-                    // inbox/replica head and generation again before and after the
-                    // fresh local observation.
-                    m_world.GetRunner().Queue(
-                        [this, questId = acUpdate.CanonicalSnapshot.QuestId]()
+                    // authority. Enqueue final consumption/evidence sampling on
+                    // the process PartyQuestRuntimeOwner when it is accepting
+                    // operations so execution runs on the client update thread
+                    // under the generation execution lease; otherwise fall back
+                    // to the world runner where PlanLatest fails closed if the
+                    // process owner is not ready.
+                    const GameId questId = acUpdate.CanonicalSnapshot.QuestId;
+                    auto& runtimeOwner = PartyQuestRuntimeOwner::GetProcessOwner();
+                    const auto enqueued = runtimeOwner.Enqueue(
+                        [this, campaignId]() noexcept
                         {
-                            PlanPartyQuestCanonicalRuntimeRequest(questId);
-                        });
+                            return m_partyQuestProtocolVerified && m_partyQuestSession.has_value() && m_world.GetPartyService().IsInParty() &&
+                                   m_partyQuestSession->GetCampaignId() == campaignId && m_partyQuestRuntimeCanonicalInbox.GetCampaignId() == campaignId;
+                        },
+                        [this, questId]() noexcept { PlanPartyQuestCanonicalRuntimeRequest(questId); });
+                    if (enqueued.Status != PartyQuestRuntimeOwner::EnqueueStatus::Queued)
+                    {
+                        m_world.GetRunner().Queue([this, questId]() { PlanPartyQuestCanonicalRuntimeRequest(questId); });
+                    }
                 }
             }
             else
             {
                 spdlog::warn(
-                    "PartyQuestRuntime canonical evidence suppressed: transaction={} verifiedCampaign={:016X}{:016X} inboxCampaign={:016X}{:016X}",
-                    acUpdate.TransactionId,
-                    campaignId.High,
-                    campaignId.Low,
-                    m_partyQuestRuntimeCanonicalInbox.GetCampaignId().High,
-                    m_partyQuestRuntimeCanonicalInbox.GetCampaignId().Low);
+                    "PartyQuestRuntime canonical evidence suppressed: transaction={} verifiedCampaign={:016X}{:016X} inboxCampaign={:016X}{:016X}", acUpdate.TransactionId,
+                    campaignId.High, campaignId.Low, m_partyQuestRuntimeCanonicalInbox.GetCampaignId().High, m_partyQuestRuntimeCanonicalInbox.GetCampaignId().Low);
             }
         }
 
-        const auto ready = m_partyQuestSubmissions.Complete(
-            acUpdate.TransactionId,
-            acUpdate.CanonicalSnapshot);
+        const auto ready = m_partyQuestSubmissions.Complete(acUpdate.TransactionId, acUpdate.CanonicalSnapshot);
         if (ready)
             SubmitPartyQuestSnapshot(*ready, "coalesced-after-canonical");
         return;
     }
 
-    if (status == PartyQuestClientCanonicalStatus::RevisionGap ||
-        status == PartyQuestClientCanonicalStatus::TransactionConflict)
+    if (status == PartyQuestClientCanonicalStatus::RevisionGap || status == PartyQuestClientCanonicalStatus::TransactionConflict)
     {
         m_partyQuestProtocolVerified = false;
         m_partyQuestSubmissions.RequeueInFlight();
@@ -752,10 +604,10 @@ BSTEventResult QuestService::OnEvent(const TESQuestStartStopEvent* apEvent, cons
             auto& modSys = m_world.GetModSystem();
             if (modSys.GetServerModId(pQuest->formID, Id))
             {
-                spdlog::info(__FUNCTION__ ": queuing type none/misc quest gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}",
-                             Id.LogFormat(), pQuest->currentStage, pQuest->IsStopped() ? RequestQuestUpdate::Stopped : RequestQuestUpdate::Started,
-                             static_cast<std::underlying_type_t<TESQuest::Type>>(pQuest->type),
-                             pQuest->formID, pQuest->fullName.value.AsAscii());
+                spdlog::info(
+                    __FUNCTION__ ": queuing type none/misc quest gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}", Id.LogFormat(), pQuest->currentStage,
+                    pQuest->IsStopped() ? RequestQuestUpdate::Stopped : RequestQuestUpdate::Started, static_cast<std::underlying_type_t<TESQuest::Type>>(pQuest->type),
+                    pQuest->formID, pQuest->fullName.value.AsAscii());
             }
         }
 
@@ -800,11 +652,9 @@ BSTEventResult QuestService::OnEvent(const TESQuestStageEvent* apEvent, const Ev
             auto& modSys = m_world.GetModSystem();
             if (modSys.GetServerModId(pQuest->formID, Id))
             {
-                spdlog::info(__FUNCTION__ ": queuing type none/misc quest gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}",
-                             Id.LogFormat(), pQuest->currentStage,
-                             RequestQuestUpdate::StageUpdate,
-                             static_cast<std::underlying_type_t<TESQuest::Type>>(pQuest->type),
-                             pQuest->formID, pQuest->fullName.value.AsAscii());
+                spdlog::info(
+                    __FUNCTION__ ": queuing type none/misc quest gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}", Id.LogFormat(), pQuest->currentStage,
+                    RequestQuestUpdate::StageUpdate, static_cast<std::underlying_type_t<TESQuest::Type>>(pQuest->type), pQuest->formID, pQuest->fullName.value.AsAscii());
             }
         }
 
@@ -844,9 +694,9 @@ void QuestService::OnQuestUpdate(const NotifyQuestUpdate& aUpdate) noexcept
 
     if (pQuest->type == TESQuest::Type::None || pQuest->type == TESQuest::Type::Miscellaneous)
     {
-        spdlog::info(__FUNCTION__ ": receiving type none/misc quest update gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}",
-                     aUpdate.Id.LogFormat(), aUpdate.Stage, aUpdate.Status,
-                     aUpdate.ClientQuestType, formId, pQuest->fullName.value.AsAscii());
+        spdlog::info(
+            __FUNCTION__ ": receiving type none/misc quest update gameId {:X} questStage {} questStatus {} questType {} formId {:X} name {}", aUpdate.Id.LogFormat(), aUpdate.Stage,
+            aUpdate.Status, aUpdate.ClientQuestType, formId, pQuest->fullName.value.AsAscii());
     }
 
     bool bResult = false;
@@ -915,8 +765,7 @@ bool QuestService::IsNonSyncableQuest(TESQuest* apQuest)
     // Quests with no quest stages are never synced. Most TESQuest::Type quests should
     // be synced, including Type::None and Type::Miscellaneous, but there are a few
     // known exceptions that should be excluded that are in the table.
-    return apQuest->stages.Empty()
-        || std::find(kNonSyncableQuestIds.begin(), kNonSyncableQuestIds.end(), apQuest->formID) != kNonSyncableQuestIds.end();
+    return apQuest->stages.Empty() || std::find(kNonSyncableQuestIds.begin(), kNonSyncableQuestIds.end(), apQuest->formID) != kNonSyncableQuestIds.end();
 }
 
 void QuestService::DebugDumpQuests()

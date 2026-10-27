@@ -30,10 +30,7 @@ std::filesystem::path ResolveTrustedGameDirectory() noexcept
         std::wstring path(512u, L'\0');
         for (;;)
         {
-            const DWORD length = ::GetModuleFileNameW(
-                nullptr,
-                path.data(),
-                static_cast<DWORD>(path.size()));
+            const DWORD length = ::GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
             if (length == 0u)
                 return {};
             if (length < path.size() - 1u)
@@ -56,21 +53,13 @@ std::filesystem::path ResolveTrustedGameDirectory() noexcept
 std::filesystem::path ResolveCoopReplicaRoot() noexcept
 {
     wchar_t documents[MAX_PATH]{};
-    const HRESULT status = SHGetFolderPathW(
-        nullptr,
-        CSIDL_PERSONAL | CSIDL_FLAG_CREATE,
-        nullptr,
-        SHGFP_TYPE_CURRENT,
-        documents);
+    const HRESULT status = SHGetFolderPathW(nullptr, CSIDL_PERSONAL | CSIDL_FLAG_CREATE, nullptr, SHGFP_TYPE_CURRENT, documents);
     if (FAILED(status) || documents[0] == L'\0')
         return {};
 
     try
     {
-        return std::filesystem::path(documents) /
-            L"My Games" /
-            L"Skyrim Special Edition" /
-            L"CoopCampaigns";
+        return std::filesystem::path(documents) / L"My Games" / L"Skyrim Special Edition" / L"CoopCampaigns";
     }
     catch (...)
     {
@@ -78,99 +67,65 @@ std::filesystem::path ResolveCoopReplicaRoot() noexcept
     }
 }
 
-void LogLifecycleFailure(
-    const char* acBoundary,
-    const PartyQuestRuntimeLifecycleFenceResult& acResult) noexcept
+void LogLifecycleFailure(const char* acBoundary, const PartyQuestRuntimeLifecycleFenceResult& acResult) noexcept
 {
     if (acResult.CanProceed())
         return;
 
     spdlog::error(
-        "PartyQuestRuntimeOwner retained durable recovery state at {}: status={} transaction={} guardHeld={}",
-        acBoundary,
-        static_cast<uint32_t>(acResult.Status),
-        acResult.TransactionId,
-        acResult.GuardHeld);
+        "PartyQuestRuntimeOwner retained durable recovery state at {}: status={} transaction={} guardHeld={}", acBoundary, static_cast<uint32_t>(acResult.Status),
+        acResult.TransactionId, acResult.GuardHeld);
 }
 
-[[nodiscard]] bool RevokeNativeSaveProvider(
-    PartyQuestSkyrimNativeSaveProviderOwner& aOwner,
-    const char* acBoundary) noexcept
+[[nodiscard]] bool RevokeNativeSaveProvider(PartyQuestSkyrimNativeSaveProviderOwner& aOwner, const char* acBoundary) noexcept
 {
     const auto status = aOwner.Invalidate();
     if (status != PartyQuestSkyrimNativeSaveProviderOwnerStatus::Invalidated)
     {
-        spdlog::error(
-            "PartyQuest native save provider revocation did not complete at {}: status={}",
-            acBoundary,
-            static_cast<uint32_t>(status));
+        spdlog::error("PartyQuest native save provider revocation did not complete at {}: status={}", acBoundary, static_cast<uint32_t>(status));
         return false;
     }
     return true;
 }
 
-[[nodiscard]] constexpr const char* BootstrapStatusName(
-    PartyQuestRuntimeSessionBootstrapStatus aStatus) noexcept
+[[nodiscard]] constexpr const char* BootstrapStatusName(PartyQuestRuntimeSessionBootstrapStatus aStatus) noexcept
 {
     switch (aStatus)
     {
-    case PartyQuestRuntimeSessionBootstrapStatus::Bound:
-        return "bound";
-    case PartyQuestRuntimeSessionBootstrapStatus::InvalidCampaign:
-        return "invalid-campaign";
-    case PartyQuestRuntimeSessionBootstrapStatus::UnverifiedPlayerProfile:
-        return "unverified-player-profile";
-    case PartyQuestRuntimeSessionBootstrapStatus::RuntimeGenerationUnavailable:
-        return "generation-mismatch-or-unavailable";
-    case PartyQuestRuntimeSessionBootstrapStatus::InvalidReplicaRoot:
-        return "invalid-replica-root";
-    case PartyQuestRuntimeSessionBootstrapStatus::InvalidLayout:
-        return "invalid-layout";
-    case PartyQuestRuntimeSessionBootstrapStatus::LifecycleCoverageIncomplete:
-        return "lifecycle-coverage-incomplete";
-    case PartyQuestRuntimeSessionBootstrapStatus::OwnerRejected:
-        return "owner-rejected";
+    case PartyQuestRuntimeSessionBootstrapStatus::Bound: return "bound";
+    case PartyQuestRuntimeSessionBootstrapStatus::InvalidCampaign: return "invalid-campaign";
+    case PartyQuestRuntimeSessionBootstrapStatus::UnverifiedPlayerProfile: return "unverified-player-profile";
+    case PartyQuestRuntimeSessionBootstrapStatus::RuntimeGenerationUnavailable: return "generation-mismatch-or-unavailable";
+    case PartyQuestRuntimeSessionBootstrapStatus::InvalidReplicaRoot: return "invalid-replica-root";
+    case PartyQuestRuntimeSessionBootstrapStatus::InvalidLayout: return "invalid-layout";
+    case PartyQuestRuntimeSessionBootstrapStatus::LifecycleCoverageIncomplete: return "lifecycle-coverage-incomplete";
+    case PartyQuestRuntimeSessionBootstrapStatus::OwnerRejected: return "owner-rejected";
     }
     return "unknown";
 }
 
-[[nodiscard]] constexpr const char* OwnerStatusName(
-    PartyQuestRuntimeSessionOwnerBindStatus aStatus) noexcept
+[[nodiscard]] constexpr const char* OwnerStatusName(PartyQuestRuntimeSessionOwnerBindStatus aStatus) noexcept
 {
     switch (aStatus)
     {
-    case PartyQuestRuntimeSessionOwnerBindStatus::Bound:
-        return "bound";
-    case PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound:
-        return "already-bound";
-    case PartyQuestRuntimeSessionOwnerBindStatus::BindConflict:
-        return "bind-conflict";
-    case PartyQuestRuntimeSessionOwnerBindStatus::ProcessBootstrapRequired:
-        return "process-bootstrap-required";
-    case PartyQuestRuntimeSessionOwnerBindStatus::ProcessGuardBusy:
-        return "process-guard-busy";
-    case PartyQuestRuntimeSessionOwnerBindStatus::InvalidIdentity:
-        return "invalid-identity";
-    case PartyQuestRuntimeSessionOwnerBindStatus::InvalidLayout:
-        return "invalid-layout";
-    case PartyQuestRuntimeSessionOwnerBindStatus::StoreRejected:
-        return "store-rejected";
-    case PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked:
-        return "reconcile-blocked";
-    case PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceBusy:
-        return "workspace-busy";
-    case PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure:
-        return "workspace-lease-failure";
-    case PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure:
-        return "workspace-recovery-failure";
+    case PartyQuestRuntimeSessionOwnerBindStatus::Bound: return "bound";
+    case PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound: return "already-bound";
+    case PartyQuestRuntimeSessionOwnerBindStatus::BindConflict: return "bind-conflict";
+    case PartyQuestRuntimeSessionOwnerBindStatus::ProcessBootstrapRequired: return "process-bootstrap-required";
+    case PartyQuestRuntimeSessionOwnerBindStatus::ProcessGuardBusy: return "process-guard-busy";
+    case PartyQuestRuntimeSessionOwnerBindStatus::InvalidIdentity: return "invalid-identity";
+    case PartyQuestRuntimeSessionOwnerBindStatus::InvalidLayout: return "invalid-layout";
+    case PartyQuestRuntimeSessionOwnerBindStatus::StoreRejected: return "store-rejected";
+    case PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked: return "reconcile-blocked";
+    case PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceBusy: return "workspace-busy";
+    case PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceLeaseFailure: return "workspace-lease-failure";
+    case PartyQuestRuntimeSessionOwnerBindStatus::WorkspaceRecoveryFailure: return "workspace-recovery-failure";
     }
     return "unknown";
 }
 } // namespace
 
-PartyQuestRuntimeOwnerService::PartyQuestRuntimeOwnerService(
-    World& aWorld,
-    entt::dispatcher& aDispatcher) noexcept
+PartyQuestRuntimeOwnerService::PartyQuestRuntimeOwnerService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
     : m_world(aWorld)
 {
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
@@ -180,30 +135,15 @@ PartyQuestRuntimeOwnerService::PartyQuestRuntimeOwnerService(
             auto* pPlayer = PlayerCharacter::Get();
             return pPlayer && pPlayer->GetNiNode();
         },
-        [](uint64_t aTransactionId) noexcept
-        {
-            return PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver()
-                .Observe(aTransactionId);
-        },
-        [](const PartyQuestRuntimeApplyRequest& acRequest) noexcept
-        {
-            return PartyQuestSkyrimStageMutationExecutor::Execute(
-                acRequest,
-                World::Get().GetModSystem());
-        });
+        [](uint64_t aTransactionId) noexcept { return PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver().Observe(aTransactionId); },
+        [](const PartyQuestRuntimeApplyRequest& acRequest) noexcept { return PartyQuestSkyrimStageMutationExecutor::Execute(acRequest, World::Get().GetModSystem()); });
 
-    m_connectedConnection = aDispatcher.sink<ConnectedEvent>()
-        .connect<&PartyQuestRuntimeOwnerService::OnConnected>(this);
-    m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>()
-        .connect<&PartyQuestRuntimeOwnerService::OnDisconnected>(this);
-    m_partyJoinedConnection = aDispatcher.sink<PartyJoinedEvent>()
-        .connect<&PartyQuestRuntimeOwnerService::OnPartyJoined>(this);
-    m_partyLeftConnection = aDispatcher.sink<PartyLeftEvent>()
-        .connect<&PartyQuestRuntimeOwnerService::OnPartyLeft>(this);
-    m_partyQuestRepairPlanConnection = aDispatcher.sink<NotifyPartyQuestRepairPlan>()
-        .connect<&PartyQuestRuntimeOwnerService::OnPartyQuestRepairPlan>(this);
-    m_updateConnection = aDispatcher.sink<UpdateEvent>()
-        .connect<&PartyQuestRuntimeOwnerService::OnUpdate>(this);
+    m_connectedConnection = aDispatcher.sink<ConnectedEvent>().connect<&PartyQuestRuntimeOwnerService::OnConnected>(this);
+    m_disconnectedConnection = aDispatcher.sink<DisconnectedEvent>().connect<&PartyQuestRuntimeOwnerService::OnDisconnected>(this);
+    m_partyJoinedConnection = aDispatcher.sink<PartyJoinedEvent>().connect<&PartyQuestRuntimeOwnerService::OnPartyJoined>(this);
+    m_partyLeftConnection = aDispatcher.sink<PartyLeftEvent>().connect<&PartyQuestRuntimeOwnerService::OnPartyLeft>(this);
+    m_partyQuestRepairPlanConnection = aDispatcher.sink<NotifyPartyQuestRepairPlan>().connect<&PartyQuestRuntimeOwnerService::OnPartyQuestRepairPlan>(this);
+    m_updateConnection = aDispatcher.sink<UpdateEvent>().connect<&PartyQuestRuntimeOwnerService::OnUpdate>(this);
 
     // Persisted lineage is created only by the SKSE co-save load path. Observe
     // the engine's completed LoadGame edge as a retry trigger, never as identity
@@ -225,17 +165,14 @@ PartyQuestRuntimeOwnerService::~PartyQuestRuntimeOwnerService() noexcept
     m_partyJoinedConnection.release();
     m_disconnectedConnection.release();
     m_connectedConnection.release();
-    PartyQuestReleaseExternalSink(
-        m_pLoadGameDispatcher,
-        static_cast<BSTEventSink<TESLoadGameEvent>*>(this));
+    PartyQuestReleaseExternalSink(m_pLoadGameDispatcher, static_cast<BSTEventSink<TESLoadGameEvent>*>(this));
     m_bootstrapSignal.Reset();
     m_nativeSaveProvider.Shutdown();
 
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
     if (!owner.IsShutdown())
     {
-        const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(
-            PartyQuestRuntimeLifecycleEvent::Disconnect);
+        const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Disconnect);
         LogLifecycleFailure("owner-service-destroy", lifecycle);
     }
     owner.ClearRuntimeAdapters();
@@ -246,8 +183,7 @@ void PartyQuestRuntimeOwnerService::OnConnected(const ConnectedEvent&) noexcept
     if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "connect"))
         return;
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
-    const auto status = owner.ApplyClientBoundary(
-        PartyQuestRuntimeOwner::ClientBoundary::Connected);
+    const auto status = owner.ApplyClientBoundary(PartyQuestRuntimeOwner::ClientBoundary::Connected);
     if (status == PartyQuestRuntimeOwner::BoundaryStatus::SynchronizationFailed)
         spdlog::error("PartyQuestRuntimeOwner failed closed at connect generation boundary");
 
@@ -263,8 +199,7 @@ void PartyQuestRuntimeOwnerService::OnDisconnected(const DisconnectedEvent&) noe
         return;
 
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
-    const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(
-        PartyQuestRuntimeLifecycleEvent::Disconnect);
+    const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::Disconnect);
     LogLifecycleFailure("disconnect", lifecycle);
 }
 
@@ -273,8 +208,7 @@ void PartyQuestRuntimeOwnerService::OnPartyJoined(const PartyJoinedEvent&) noexc
     if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "party-join"))
         return;
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
-    const auto status = owner.ApplyClientBoundary(
-        PartyQuestRuntimeOwner::ClientBoundary::PartyJoined);
+    const auto status = owner.ApplyClientBoundary(PartyQuestRuntimeOwner::ClientBoundary::PartyJoined);
     if (status == PartyQuestRuntimeOwner::BoundaryStatus::SynchronizationFailed)
         spdlog::error("PartyQuestRuntimeOwner failed closed at party-join generation boundary");
 
@@ -290,29 +224,24 @@ void PartyQuestRuntimeOwnerService::OnPartyLeft(const PartyLeftEvent&) noexcept
         return;
 
     auto& owner = PartyQuestRuntimeOwner::GetProcessOwner();
-    const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(
-        PartyQuestRuntimeLifecycleEvent::PartyLeave);
+    const auto lifecycle = owner.GetSessionOwner().PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::PartyLeave);
     LogLifecycleFailure("party-leave", lifecycle);
 }
 
-void PartyQuestRuntimeOwnerService::OnPartyQuestRepairPlan(
-    const NotifyPartyQuestRepairPlan& acPlan) noexcept
+void PartyQuestRuntimeOwnerService::OnPartyQuestRepairPlan(const NotifyPartyQuestRepairPlan& acPlan) noexcept
 {
     // The server repair plan is only an edge. QuestService remains the sole
     // owner of protocol/campaign admission and may reject it; the deferred
     // game-thread attempt below queries only GetVerifiedPartyQuestCampaignId().
     // Restrict the wakeup to structurally authoritative candidates so malformed
     // packets cannot create a retry loop.
-    if (acPlan.IsValid && acPlan.CampaignId.IsValid() &&
-        acPlan.ReportId != 0 && acPlan.PlanId != 0)
+    if (acPlan.IsValid && acPlan.CampaignId.IsValid() && acPlan.ReportId != 0 && acPlan.PlanId != 0)
     {
         m_bootstrapSignal.Publish();
     }
 }
 
-BSTEventResult PartyQuestRuntimeOwnerService::OnEvent(
-    const TESLoadGameEvent*,
-    const EventDispatcher<TESLoadGameEvent>*)
+BSTEventResult PartyQuestRuntimeOwnerService::OnEvent(const TESLoadGameEvent*, const EventDispatcher<TESLoadGameEvent>*)
 {
     // The engine lifecycle hook has already advanced the generation. Revoke
     // the old provider token before publishing a retry edge; a stale binding
@@ -349,8 +278,7 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
     if (owner.IsShutdown() || !m_world.GetPartyService().IsInParty())
         return;
 
-    const auto campaign = m_world.ctx().at<QuestService>()
-        .GetVerifiedPartyQuestCampaignId();
+    const auto campaign = m_world.ctx().at<QuestService>().GetVerifiedPartyQuestCampaignId();
     if (!campaign || !campaign->IsValid())
         return;
 
@@ -360,14 +288,11 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
         const auto* pSession = sessionOwner.GetRuntimeSession();
         if (!pSession || pSession->GetCampaignId() != *campaign)
         {
-            if (!RevokeNativeSaveProvider(
-                    m_nativeSaveProvider,
-                    "campaign-switch-bootstrap"))
+            if (!RevokeNativeSaveProvider(m_nativeSaveProvider, "campaign-switch-bootstrap"))
             {
                 return;
             }
-            const auto switched = sessionOwner.PrepareAndRelease(
-                PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
+            const auto switched = sessionOwner.PrepareAndRelease(PartyQuestRuntimeLifecycleEvent::CampaignSwitch);
             if (!switched.CanProceed())
             {
                 LogLifecycleFailure("campaign-switch-bootstrap", switched);
@@ -380,14 +305,10 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
         // the current runtime generation.
     }
 
-    const auto lineageResolution =
-        PartyQuestSkyrimPlayerProfileLineageResolver::ResolveDetailed();
+    const auto lineageResolution = PartyQuestSkyrimPlayerProfileLineageResolver::ResolveDetailed();
     if (!lineageResolution.IsVerified())
     {
-        spdlog::debug(
-            "PartyQuestRuntimeOwner bootstrap awaiting verified lineage: status={}",
-            PartyQuestPlayerProfileLineageResolveStatusName(
-                lineageResolution.Status));
+        spdlog::debug("PartyQuestRuntimeOwner bootstrap awaiting verified lineage: status={}", PartyQuestPlayerProfileLineageResolveStatusName(lineageResolution.Status));
         return;
     }
     const auto& lineage = lineageResolution.Authorization;
@@ -403,9 +324,7 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
     std::filesystem::create_directories(root, ec);
     if (ec)
     {
-        spdlog::error(
-            "PartyQuestRuntimeOwner could not create co-op replica root: {}",
-            ec.message());
+        spdlog::error("PartyQuestRuntimeOwner could not create co-op replica root: {}", ec.message());
         return;
     }
 
@@ -414,34 +333,25 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
         lineage.GetRuntimeGeneration(),
         [&]()
         {
-            bootstrap = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(
-                root,
-                *campaign,
-                lineage);
+            bootstrap = PartyQuestRuntimeSessionBootstrap::BindProcessOwner(root, *campaign, lineage);
             return bootstrap.IsBound();
         });
 
     if (aggregate.Status == PartyQuestRuntimeOwner::BootstrapStatus::Bound)
     {
         const auto gameDirectory = ResolveTrustedGameDirectory();
-        const auto nativeProvider = m_nativeSaveProvider.Bind(
-            gameDirectory,
-            aggregate.RuntimeGeneration);
+        const auto nativeProvider = m_nativeSaveProvider.Bind(gameDirectory, aggregate.RuntimeGeneration);
         if (!nativeProvider.IsBound())
         {
             spdlog::debug(
-                "PartyQuestRuntimeOwner native save provider remains fail-closed: ownerStatus={} resolverStatus={} generation={}",
-                static_cast<uint32_t>(nativeProvider.Status),
-                static_cast<uint32_t>(nativeProvider.ResolveStatus),
-                aggregate.RuntimeGeneration);
+                "PartyQuestRuntimeOwner native save provider remains fail-closed: ownerStatus={} resolverStatus={} generation={}", static_cast<uint32_t>(nativeProvider.Status),
+                static_cast<uint32_t>(nativeProvider.ResolveStatus), aggregate.RuntimeGeneration);
         }
+        const auto* pRecovery = sessionOwner.GetRuntimeSession() ? sessionOwner.GetRuntimeSession()->GetCoordinator().GetRecoveryRecord() : nullptr;
         spdlog::info(
-            "PartyQuestRuntimeOwner production bootstrap bound: campaign={:016X}{:016X} profile={:016X}{:016X} generation={}",
-            campaign->High,
-            campaign->Low,
-            lineage.GetProfileId().High,
-            lineage.GetProfileId().Low,
-            aggregate.RuntimeGeneration);
+            "PartyQuestRuntimeOwner production bootstrap bound: campaign={:016X}{:016X} profile={:016X}{:016X} generation={} recoveryBlocked={} recoveryTransaction={}",
+            campaign->High, campaign->Low, lineage.GetProfileId().High, lineage.GetProfileId().Low, aggregate.RuntimeGeneration, sessionOwner.IsRecoveryBlocked(),
+            pRecovery ? pRecovery->TransactionId : 0ull);
         return;
     }
 
@@ -452,9 +362,6 @@ void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept
     }
 
     spdlog::debug(
-        "PartyQuestRuntimeOwner bootstrap rejected fail-closed: aggregateStatus={} bootstrapStatus={} ownerStatus={} generation={}",
-        static_cast<uint32_t>(aggregate.Status),
-        BootstrapStatusName(bootstrap.Status),
-        OwnerStatusName(bootstrap.Owner.Status),
-        aggregate.RuntimeGeneration);
+        "PartyQuestRuntimeOwner bootstrap rejected fail-closed: aggregateStatus={} bootstrapStatus={} ownerStatus={} generation={}", static_cast<uint32_t>(aggregate.Status),
+        BootstrapStatusName(bootstrap.Status), OwnerStatusName(bootstrap.Owner.Status), aggregate.RuntimeGeneration);
 }

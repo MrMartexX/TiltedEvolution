@@ -30,27 +30,20 @@ enum class PartyQuestRuntimeSessionOwnerBindStatus : uint8_t
 
 struct PartyQuestRuntimeSessionOwnerBindResult
 {
-    PartyQuestRuntimeSessionOwnerBindStatus Status{
-        PartyQuestRuntimeSessionOwnerBindStatus::StoreRejected};
+    PartyQuestRuntimeSessionOwnerBindStatus Status{PartyQuestRuntimeSessionOwnerBindStatus::StoreRejected};
     PartyQuestRuntimeSessionStoreResult Store;
-    PartyQuestRuntimeGuardStatus ReconcileStatus{
-        PartyQuestRuntimeGuardStatus::InvalidState};
+    PartyQuestRuntimeGuardStatus ReconcileStatus{PartyQuestRuntimeGuardStatus::InvalidState};
     bool GuardHeld{};
-    PartyQuestReplicaWorkspaceLeaseStatus LeaseStatus{
-        PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted};
+    PartyQuestReplicaWorkspaceLeaseStatus LeaseStatus{PartyQuestReplicaWorkspaceLeaseStatus::NotAttempted};
     PartyQuestReplicaWorkspaceRecoveryResult WorkspaceRecovery;
 
     [[nodiscard]] bool IsBound() const noexcept
     {
-        return Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound ||
-            Status == PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound ||
-            Status == PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked;
+        return Status == PartyQuestRuntimeSessionOwnerBindStatus::Bound || Status == PartyQuestRuntimeSessionOwnerBindStatus::AlreadyBound ||
+               Status == PartyQuestRuntimeSessionOwnerBindStatus::ReconcileBlocked;
     }
 
-    [[nodiscard]] bool RecoveryRequired() const noexcept
-    {
-        return Store.Status == PartyQuestRuntimeSessionStoreStatus::RecoveryRequired;
-    }
+    [[nodiscard]] bool RecoveryRequired() const noexcept { return Store.Status == PartyQuestRuntimeSessionStoreStatus::RecoveryRequired; }
 };
 
 /**
@@ -105,70 +98,59 @@ public:
      * GetProcessOwner() fails closed unless a test-only friend grants a one-shot
      * authorization. Production process binding is bootstrap-only.
      */
-    [[nodiscard]] PartyQuestRuntimeSessionOwnerBindResult Bind(
-        const PartyQuestCampaignId& acCampaignId,
-        const PartyQuestPlayerProfileId& acPlayerProfileId,
-        const PartyQuestCoopSavePaths& acPaths) noexcept;
+    [[nodiscard]] PartyQuestRuntimeSessionOwnerBindResult
+    Bind(const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, const PartyQuestCoopSavePaths& acPaths) noexcept;
 
     /**
      * Fence the requested lifecycle transition and release ownership only when
      * the fence says the transition may proceed.
      */
-    [[nodiscard]] PartyQuestRuntimeLifecycleFenceResult PrepareAndRelease(
-        PartyQuestRuntimeLifecycleEvent aEvent) noexcept;
+    [[nodiscard]] PartyQuestRuntimeLifecycleFenceResult PrepareAndRelease(PartyQuestRuntimeLifecycleEvent aEvent) noexcept;
+
+    /**
+     * Resolve a durable crash-recovery barrier using this owner's bound paths
+     * and guarded session. On GetProcessOwner(), this also requires an active
+     * runtime generation execution lease so recovery cannot race a pending
+     * lifecycle transition.
+     */
+    [[nodiscard]] PartyQuestRuntimeRecoveryResult ResolveCrashRecovery() noexcept;
+
+    /**
+     * Resolve an active in-process live recovery barrier using this owner's
+     * bound paths and guarded session. On GetProcessOwner(), requires an active
+     * runtime generation execution lease.
+     */
+    [[nodiscard]] PartyQuestRuntimeRecoveryResult ResolveLiveRecovery() noexcept;
 
     [[nodiscard]] bool IsBound() const noexcept
     {
-        return m_workspaceLease.IsHeld() && m_session != nullptr &&
-            m_guardedSession != nullptr && m_paths.has_value() &&
-            m_workspaceRecoveryResult.has_value() &&
-            m_workspaceRecoveryResult->IsSuccess();
+        return m_workspaceLease.IsHeld() && m_session != nullptr && m_guardedSession != nullptr && m_paths.has_value() && m_workspaceRecoveryResult.has_value() &&
+               m_workspaceRecoveryResult->IsSuccess();
     }
 
-    [[nodiscard]] bool IsRecoveryBlocked() const noexcept
-    {
-        return m_session && m_session->GetCoordinator().IsRecoveryBlocked();
-    }
+    [[nodiscard]] bool IsRecoveryBlocked() const noexcept { return m_session && m_session->GetCoordinator().IsRecoveryBlocked(); }
 
-    [[nodiscard]] PartyQuestRuntimeGuardedSession* GetGuardedSession() noexcept
-    {
-        return m_guardedSession.get();
-    }
+    [[nodiscard]] PartyQuestRuntimeGuardedSession* GetGuardedSession() noexcept { return m_guardedSession.get(); }
 
-    [[nodiscard]] const PartyQuestRuntimeGuardedSession* GetGuardedSession() const noexcept
-    {
-        return m_guardedSession.get();
-    }
+    [[nodiscard]] const PartyQuestRuntimeGuardedSession* GetGuardedSession() const noexcept { return m_guardedSession.get(); }
 
-    [[nodiscard]] const PartyQuestRuntimeApplySession* GetRuntimeSession() const noexcept
-    {
-        return m_session.get();
-    }
+    [[nodiscard]] const PartyQuestRuntimeApplySession* GetRuntimeSession() const noexcept { return m_session.get(); }
 
-    [[nodiscard]] const PartyQuestCoopSavePaths* GetPaths() const noexcept
-    {
-        return m_paths ? &*m_paths : nullptr;
-    }
+    [[nodiscard]] const PartyQuestCoopSavePaths* GetPaths() const noexcept { return m_paths ? &*m_paths : nullptr; }
 
-    [[nodiscard]] const PartyQuestRuntimeSessionStoreResult* GetStoreResult() const noexcept
-    {
-        return m_storeResult ? &*m_storeResult : nullptr;
-    }
+    [[nodiscard]] const PartyQuestRuntimeSessionStoreResult* GetStoreResult() const noexcept { return m_storeResult ? &*m_storeResult : nullptr; }
 
 private:
     friend class PartyQuestRuntimeSessionBootstrap;
     friend class PartyQuestRuntimeSessionOwnerTestAccess;
 
-    [[nodiscard]] PartyQuestRuntimeSessionOwnerBindResult BindVerifiedProcessOwner(
-        const PartyQuestCampaignId& acCampaignId,
-        const PartyQuestPlayerProfileId& acPlayerProfileId,
-        const PartyQuestCoopSavePaths& acPaths) noexcept;
+    [[nodiscard]] PartyQuestRuntimeSessionOwnerBindResult
+    BindVerifiedProcessOwner(const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, const PartyQuestCoopSavePaths& acPaths) noexcept;
 
-    [[nodiscard]] PartyQuestRuntimeSessionOwnerBindResult BindInternal(
-        const PartyQuestCampaignId& acCampaignId,
-        const PartyQuestPlayerProfileId& acPlayerProfileId,
-        const PartyQuestCoopSavePaths& acPaths) noexcept;
+    [[nodiscard]] PartyQuestRuntimeSessionOwnerBindResult
+    BindInternal(const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, const PartyQuestCoopSavePaths& acPaths) noexcept;
 
+    void RefreshStoreStateAfterRecovery() noexcept;
     void Clear() noexcept;
 
     bool m_allowNextDirectProcessBindForTesting{};
@@ -177,6 +159,5 @@ private:
     std::unique_ptr<PartyQuestRuntimeGuardedSession> m_guardedSession;
     std::optional<PartyQuestCoopSavePaths> m_paths;
     std::optional<PartyQuestRuntimeSessionStoreResult> m_storeResult;
-    std::optional<PartyQuestReplicaWorkspaceRecoveryResult>
-        m_workspaceRecoveryResult;
+    std::optional<PartyQuestReplicaWorkspaceRecoveryResult> m_workspaceRecoveryResult;
 };
