@@ -77,9 +77,9 @@ struct PartyQuestRuntimeRecoveryResult
  * transaction. It does not guess a LastKnownGood fallback.
  *
  * Runtime TransactionId remains the stable higher-level repair identity. Legacy
- * v3 restore journals still use RestoreId == TransactionId. The Linux strong
- * route instead persists a local attempt ordinal and a collision-free allocated
- * RestoreId; terminal RolledBack attempts remain permanent tombstones and a
+ * v3 restore journals still use RestoreId == TransactionId. The strong
+ * route on Linux/POSIX and Windows NTFS instead persists a local attempt ordinal
+ * and a collision-free allocated RestoreId; terminal RolledBack attempts remain permanent tombstones and a
  * retry advances to a new persisted attempt rather than reusing that id.
  *
  * Ordering is fail-closed:
@@ -100,9 +100,9 @@ struct PartyQuestRuntimeRecoveryResult
  *
  * Existing ambiguous v1/v2 or wrong-domain evidence is never migrated or
  * overwritten. Existing strong attempt evidence is never downgraded through the
- * legacy executor. Windows continues the legacy process-crash path for a fresh
- * recovery until its strong directory/delete durability contract is accepted,
- * but fails closed if a strong attempt record is already present.
+ * legacy executor. Supported strong filesystems (Linux/POSIX and Windows NTFS) route fresh
+ * recoveries through the persisted restore-attempt store; unsupported volumes
+ * fail closed before mutating the replica.
  *
  * ResolveCrashRecovery() consumes a persisted crash barrier. ResolveLiveRecovery()
  * consumes the still-active post-mutation transaction after a live fail-closed

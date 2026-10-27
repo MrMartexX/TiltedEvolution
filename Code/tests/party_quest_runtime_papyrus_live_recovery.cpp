@@ -18,12 +18,8 @@
 
 namespace
 {
-const PartyQuestCampaignId kLiveRecoveryCampaign{
-    0x3132333435363738ull,
-    0x4142434445464748ull};
-const PartyQuestPlayerProfileId kLiveRecoveryPlayer{
-    0x5152535455565758ull,
-    0x6162636465666768ull};
+const PartyQuestCampaignId kLiveRecoveryCampaign{0x3132333435363738ull, 0x4142434445464748ull};
+const PartyQuestPlayerProfileId kLiveRecoveryPlayer{0x5152535455565758ull, 0x6162636465666768ull};
 
 struct LiveRecoverySandbox
 {
@@ -31,11 +27,8 @@ struct LiveRecoverySandbox
 
     LiveRecoverySandbox()
     {
-        const auto nonce = std::chrono::high_resolution_clock::now()
-                               .time_since_epoch()
-                               .count();
-        Root = std::filesystem::temp_directory_path() /
-            ("tp_party_quest_live_recovery_" + std::to_string(nonce));
+        const auto nonce = std::chrono::high_resolution_clock::now().time_since_epoch().count();
+        Root = std::filesystem::temp_directory_path() / ("tp_party_quest_live_recovery_" + std::to_string(nonce));
         std::error_code ec;
         std::filesystem::remove_all(Root, ec);
         std::filesystem::create_directories(Root, ec);
@@ -49,9 +42,7 @@ struct LiveRecoverySandbox
     }
 };
 
-void WriteLiveRecoveryBytes(
-    const std::filesystem::path& acPath,
-    const std::string& acBytes)
+void WriteLiveRecoveryBytes(const std::filesystem::path& acPath, const std::string& acBytes)
 {
     std::error_code ec;
     std::filesystem::create_directories(acPath.parent_path(), ec);
@@ -68,14 +59,10 @@ std::string ReadLiveRecoveryBytes(const std::filesystem::path& acPath)
 {
     std::ifstream file(acPath, std::ios::binary);
     REQUIRE(file.is_open());
-    return std::string(
-        std::istreambuf_iterator<char>(file),
-        std::istreambuf_iterator<char>());
+    return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }
 
-PartyQuestRuntimeApplyRequest BuildLiveRecoveryRequest(
-    uint64_t aTransactionId,
-    uint64_t aWorldRevision)
+PartyQuestRuntimeApplyRequest BuildLiveRecoveryRequest(uint64_t aTransactionId, uint64_t aWorldRevision)
 {
     QuestSnapshot snapshot;
     snapshot.QuestId = GameId(97, 0x2800);
@@ -90,15 +77,11 @@ PartyQuestRuntimeApplyRequest BuildLiveRecoveryRequest(
     PartyQuestRuntimeApplyRequest request;
     request.TransactionId = aTransactionId;
     request.TargetWorldRevision = aWorldRevision;
-    request.SidecarManifestFingerprint =
-        PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
+    request.SidecarManifestFingerprint = PartyQuestCheckpointSidecarManifest{}.ComputeFingerprint();
     request.CanonicalSnapshot = snapshot;
     request.Plan.Safety.Status = PartyQuestRuntimeSafetyStatus::RuntimeSafe;
-    request.Plan.Safety.Reason =
-        PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;
-    request.Plan.Actions = PartyQuestApplyAction::StageTransition |
-        PartyQuestApplyAction::WaitForPapyrusQuiescence |
-        PartyQuestApplyAction::ResnapshotAndVerify;
+    request.Plan.Safety.Reason = PartyQuestRuntimeSafetyReason::VerifiedNativeAdapter;
+    request.Plan.Actions = PartyQuestApplyAction::StageTransition | PartyQuestApplyAction::WaitForPapyrusQuiescence | PartyQuestApplyAction::ResnapshotAndVerify;
     PartyQuestRuntimeSafetyTestAccess::AuthorizePlan(request.Plan, snapshot);
     REQUIRE(request.Plan.MutationAuthorization.IsVerified());
     return request;
@@ -107,27 +90,13 @@ PartyQuestRuntimeApplyRequest BuildLiveRecoveryRequest(
 class UnknownPapyrusObserver final : public PartyQuestPapyrusRuntimeObserver
 {
 public:
-    [[nodiscard]] PartyQuestPapyrusRuntimeObservation Observe(
-        uint64_t) noexcept override
-    {
-        return {
-            PartyQuestPapyrusRuntimeObservationStatus::Unknown,
-            0,
-            0};
-    }
+    [[nodiscard]] PartyQuestPapyrusRuntimeObservation Observe(uint64_t) noexcept override { return {PartyQuestPapyrusRuntimeObservationStatus::Unknown, 0, 0}; }
 };
 
 class UnsupportedPapyrusObserver final : public PartyQuestPapyrusRuntimeObserver
 {
 public:
-    [[nodiscard]] PartyQuestPapyrusRuntimeObservation Observe(
-        uint64_t) noexcept override
-    {
-        return {
-            PartyQuestPapyrusRuntimeObservationStatus::Unsupported,
-            0,
-            0};
-    }
+    [[nodiscard]] PartyQuestPapyrusRuntimeObservation Observe(uint64_t) noexcept override { return {PartyQuestPapyrusRuntimeObservationStatus::Unsupported, 0, 0}; }
 };
 } // namespace
 
@@ -137,46 +106,25 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
     constexpr uint64_t worldRevision = 1880;
 
     LiveRecoverySandbox sandbox;
-    const auto paths = PartyQuestCoopSaveLayout::Build(
-        sandbox.Root / "CoopCampaigns",
-        kLiveRecoveryCampaign,
-        kLiveRecoveryPlayer);
+    const auto paths = PartyQuestCoopSaveLayout::Build(sandbox.Root / "CoopCampaigns", kLiveRecoveryCampaign, kLiveRecoveryPlayer);
     REQUIRE(paths.has_value());
 
     const auto liveSave = paths->SavesDirectory / "Hero.ess";
     WriteLiveRecoveryBytes(liveSave, "PRE_REPAIR_1880");
 
-    const auto spec = PartyQuestReplicaFileExecutor::InspectSource(
-        PartyQuestReplicaFileKind::SkyrimSave,
-        liveSave,
-        "Hero.ess");
+    const auto spec = PartyQuestReplicaFileExecutor::InspectSource(PartyQuestReplicaFileKind::SkyrimSave, liveSave, "Hero.ess");
     REQUIRE(spec.has_value());
-    const auto checkpointPlan =
-        PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(
-            *paths,
-            PartyQuestCheckpointKind::PreRepair,
-            worldRevision,
-            {*spec});
+    const auto checkpointPlan = PartyQuestReplicaFilePlanner::BuildRevisionCheckpointPlan(*paths, PartyQuestCheckpointKind::PreRepair, worldRevision, {*spec});
     REQUIRE(checkpointPlan.IsReady());
 
     {
-        PartyQuestReplicaSnapshotManager manager(
-            *paths,
-            kLiveRecoveryCampaign,
-            kLiveRecoveryPlayer);
-        REQUIRE(manager.EnsureRevisionCheckpoint(
-                    PartyQuestCheckpointKind::PreRepair,
-                    worldRevision,
-                    checkpointPlan).IsReady());
-        REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(
-                    *paths, kLiveRecoveryCampaign, kLiveRecoveryPlayer,
-                    PartyQuestCheckpointKind::PreRepair, worldRevision).IsPromoted());
+        PartyQuestReplicaSnapshotManager manager(*paths, kLiveRecoveryCampaign, kLiveRecoveryPlayer);
+        REQUIRE(manager.EnsureRevisionCheckpoint(PartyQuestCheckpointKind::PreRepair, worldRevision, checkpointPlan).IsReady());
+        REQUIRE(PartyQuestReplicaDurableSnapshot::PromoteRevisionCheckpoint(*paths, kLiveRecoveryCampaign, kLiveRecoveryPlayer, PartyQuestCheckpointKind::PreRepair, worldRevision)
+                    .IsPromoted());
     }
 
-    PartyQuestRuntimeProcessOwnerTestScope processOwner(
-        kLiveRecoveryCampaign,
-        kLiveRecoveryPlayer,
-        *paths);
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(kLiveRecoveryCampaign, kLiveRecoveryPlayer, *paths);
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
     auto& guarded = processOwner.GuardedSession();
     auto& session = processOwner.RuntimeSession();
@@ -184,19 +132,14 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
 
     const auto request = BuildLiveRecoveryRequest(transactionId, worldRevision);
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
-    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
-                session,
-                transactionId) ==
-        PartyQuestRuntimeDurableTransitionStatus::Applied);
-    REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status ==
-        PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(session, transactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(processGuard.GetTransactionId() == transactionId);
 
     WriteLiveRecoveryBytes(liveSave, "MUTATED_AFTER_RUNTIME_APPLY");
 
     UnknownPapyrusObserver observer;
-    const auto observerAuthorization =
-        PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(observer);
+    const auto observerAuthorization = PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(observer);
     PartyQuestPapyrusRuntimeMonitor monitor(observer);
     REQUIRE(monitor.Begin(transactionId, 1000, 50, observerAuthorization));
 
@@ -206,16 +149,13 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
     REQUIRE(monitor.GetStatus() == PartyQuestPapyrusRuntimeMonitorStatus::Waiting);
 
     const auto timedOut = guarded.PollPapyrusRuntime(monitor, transactionId, 1050);
-    REQUIRE(timedOut.Status ==
-        PartyQuestRuntimeGuardStatus::CheckpointRestoreRequired);
-    REQUIRE(timedOut.TransitionStatus ==
-        PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired);
+    REQUIRE(timedOut.Status == PartyQuestRuntimeGuardStatus::CheckpointRestoreRequired);
+    REQUIRE(timedOut.TransitionStatus == PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired);
     REQUIRE(timedOut.GuardHeld);
     REQUIRE(monitor.GetStatus() == PartyQuestPapyrusRuntimeMonitorStatus::TimedOut);
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
     REQUIRE(session.GetCoordinator().GetActive()->RuntimeMutationMayHaveOccurred);
-    REQUIRE(session.GetCoordinator().GetActive()->State ==
-        PartyQuestRuntimeApplyState::WaitingForPapyrus);
+    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::WaitingForPapyrus);
     REQUIRE(processGuard.GetTransactionId() == transactionId);
 
     const auto blockedRequest = BuildLiveRecoveryRequest(transactionId + 1, worldRevision + 1);
@@ -227,31 +167,13 @@ TEST_CASE("Papyrus timeout retains process guard until exact live PreRepair rest
     REQUIRE(recovered.Status == PartyQuestRuntimeRecoveryStatus::Restored);
     REQUIRE(recovered.TransactionId == transactionId);
     REQUIRE(recovered.RestoreId != 0);
-#ifdef _WIN32
-    REQUIRE(recovered.RestoreDomain ==
-        PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
-    const auto persistedAttempt = PartyQuestRuntimeRestoreAttemptStore::Load(
-        *paths,
-        kLiveRecoveryCampaign,
-        kLiveRecoveryPlayer,
-        transactionId);
-    REQUIRE(persistedAttempt.Status ==
-        PartyQuestRuntimeRestoreAttemptStatus::FileNotFound);
-#else
-    REQUIRE(recovered.RestoreDomain ==
-        PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
-    const auto persistedAttempt = PartyQuestRuntimeRestoreAttemptStore::Load(
-        *paths,
-        kLiveRecoveryCampaign,
-        kLiveRecoveryPlayer,
-        transactionId);
+    REQUIRE(recovered.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
+    const auto persistedAttempt = PartyQuestRuntimeRestoreAttemptStore::Load(*paths, kLiveRecoveryCampaign, kLiveRecoveryPlayer, transactionId);
     REQUIRE(persistedAttempt.Status == PartyQuestRuntimeRestoreAttemptStatus::Success);
     REQUIRE(persistedAttempt.State.has_value());
     REQUIRE(persistedAttempt.State->TransactionId == transactionId);
     REQUIRE(persistedAttempt.State->CurrentRestoreId == recovered.RestoreId);
-#endif
-    REQUIRE(recovered.RuntimeTransition ==
-        PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(recovered.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(ReadLiveRecoveryBytes(liveSave) == "PRE_REPAIR_1880");
     REQUIRE(session.GetCoordinator().GetActive() == nullptr);
     REQUIRE_FALSE(processGuard.IsActive());
@@ -262,10 +184,7 @@ TEST_CASE("Only terminal authoritative monitor failures request live recovery", 
     constexpr uint64_t transactionId = 28002;
     constexpr uint64_t worldRevision = 1881;
 
-    PartyQuestRuntimeProcessOwnerTestScope processOwner(
-        kLiveRecoveryCampaign,
-        kLiveRecoveryPlayer,
-        "tp_party_quest_live_recovery_28002");
+    PartyQuestRuntimeProcessOwnerTestScope processOwner(kLiveRecoveryCampaign, kLiveRecoveryPlayer, "tp_party_quest_live_recovery_28002");
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
     auto& guarded = processOwner.GuardedSession();
     auto& session = processOwner.RuntimeSession();
@@ -273,61 +192,34 @@ TEST_CASE("Only terminal authoritative monitor failures request live recovery", 
 
     const auto request = BuildLiveRecoveryRequest(transactionId, worldRevision);
     REQUIRE(guarded.Begin(request).Status == PartyQuestRuntimeGuardStatus::Ready);
-    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(
-                session,
-                transactionId) ==
-        PartyQuestRuntimeDurableTransitionStatus::Applied);
-    REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status ==
-        PartyQuestRuntimeGuardStatus::Ready);
+    REQUIRE(PartyQuestRuntimeApplySessionTestAccess::MarkCheckpointCreated(session, transactionId) == PartyQuestRuntimeDurableTransitionStatus::Applied);
+    REQUIRE(guarded.ArmRuntimeMutation(transactionId).Status == PartyQuestRuntimeGuardStatus::Ready);
 
     UnknownPapyrusObserver waitingObserver;
-    const auto waitingAuthorization =
-        PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(waitingObserver);
+    const auto waitingAuthorization = PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(waitingObserver);
     PartyQuestPapyrusRuntimeMonitor waitingMonitor(waitingObserver);
-    REQUIRE(waitingMonitor.Begin(
-        transactionId,
-        2000,
-        1000,
-        waitingAuthorization));
+    REQUIRE(waitingMonitor.Begin(transactionId, 2000, 1000, waitingAuthorization));
 
-    const auto wrongTransaction = guarded.PollPapyrusRuntime(
-        waitingMonitor,
-        transactionId + 1,
-        2010);
+    const auto wrongTransaction = guarded.PollPapyrusRuntime(waitingMonitor, transactionId + 1, 2010);
     REQUIRE(wrongTransaction.Status == PartyQuestRuntimeGuardStatus::InvalidState);
     REQUIRE(processGuard.GetTransactionId() == transactionId);
-    REQUIRE(session.GetCoordinator().GetActive()->State ==
-        PartyQuestRuntimeApplyState::WaitingForPapyrus);
+    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::WaitingForPapyrus);
 
-    const auto waiting = guarded.PollPapyrusRuntime(
-        waitingMonitor,
-        transactionId,
-        2020);
+    const auto waiting = guarded.PollPapyrusRuntime(waitingMonitor, transactionId, 2020);
     REQUIRE(waiting.Status == PartyQuestRuntimeGuardStatus::Ready);
     REQUIRE(waiting.GuardHeld);
-    REQUIRE(session.GetCoordinator().GetActive()->State ==
-        PartyQuestRuntimeApplyState::WaitingForPapyrus);
+    REQUIRE(session.GetCoordinator().GetActive()->State == PartyQuestRuntimeApplyState::WaitingForPapyrus);
 
     REQUIRE(waitingMonitor.Reset(transactionId));
     UnsupportedPapyrusObserver unsupportedObserver;
-    const auto unsupportedAuthorization =
-        PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(unsupportedObserver);
+    const auto unsupportedAuthorization = PartyQuestPapyrusRuntimeObserverTestAccess::Authorize(unsupportedObserver);
     PartyQuestPapyrusRuntimeMonitor unsupportedMonitor(unsupportedObserver);
-    REQUIRE(unsupportedMonitor.Begin(
-        transactionId,
-        3000,
-        1000,
-        unsupportedAuthorization));
+    REQUIRE(unsupportedMonitor.Begin(transactionId, 3000, 1000, unsupportedAuthorization));
 
-    const auto unsupported = guarded.PollPapyrusRuntime(
-        unsupportedMonitor,
-        transactionId,
-        3010);
-    REQUIRE(unsupported.Status ==
-        PartyQuestRuntimeGuardStatus::CheckpointRestoreRequired);
+    const auto unsupported = guarded.PollPapyrusRuntime(unsupportedMonitor, transactionId, 3010);
+    REQUIRE(unsupported.Status == PartyQuestRuntimeGuardStatus::CheckpointRestoreRequired);
     REQUIRE(unsupported.GuardHeld);
-    REQUIRE(unsupportedMonitor.GetStatus() ==
-        PartyQuestPapyrusRuntimeMonitorStatus::Unsupported);
+    REQUIRE(unsupportedMonitor.GetStatus() == PartyQuestPapyrusRuntimeMonitorStatus::Unsupported);
     REQUIRE(processGuard.GetTransactionId() == transactionId);
     REQUIRE(session.GetCoordinator().GetActive() != nullptr);
 }

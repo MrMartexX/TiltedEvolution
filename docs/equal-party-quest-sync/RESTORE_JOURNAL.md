@@ -9,7 +9,7 @@ This milestone remains game-independent: restore code can replace files only ins
 Two filesystem restore surfaces intentionally coexist:
 
 - `PartyQuestReplicaRestoreExecutor` is the legacy process-crash-resilient executor;
-- `PartyQuestReplicaDurableRestorePreparation` plus `PartyQuestReplicaDurableRestoreExecutor` is the stronger Linux/POSIX proof surface.
+- `PartyQuestReplicaDurableRestorePreparation` plus `PartyQuestReplicaDurableRestoreExecutor` is the stronger power-loss-durable executor used on Linux/POSIX and Windows NTFS.
 
 Their on-disk journals are now machine-separated. A journal created by one persistence domain is not execution authority for the other executor.
 
@@ -118,15 +118,12 @@ There is deliberately **no automatic v1/v2 migration**. Old archives cannot reve
 
 ## Production runtime recovery boundary
 
-Current production crash/live runtime recovery still belongs to the legacy process-crash domain and calls `PartyQuestReplicaRestoreJournalPersistence::Load()` before the legacy executor. The persisted domain discriminator now makes this path fail closed:
+Crash and live runtime recovery now pair `PartyQuestRuntimeRestoreAttemptStore` with the strong v4 restore pipeline on both Linux/POSIX and Windows NTFS:
 
-- a v4 strong journal becomes `RestoreJournalConflict` before the legacy executor is entered;
-- a v1/v2 ambiguous journal likewise becomes `RestoreJournalConflict`;
-- the live co-op replica remains unchanged and the runtime recovery barrier remains active.
-
-The strong executor is intentionally **not** routed into production yet. Current runtime recovery defines `RestoreId == TransactionId` and expects a recovered legacy rollback to permit a later retry under that same ID. Strong terminal `RolledBack` deliberately reserves its RestoreId forever as an idempotency tombstone. Production strong routing therefore first needs an explicit restore-attempt identity/retry contract that preserves the stable higher-level runtime transaction identity without reusing a terminal restore-attempt ID.
-
-This is not solved by deleting a `RolledBack` tombstone or by treating it as permission to retry the same restore ID.
+- fresh crash and live recoveries initialize a durable restore-attempt record bound to the runtime transaction and execute `PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized` plus `PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized` under `CurrentAttemptId` (`PowerLossDurable`);
+- a strong rollback terminates the active attempt ID in a permanent `RolledBack` tombstone and advances the durable attempt store (`AdvanceAfterRolledBackAuthorized`) so the next retry uses a fresh attempt ID while preserving the higher-level runtime `TransactionId`;
+- legacy v3 journals in `Transaction_<TransactionId>` remain recoverable only when no strong attempt store or v4 journal conflicts with them;
+- v1/v2 ambiguous journals or conflicting v3/v4 state fail closed as `RestoreJournalConflict` while leaving live replica files untouched and keeping the runtime barrier active.
 
 ## Current safety boundary
 
@@ -139,7 +136,7 @@ The restore executors perform filesystem operations only inside the isolated co-
 - raise `PartyQuestPersistenceDurabilityPolicy::CurrentLocalGuarantee` above `ProcessCrashResilient`;
 - make `AllowsNativeRuntimeMutation()` true.
 
-Windows strong destructive restore remains unsupported because the accepted durable directory-tree/delete/cleanup contract is incomplete.
+Both Linux/POSIX and Windows NTFS execute the strong v4 restore pipeline; non-NTFS or unsupported filesystems fail closed before mutating live replica files.
 
 ## Validation coverage
 

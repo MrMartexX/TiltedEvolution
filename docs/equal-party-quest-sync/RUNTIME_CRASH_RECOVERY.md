@@ -4,7 +4,7 @@ Document status: active subsystem design. Acceptance of the complete production
 recovery path is tracked in [CURRENT_STATUS.md](../project/CURRENT_STATUS.md),
 not inferred from the existence of the coordinator described here.
 
-`PartyQuestRuntimeRecoveryCoordinator` bridges the durable runtime-apply barrier and the **legacy process-crash-resilient** co-op replica restore executor without calling Skyrim, Papyrus, save or load APIs. The stronger power-loss-durable restore executor exists as a separate Linux proof surface and is intentionally not routed through this coordinator yet.
+`PartyQuestRuntimeRecoveryCoordinator` and `PartyQuestRuntimeLiveRecoveryCoordinator` bridge the durable runtime-apply barrier and the co-op replica restore executors without calling Skyrim, Papyrus, save or load APIs. Fresh crash and live recoveries on Linux/POSIX and Windows NTFS route through `PartyQuestRuntimeRestoreAttemptStore`, `PartyQuestReplicaDurableRestorePreparation`, and `PartyQuestReplicaDurableRestoreExecutor` (`PowerLossDurable`), while retaining fail-closed domain fences and backwards-compatible recovery for pre-existing legacy v3 journals.
 
 ## Exact checkpoint rule
 
@@ -28,34 +28,22 @@ Before any replica mutation, recovery requires:
 
 Missing, stale-backup-only, invalid, mismatched or corrupt checkpoint state fails closed and leaves the runtime recovery barrier active.
 
-## Restore transaction identity and current retry contract
+## Restore transaction identity and durable attempt retry contract
 
-Crash recovery does not accept a caller-selected restore id. Today:
-
-```text
-RestoreId == blocked runtime TransactionId
-```
-
-The filesystem restore journal is therefore:
-
-```text
-metadata/restore/Transaction_<TransactionId>/journal.bin
-```
-
-This prevents one runtime repair from accidentally forking into multiple legacy filesystem transactions because a retry chose a different id.
-
-For the **legacy** executor this also supports the current interrupted-restore contract: a recovered rollback retires its transaction directory, then a later call may recreate the same RestoreId and attempt the exact checkpoint restore again.
-
-That contract is **not compatible with the strong executor as currently designed**. Strong recovery terminates a post-barrier rollback as durable `RolledBack` and deliberately retains the terminal journal/directory as a permanent RestoreId tombstone. Reusing that ID would weaken stable transaction identity and is rejected.
-
-Therefore production strong routing first needs an explicit identity split, for example conceptually:
+Crash and live recovery separate the stable higher-level repair transaction identity from each filesystem restore attempt:
 
 ```text
 RuntimeTransactionId = stable higher-level repair identity
-RestoreAttemptId     = unique stable identity of one filesystem attempt
+RestoreAttemptId     = unique monotonic identity of one filesystem restore attempt
 ```
 
-The exact schema/generation rule is not yet selected. The important invariant is that a new retry attempt must not delete or reuse a terminal `RolledBack` attempt merely to preserve the current `RestoreId == TransactionId` shortcut.
+`PartyQuestRuntimeRestoreAttemptStore` persists this binding under:
+
+```text
+metadata/restore_attempts/Transaction_<TransactionId>/attempt.bin
+```
+
+Each strong v4 restore attempt writes its journal under `metadata/restore/Transaction_<RestoreAttemptId>/journal.bin`. When an interrupted strong attempt rolls back after `MutationStarted`, it terminates in a permanent `RolledBack` tombstone for that `RestoreAttemptId` and `AdvanceAfterRolledBackAuthorized` durably advances `CurrentAttemptId` to `NextAttemptId` so a subsequent retry executes a fresh attempt without deleting or reusing the terminal tombstone. Pre-existing legacy v3 journals at `Transaction_<TransactionId>` remain supported only when no strong attempt store is present.
 
 ## Persisted journal durability-domain fence
 

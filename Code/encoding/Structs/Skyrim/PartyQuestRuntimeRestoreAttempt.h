@@ -43,8 +43,7 @@ struct PartyQuestRuntimeRestoreAttemptState
 
 struct PartyQuestRuntimeRestoreAttemptResult
 {
-    PartyQuestRuntimeRestoreAttemptStatus Status{
-        PartyQuestRuntimeRestoreAttemptStatus::InvalidData};
+    PartyQuestRuntimeRestoreAttemptStatus Status{PartyQuestRuntimeRestoreAttemptStatus::InvalidData};
     std::optional<PartyQuestRuntimeRestoreAttemptState> State;
     std::filesystem::path StatePath;
     std::filesystem::path AttemptDirectory;
@@ -53,10 +52,8 @@ struct PartyQuestRuntimeRestoreAttemptResult
 
     [[nodiscard]] bool IsUsable() const noexcept
     {
-        return Status == PartyQuestRuntimeRestoreAttemptStatus::Success ||
-            Status == PartyQuestRuntimeRestoreAttemptStatus::Created ||
-            Status == PartyQuestRuntimeRestoreAttemptStatus::RecoveredInitialization ||
-            Status == PartyQuestRuntimeRestoreAttemptStatus::AlreadyAdvanced;
+        return Status == PartyQuestRuntimeRestoreAttemptStatus::Success || Status == PartyQuestRuntimeRestoreAttemptStatus::Created ||
+               Status == PartyQuestRuntimeRestoreAttemptStatus::RecoveredInitialization || Status == PartyQuestRuntimeRestoreAttemptStatus::AlreadyAdvanced;
     }
 };
 
@@ -81,10 +78,9 @@ struct PartyQuestRuntimeRestoreAttemptResult
  *   metadata/runtime_restore_attempts/RuntimeTransaction_<TransactionId>.bin
  *
  * The attempt-state file and allocator are local power-loss durability
- * primitives. Linux uses durable directory creation, staged durable write and
- * same-directory atomic publication. Windows fails closed because the reviewed
- * durable directory-tree contract required by the strong restore path is still
- * unavailable there.
+ * primitives. Linux/POSIX and Windows NTFS use durable directory creation, staged durable
+ * write and same-directory atomic publication with parent-directory metadata
+ * flush; unsupported filesystems fail closed.
  *
  * Allocation is leak-safe: the global next-id barrier is durably advanced before
  * the transaction mapping is published. A crash in between can waste an id but
@@ -102,36 +98,20 @@ public:
     static constexpr uint32_t MaxAttemptsPerTransaction = 64;
     static constexpr uint32_t MaxRestoreIdAllocationProbe = 65536;
 
-    [[nodiscard]] static PartyQuestRuntimeRestoreAttemptResult Load(
-        const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestCampaignId& acCampaignId,
-        const PartyQuestPlayerProfileId& acPlayerProfileId,
-        uint64_t aTransactionId) noexcept;
+    [[nodiscard]] static PartyQuestRuntimeRestoreAttemptResult
+    Load(const PartyQuestCoopSavePaths& acPaths, const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, uint64_t aTransactionId) noexcept;
 
     [[nodiscard]] static PartyQuestRuntimeRestoreAttemptResult EnsureInitializedAuthorized(
-        const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestCampaignId& acCampaignId,
-        const PartyQuestPlayerProfileId& acPlayerProfileId,
-        uint64_t aTransactionId,
+        const PartyQuestCoopSavePaths& acPaths, const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, uint64_t aTransactionId,
         const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept;
 
     [[nodiscard]] static PartyQuestRuntimeRestoreAttemptResult AdvanceAfterRolledBackAuthorized(
-        const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestCampaignId& acCampaignId,
-        const PartyQuestPlayerProfileId& acPlayerProfileId,
-        uint64_t aTransactionId,
-        uint32_t aRolledBackOrdinal,
-        const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept;
+        const PartyQuestCoopSavePaths& acPaths, const PartyQuestCampaignId& acCampaignId, const PartyQuestPlayerProfileId& acPlayerProfileId, uint64_t aTransactionId,
+        uint32_t aRolledBackOrdinal, const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability) noexcept;
 
-    [[nodiscard]] static std::filesystem::path GetStatePath(
-        const PartyQuestCoopSavePaths& acPaths,
-        uint64_t aTransactionId) noexcept;
+    [[nodiscard]] static std::filesystem::path GetStatePath(const PartyQuestCoopSavePaths& acPaths, uint64_t aTransactionId) noexcept;
 
-    [[nodiscard]] static std::filesystem::path GetRestoreDirectory(
-        const PartyQuestCoopSavePaths& acPaths,
-        uint64_t aRestoreId) noexcept;
+    [[nodiscard]] static std::filesystem::path GetRestoreDirectory(const PartyQuestCoopSavePaths& acPaths, uint64_t aRestoreId) noexcept;
 
-    [[nodiscard]] static std::filesystem::path GetJournalPath(
-        const PartyQuestCoopSavePaths& acPaths,
-        uint64_t aRestoreId) noexcept;
+    [[nodiscard]] static std::filesystem::path GetJournalPath(const PartyQuestCoopSavePaths& acPaths, uint64_t aRestoreId) noexcept;
 };

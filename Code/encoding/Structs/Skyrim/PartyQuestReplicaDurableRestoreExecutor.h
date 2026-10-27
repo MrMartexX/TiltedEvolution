@@ -65,28 +65,20 @@ enum class PartyQuestReplicaDurableRestoreDirective : uint8_t
  */
 struct PartyQuestReplicaDurableRestoreHooks
 {
-    using Callback = PartyQuestReplicaDurableRestoreDirective (*)(
-        PartyQuestReplicaDurableRestoreBoundary,
-        size_t,
-        void*) noexcept;
+    using Callback = PartyQuestReplicaDurableRestoreDirective (*)(PartyQuestReplicaDurableRestoreBoundary, size_t, void*) noexcept;
 
     Callback OnBoundary{};
     void* Context{};
 
-    [[nodiscard]] PartyQuestReplicaDurableRestoreDirective Invoke(
-        PartyQuestReplicaDurableRestoreBoundary aBoundary,
-        size_t aOperation = 0) const noexcept
+    [[nodiscard]] PartyQuestReplicaDurableRestoreDirective Invoke(PartyQuestReplicaDurableRestoreBoundary aBoundary, size_t aOperation = 0) const noexcept
     {
-        return OnBoundary
-            ? OnBoundary(aBoundary, aOperation, Context)
-            : PartyQuestReplicaDurableRestoreDirective::Continue;
+        return OnBoundary ? OnBoundary(aBoundary, aOperation, Context) : PartyQuestReplicaDurableRestoreDirective::Continue;
     }
 };
 
 struct PartyQuestReplicaDurableRestoreReport
 {
-    PartyQuestReplicaDurableRestoreStatus Status{
-        PartyQuestReplicaDurableRestoreStatus::JournalLoadFailed};
+    PartyQuestReplicaDurableRestoreStatus Status{PartyQuestReplicaDurableRestoreStatus::JournalLoadFailed};
     std::optional<PartyQuestReplicaRestoreJournalPhase> Phase;
     std::filesystem::path JournalPath;
     size_t CompletedOperations{};
@@ -98,22 +90,19 @@ struct PartyQuestReplicaDurableRestoreReport
 
     [[nodiscard]] bool IsCheckpointRestored() const noexcept
     {
-        return Status == PartyQuestReplicaDurableRestoreStatus::Success ||
-            Status == PartyQuestReplicaDurableRestoreStatus::AlreadyCommitted ||
-            Status == PartyQuestReplicaDurableRestoreStatus::RecoveredCommit;
+        return Status == PartyQuestReplicaDurableRestoreStatus::Success || Status == PartyQuestReplicaDurableRestoreStatus::AlreadyCommitted ||
+               Status == PartyQuestReplicaDurableRestoreStatus::RecoveredCommit;
     }
 
     [[nodiscard]] bool IsRecoveryHandled() const noexcept
     {
-        return IsCheckpointRestored() ||
-            Status == PartyQuestReplicaDurableRestoreStatus::RecoveredRollback ||
-            Status == PartyQuestReplicaDurableRestoreStatus::AlreadyRolledBack ||
-            Status == PartyQuestReplicaDurableRestoreStatus::ResumeBeforeMutation;
+        return IsCheckpointRestored() || Status == PartyQuestReplicaDurableRestoreStatus::RecoveredRollback || Status == PartyQuestReplicaDurableRestoreStatus::AlreadyRolledBack ||
+               Status == PartyQuestReplicaDurableRestoreStatus::ResumeBeforeMutation;
     }
 };
 
 /**
- * Linux/POSIX power-loss durable continuation for an already prepared restore.
+ * Power-loss durable continuation (Linux/POSIX and Windows NTFS) for an already prepared restore.
  *
  * Continue() accepts only an exact strong BackupsReady journal produced by
  * PartyQuestReplicaDurableRestorePreparation. Before crossing the destructive
@@ -160,7 +149,7 @@ struct PartyQuestReplicaDurableRestoreReport
  * Committed/RolledBack only reverify their terminal postcondition and resume
  * safe compaction.
  *
- * Windows fails closed before filesystem mutation. This class never calls
+ * Unsupported filesystems fail closed before filesystem mutation. This class never calls
  * Skyrim, Papyrus, TESQuest or native world mutation APIs and grants no such
  * authority.
  */
@@ -168,34 +157,22 @@ class PartyQuestReplicaDurableRestoreExecutor final
 {
 public:
     [[nodiscard]] static PartyQuestReplicaDurableRestoreReport Continue(
-        const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestCampaignId& acExpectedCampaignId,
-        const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
-        const std::filesystem::path& acJournalPath,
-        PartyQuestReplicaDurableRestoreHooks aHooks = {}) noexcept;
+        const PartyQuestCoopSavePaths& acPaths, const PartyQuestCampaignId& acExpectedCampaignId, const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
+        const std::filesystem::path& acJournalPath, PartyQuestReplicaDurableRestoreHooks aHooks = {}) noexcept;
 
     [[nodiscard]] static PartyQuestReplicaDurableRestoreReport Recover(
-        const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestCampaignId& acExpectedCampaignId,
-        const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
-        const std::filesystem::path& acJournalPath,
-        PartyQuestReplicaDurableRestoreHooks aHooks = {}) noexcept;
+        const PartyQuestCoopSavePaths& acPaths, const PartyQuestCampaignId& acExpectedCampaignId, const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
+        const std::filesystem::path& acJournalPath, PartyQuestReplicaDurableRestoreHooks aHooks = {}) noexcept;
 
 private:
     [[nodiscard]] static PartyQuestReplicaDurableRestoreReport ContinueAuthorized(
-        const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestCampaignId& acExpectedCampaignId,
-        const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
-        const std::filesystem::path& acJournalPath,
-        const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
+        const PartyQuestCoopSavePaths& acPaths, const PartyQuestCampaignId& acExpectedCampaignId, const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
+        const std::filesystem::path& acJournalPath, const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
         PartyQuestReplicaDurableRestoreHooks aHooks = {}) noexcept;
 
     [[nodiscard]] static PartyQuestReplicaDurableRestoreReport RecoverAuthorized(
-        const PartyQuestCoopSavePaths& acPaths,
-        const PartyQuestCampaignId& acExpectedCampaignId,
-        const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
-        const std::filesystem::path& acJournalPath,
-        const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
+        const PartyQuestCoopSavePaths& acPaths, const PartyQuestCampaignId& acExpectedCampaignId, const PartyQuestPlayerProfileId& acExpectedPlayerProfileId,
+        const std::filesystem::path& acJournalPath, const PartyQuestReplicaWorkspacePublicationCapability& acWorkspaceCapability,
         PartyQuestReplicaDurableRestoreHooks aHooks = {}) noexcept;
 
     friend class PartyQuestRuntimeRecoveryCoordinator;

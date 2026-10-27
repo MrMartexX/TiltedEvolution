@@ -202,17 +202,11 @@ TEST_CASE("Crash recovery restores exact PreRepair revision before clearing runt
     REQUIRE(result.TransactionId == kTransactionId);
     REQUIRE(result.TargetWorldRevision == kWorldRevision);
     REQUIRE(result.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
-#ifdef _WIN32
-    REQUIRE(result.RestoreId == kTransactionId);
-    REQUIRE(result.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
-    REQUIRE_FALSE(result.DurableRestoreStatus.has_value());
-#else
     REQUIRE(result.RestoreId != 0);
     REQUIRE(result.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
     REQUIRE(result.RestoreAttemptStatus.has_value());
     REQUIRE(result.DurablePreparationStatus == PartyQuestReplicaDurableRestorePreparationStatus::BackupsReady);
     REQUIRE(result.DurableRestoreStatus == PartyQuestReplicaDurableRestoreStatus::Success);
-#endif
     REQUIRE(result.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1600");
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
@@ -283,14 +277,9 @@ TEST_CASE("Durable barrier clear can be retried after checkpoint restore already
     const auto first = PartyQuestRuntimeRecoveryCoordinatorTestAccess::ResolveCrashRecovery(session, paths);
     REQUIRE(first.Status == PartyQuestRuntimeRecoveryStatus::RuntimeStatePersistenceFailed);
     REQUIRE(first.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
-#ifdef _WIN32
-    REQUIRE(first.RestoreId == kTransactionId);
-    REQUIRE(first.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
-#else
     REQUIRE(first.RestoreId != 0);
     REQUIRE(first.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
     REQUIRE(first.DurableRestoreStatus == PartyQuestReplicaDurableRestoreStatus::Success);
-#endif
     REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1620");
     REQUIRE(session.GetCoordinator().IsRecoveryBlocked());
 
@@ -298,14 +287,9 @@ TEST_CASE("Durable barrier clear can be retried after checkpoint restore already
     const auto second = PartyQuestRuntimeRecoveryCoordinatorTestAccess::ResolveCrashRecovery(session, paths);
     REQUIRE(second.Status == PartyQuestRuntimeRecoveryStatus::AlreadyRestored);
     REQUIRE(second.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted);
-#ifdef _WIN32
-    REQUIRE(second.RestoreId == kTransactionId);
-    REQUIRE(second.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
-#else
     REQUIRE(second.RestoreId == first.RestoreId);
     REQUIRE(second.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
     REQUIRE(second.DurableRestoreStatus == PartyQuestReplicaDurableRestoreStatus::AlreadyCommitted);
-#endif
     REQUIRE(second.RuntimeTransition == PartyQuestRuntimeDurableTransitionStatus::Applied);
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
     REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1620");
@@ -353,14 +337,9 @@ TEST_CASE("Interrupted legacy restore rollback keeps runtime barrier until a lat
     const auto retried = PartyQuestRuntimeRecoveryCoordinatorTestAccess::ResolveCrashRecovery(session, paths);
     REQUIRE(retried.Status == PartyQuestRuntimeRecoveryStatus::Restored);
     REQUIRE(retried.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::Success);
-#ifdef _WIN32
-    REQUIRE(retried.RestoreId == kTransactionId);
-    REQUIRE(retried.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient);
-#else
     REQUIRE(retried.RestoreId != kTransactionId);
     REQUIRE(retried.RestoreDomain == PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable);
     REQUIRE(retried.DurableRestoreStatus == PartyQuestReplicaDurableRestoreStatus::Success);
-#endif
     REQUIRE_FALSE(session.GetCoordinator().IsRecoveryBlocked());
     REQUIRE(ReadRecoveryBytes(paths.SavesDirectory / "Hero.ess") == "PRE_REPAIR_1630");
 }

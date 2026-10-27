@@ -403,23 +403,6 @@ PartyQuestRuntimeRecoveryResult PartyQuestRuntimeRecoveryCoordinator::ResolveCra
             }
             else if (loadedLegacy.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
             {
-#ifdef _WIN32
-                result.RestoreId = transactionId;
-                result.RestoreDomain = PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient;
-                auto restoreReport = PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(acPaths, restorePlan, transactionId, workspaceCapability);
-                result.RestoreStatus = restoreReport.Status;
-                result.RestoreJournalPath = restoreReport.JournalPath.empty() ? legacyJournalPath : restoreReport.JournalPath;
-                if (restoreReport.Status == PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback)
-                {
-                    result.Status = PartyQuestRuntimeRecoveryStatus::RollbackRecoveredRetryRequired;
-                    return result;
-                }
-                if (!restoreReport.IsCheckpointRestored())
-                {
-                    result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
-                    return result;
-                }
-#else
                 attempt = PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
                     acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), transactionId, workspaceCapability);
                 result.RestoreAttemptStatus = attempt.Status;
@@ -451,7 +434,6 @@ PartyQuestRuntimeRecoveryResult PartyQuestRuntimeRecoveryCoordinator::ResolveCra
                     result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
                     return result;
                 }
-#endif
             }
             else
             {

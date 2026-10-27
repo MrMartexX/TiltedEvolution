@@ -23,8 +23,8 @@ All six authoritative metadata stores expose a stronger publication path:
 - `PartyQuestReplicaManifestStore::SavePowerLossDurably`;
 - `PartyQuestReplicaRestoreJournalPersistence::SavePowerLossDurably`.
 
-Linux additionally has a complete isolated strong replica-restore filesystem
-pipeline split into two surfaces:
+Linux/POSIX and Windows NTFS additionally have a complete strong replica-restore
+filesystem pipeline split into two surfaces:
 
 - `PartyQuestReplicaDurableRestorePreparation::Prepare` establishes the promoted
   checkpoint, durable `Prepared`, exact durable rollback evidence and durable
@@ -151,27 +151,24 @@ Current canonical server persistence still uses legacy
 cross-platform parent-directory contract would incorrectly make Windows startup
 fail or overclaim durability.
 
-Current crash/live runtime recovery also intentionally remains legacy-domain. It
-calls restore-journal `Load()` before `PartyQuestReplicaRestoreExecutor`, so the
-new persisted provenance fence has an immediate production-safe effect:
+Crash and live runtime recovery now separate stable higher-level
+`RuntimeTransactionId` from individual filesystem restore-attempt identity via
+`PartyQuestRuntimeRestoreAttemptStore` (`metadata/restore_attempts/Transaction_<TransactionId>/attempt.bin`).
+On both Linux/POSIX and Windows NTFS:
 
-- a v4 strong journal is rejected as a restore-journal conflict before legacy
-  executor entry;
-- a v1/v2 ambiguous journal is likewise rejected;
-- runtime recovery leaves live replica bytes untouched and retains the runtime
-  barrier in those cases.
-
-Strong production routing is intentionally still blocked by a second invariant.
-Current runtime recovery defines `RestoreId == TransactionId` and, after a
-legacy rollback, expects a later restore retry to reuse that same ID. The strong
-protocol deliberately retains terminal `RolledBack` as a permanent RestoreId
-tombstone. Reusing or deleting that terminal ID would weaken idempotency.
-
-Before strong routing, production therefore needs an explicit contract separating
-stable higher-level runtime transaction identity from the identity of an
-individual filesystem restore attempt. A retry must receive a new deterministic
-or otherwise durable attempt identity without changing the higher-level repair
-transaction and without reusing a terminal restore-attempt ID.
+- fresh crash and live recoveries initialize or load the durable restore-attempt
+  ledger (`CurrentAttemptId` / `NextAttemptId`), run
+  `PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized` and
+  `PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized` under the active
+  attempt ID, and resolve with `PowerLossDurable`;
+- if an active v4 restore attempt terminates in `RolledBack`, the terminal v4
+  journal remains a permanent tombstone for that attempt ID while
+  `AdvanceAfterRolledBackAuthorized` allocates the next monotonic attempt ID for
+  a subsequent retry of the same runtime transaction;
+- pre-existing legacy v3 journals at `Transaction_<TransactionId>` remain
+  recoverable when no strong attempt ledger is active, whereas v1/v2 ambiguous
+  journals or conflicting v3+v4 / attempt-store evidence fail closed as
+  `RestoreJournalConflict` without touching live replica bytes.
 
 ### Immutable PreRepair runtime authorization binding
 
@@ -248,12 +245,10 @@ created. `PartyQuestReplicaDurableRestoreExecutor::Continue` repeats promotion
 and plan binding before staging or publishing `MutationStarted`, so a stale
 `BackupsReady` transaction cannot bypass current checkpoint authority.
 
-Windows currently returns `UnsupportedPlatform` from revision-checkpoint
-promotion, durable restore preparation and the strong destructive executor before
-strong restore mutation is issued. NTFS durable file write/rename is implemented,
-but durable creation/promotion/removal of the directory tree is not yet proved to
-the same standard. The project therefore does not infer a complete Windows
-checkpoint/restore proof from file rename semantics alone.
+Both Linux/POSIX and Windows NTFS enforce revision-checkpoint promotion,
+durable restore preparation and the strong destructive executor before strong
+restore mutation is issued; non-NTFS or unsupported filesystems fail closed
+before mutating live replica files.
 
 The manifest must never become power-loss authority while any file it names is
 still only cache-resident or its directory ancestry can disappear independently.
@@ -290,10 +285,11 @@ POSIX durable empty-directory removal: validate a directory final node, `rmdir`,
 then `fsync(parent)`. It is not recursive deletion authority; callers must prove
 all confinement and emptiness preconditions.
 
-Windows deliberately returns `Unsupported` from durable directory-tree, durable
-copy, file removal and empty-directory removal primitives. `CreateDirectory` and
-delete/disposition semantics are not assumed to provide the same reviewed
-stable namespace contract merely because NTFS write-through file rename exists.
+On Windows NTFS, `EnsureDirectoryTreeDurably`, `CopyFileDurably`,
+`RemoveFileDurably` and `RemoveEmptyDirectoryDurably` validate non-reparse NTFS
+handles, enforce exact-handle write-through/flush barriers and flush parent
+directory metadata via `NtFlushBuffersFileEx(FLUSH_FLAGS_FILE_DATA_SYNC_ONLY)`.
+Non-NTFS volumes or reparse points fail closed with `Unsupported` / `InvalidTarget`.
 
 ## Strong destructive restore
 
