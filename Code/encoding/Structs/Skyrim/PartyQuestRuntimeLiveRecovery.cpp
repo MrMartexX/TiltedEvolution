@@ -7,21 +7,15 @@
 
 namespace
 {
-std::filesystem::path GetLiveRestoreJournalPath(
-    const PartyQuestCoopSavePaths& acPaths,
-    uint64_t aRestoreId)
+std::filesystem::path GetLiveRestoreJournalPath(const PartyQuestCoopSavePaths& acPaths, uint64_t aRestoreId)
 {
     std::ostringstream stream;
-    stream << "Transaction_" << std::uppercase << std::hex << std::setw(16)
-           << std::setfill('0') << aRestoreId;
+    stream << "Transaction_" << std::uppercase << std::hex << std::setw(16) << std::setfill('0') << aRestoreId;
     return acPaths.MetadataDirectory / "restore" / stream.str() / "journal.bin";
 }
 
 PartyQuestRuntimeRecoveryResult MakeLiveRecoveryResult(
-    PartyQuestRuntimeRecoveryStatus aStatus,
-    const PartyQuestRuntimeApplyEntry* apRecovery,
-    uint64_t aRestoreId,
-    const std::filesystem::path& acManifestPath = {},
+    PartyQuestRuntimeRecoveryStatus aStatus, const PartyQuestRuntimeApplyEntry* apRecovery, uint64_t aRestoreId, const std::filesystem::path& acManifestPath = {},
     const std::filesystem::path& acJournalPath = {})
 {
     PartyQuestRuntimeRecoveryResult result;
@@ -37,20 +31,12 @@ PartyQuestRuntimeRecoveryResult MakeLiveRecoveryResult(
     return result;
 }
 
-bool IsExpectedLiveRecoveryRecord(
-    const PartyQuestRuntimeApplyEntry& acRecovery) noexcept
+bool IsExpectedLiveRecoveryRecord(const PartyQuestRuntimeApplyEntry& acRecovery) noexcept
 {
-    if (acRecovery.TransactionId == 0 ||
-        acRecovery.TargetWorldRevision == 0 ||
-        !acRecovery.QuestId ||
-        acRecovery.CanonicalDigest == 0 ||
-        acRecovery.Actions == PartyQuestApplyAction::None ||
-        !PartyQuestVerificationPolicy::IsCompleteForActions(
-            acRecovery.ExpectedVerification,
-            acRecovery.Actions) ||
+    if (acRecovery.TransactionId == 0 || acRecovery.TargetWorldRevision == 0 || !acRecovery.QuestId || acRecovery.CanonicalDigest == 0 ||
+        acRecovery.Actions == PartyQuestApplyAction::None || !PartyQuestVerificationPolicy::IsCompleteForActions(acRecovery.ExpectedVerification, acRecovery.Actions) ||
         acRecovery.ExpectedVerification.QuestSnapshotDigest != acRecovery.CanonicalDigest ||
-        !acRecovery.SaveGuardActive ||
-        !acRecovery.CheckpointCreated ||
+        ((acRecovery.CheckpointRuntimeGeneration == 0) != (acRecovery.CheckpointCaptureEpochId == 0)) || !acRecovery.SaveGuardActive || !acRecovery.CheckpointCreated ||
         !acRecovery.RuntimeMutationMayHaveOccurred)
     {
         return false;
@@ -60,28 +46,24 @@ bool IsExpectedLiveRecoveryRecord(
     {
     case PartyQuestRuntimeApplyState::WaitingForPapyrus:
     case PartyQuestRuntimeApplyState::Verifying:
-    case PartyQuestRuntimeApplyState::ReadyToCommit:
-        return true;
+    case PartyQuestRuntimeApplyState::ReadyToCommit: return true;
     case PartyQuestRuntimeApplyState::DeferredWorld:
     case PartyQuestRuntimeApplyState::AwaitingCheckpoint:
-    case PartyQuestRuntimeApplyState::ReadyToApply:
-        return false;
+    case PartyQuestRuntimeApplyState::ReadyToApply: return false;
     }
 
     return false;
 }
 
-bool LiveJournalMatchesPlan(
-    const PartyQuestReplicaRestoreJournalState& acState,
-    const PartyQuestReplicaRestorePlan& acPlan,
-    uint64_t aRestoreId) noexcept
+bool HasStrongCheckpointProvenance(const PartyQuestRuntimeApplyEntry& acRecovery) noexcept
 {
-    if (acState.RestoreId != aRestoreId ||
-        acState.CampaignId != acPlan.CampaignId ||
-        acState.PlayerProfileId != acPlan.PlayerProfileId ||
-        acState.CheckpointKind != acPlan.CheckpointKind ||
-        acState.CampaignWorldRevision != acPlan.CampaignWorldRevision ||
-        acState.Operations.size() != acPlan.Operations.size())
+    return acRecovery.CheckpointRuntimeGeneration != 0 && acRecovery.CheckpointCaptureEpochId != 0;
+}
+
+bool LiveJournalMatchesPlan(const PartyQuestReplicaRestoreJournalState& acState, const PartyQuestReplicaRestorePlan& acPlan, uint64_t aRestoreId) noexcept
+{
+    if (acState.RestoreId != aRestoreId || acState.CampaignId != acPlan.CampaignId || acState.PlayerProfileId != acPlan.PlayerProfileId ||
+        acState.CheckpointKind != acPlan.CheckpointKind || acState.CampaignWorldRevision != acPlan.CampaignWorldRevision || acState.Operations.size() != acPlan.Operations.size())
     {
         return false;
     }
@@ -90,12 +72,8 @@ bool LiveJournalMatchesPlan(
     {
         const auto& journal = acState.Operations[i];
         const auto& plan = acPlan.Operations[i];
-        if (journal.Kind != plan.Kind ||
-            journal.CheckpointSourcePath.lexically_normal() !=
-                plan.CheckpointSourcePath.lexically_normal() ||
-            journal.ReplicaDestinationPath.lexically_normal() !=
-                plan.ReplicaDestinationPath.lexically_normal() ||
-            journal.ExpectedRestoredSize != plan.ExpectedSize ||
+        if (journal.Kind != plan.Kind || journal.CheckpointSourcePath.lexically_normal() != plan.CheckpointSourcePath.lexically_normal() ||
+            journal.ReplicaDestinationPath.lexically_normal() != plan.ReplicaDestinationPath.lexically_normal() || journal.ExpectedRestoredSize != plan.ExpectedSize ||
             journal.ExpectedRestoredDigest != plan.ExpectedDigest)
         {
             return false;
@@ -105,19 +83,15 @@ bool LiveJournalMatchesPlan(
     return true;
 }
 
-bool VerifyLiveRecoveryDestinations(
-    const PartyQuestReplicaRestorePlan& acPlan) noexcept
+bool VerifyLiveRecoveryDestinations(const PartyQuestReplicaRestorePlan& acPlan) noexcept
 {
     if (!acPlan.IsReady() || acPlan.Operations.empty())
         return false;
 
     for (const auto& operation : acPlan.Operations)
     {
-        const auto observation = PartyQuestReplicaFileExecutor::ObserveRegularFile(
-            operation.ReplicaDestinationPath);
-        if (!observation ||
-            observation->Size != operation.ExpectedSize ||
-            observation->Digest != operation.ExpectedDigest)
+        const auto observation = PartyQuestReplicaFileExecutor::ObserveRegularFile(operation.ReplicaDestinationPath);
+        if (!observation || observation->Size != operation.ExpectedSize || observation->Digest != operation.ExpectedDigest)
         {
             return false;
         }
@@ -126,65 +100,44 @@ bool VerifyLiveRecoveryDestinations(
     return true;
 }
 
-PartyQuestReplicaRestoreExecutionStatus MapDurableLiveRestoreStatus(
-    PartyQuestReplicaDurableRestoreStatus aStatus) noexcept
+PartyQuestReplicaRestoreExecutionStatus MapDurableLiveRestoreStatus(PartyQuestReplicaDurableRestoreStatus aStatus) noexcept
 {
     switch (aStatus)
     {
-    case PartyQuestReplicaDurableRestoreStatus::Success:
-        return PartyQuestReplicaRestoreExecutionStatus::Success;
+    case PartyQuestReplicaDurableRestoreStatus::Success: return PartyQuestReplicaRestoreExecutionStatus::Success;
     case PartyQuestReplicaDurableRestoreStatus::AlreadyCommitted:
-    case PartyQuestReplicaDurableRestoreStatus::RecoveredCommit:
-        return PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted;
+    case PartyQuestReplicaDurableRestoreStatus::RecoveredCommit: return PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted;
     case PartyQuestReplicaDurableRestoreStatus::RecoveredRollback:
-    case PartyQuestReplicaDurableRestoreStatus::AlreadyRolledBack:
-        return PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback;
-    case PartyQuestReplicaDurableRestoreStatus::InvalidIdentity:
-        return PartyQuestReplicaRestoreExecutionStatus::InvalidIdentity;
+    case PartyQuestReplicaDurableRestoreStatus::AlreadyRolledBack: return PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback;
+    case PartyQuestReplicaDurableRestoreStatus::InvalidIdentity: return PartyQuestReplicaRestoreExecutionStatus::InvalidIdentity;
     case PartyQuestReplicaDurableRestoreStatus::JournalNotFound:
-    case PartyQuestReplicaDurableRestoreStatus::JournalLoadFailed:
-        return PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
-    case PartyQuestReplicaDurableRestoreStatus::UnsafePath:
-        return PartyQuestReplicaRestoreExecutionStatus::UnsafePath;
-    case PartyQuestReplicaDurableRestoreStatus::WorkspaceBusy:
-        return PartyQuestReplicaRestoreExecutionStatus::WorkspaceBusy;
+    case PartyQuestReplicaDurableRestoreStatus::JournalLoadFailed: return PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
+    case PartyQuestReplicaDurableRestoreStatus::UnsafePath: return PartyQuestReplicaRestoreExecutionStatus::UnsafePath;
+    case PartyQuestReplicaDurableRestoreStatus::WorkspaceBusy: return PartyQuestReplicaRestoreExecutionStatus::WorkspaceBusy;
     case PartyQuestReplicaDurableRestoreStatus::WorkspaceLeaseFailure:
-    case PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform:
-        return PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
-    case PartyQuestReplicaDurableRestoreStatus::CheckpointSourceChanged:
-        return PartyQuestReplicaRestoreExecutionStatus::CheckpointSourceChanged;
-    case PartyQuestReplicaDurableRestoreStatus::BackupVerificationFailed:
-        return PartyQuestReplicaRestoreExecutionStatus::BackupVerificationFailed;
-    case PartyQuestReplicaDurableRestoreStatus::DestinationChanged:
-        return PartyQuestReplicaRestoreExecutionStatus::DestinationChanged;
-    case PartyQuestReplicaDurableRestoreStatus::StagingFailed:
-        return PartyQuestReplicaRestoreExecutionStatus::StagingFailed;
-    case PartyQuestReplicaDurableRestoreStatus::ReplacementFailed:
-        return PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed;
+    case PartyQuestReplicaDurableRestoreStatus::UnsupportedPlatform: return PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
+    case PartyQuestReplicaDurableRestoreStatus::CheckpointSourceChanged: return PartyQuestReplicaRestoreExecutionStatus::CheckpointSourceChanged;
+    case PartyQuestReplicaDurableRestoreStatus::BackupVerificationFailed: return PartyQuestReplicaRestoreExecutionStatus::BackupVerificationFailed;
+    case PartyQuestReplicaDurableRestoreStatus::DestinationChanged: return PartyQuestReplicaRestoreExecutionStatus::DestinationChanged;
+    case PartyQuestReplicaDurableRestoreStatus::StagingFailed: return PartyQuestReplicaRestoreExecutionStatus::StagingFailed;
+    case PartyQuestReplicaDurableRestoreStatus::ReplacementFailed: return PartyQuestReplicaRestoreExecutionStatus::ReplacementFailed;
     case PartyQuestReplicaDurableRestoreStatus::RestoredVerificationFailed:
-    case PartyQuestReplicaDurableRestoreStatus::CommittedVerificationFailed:
-        return PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed;
+    case PartyQuestReplicaDurableRestoreStatus::CommittedVerificationFailed: return PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed;
     case PartyQuestReplicaDurableRestoreStatus::RollbackFailed:
-    case PartyQuestReplicaDurableRestoreStatus::RolledBackVerificationFailed:
-        return PartyQuestReplicaRestoreExecutionStatus::RollbackFailed;
-    case PartyQuestReplicaDurableRestoreStatus::JournalPersistenceFailed:
-        return PartyQuestReplicaRestoreExecutionStatus::JournalPersistenceFailed;
+    case PartyQuestReplicaDurableRestoreStatus::RolledBackVerificationFailed: return PartyQuestReplicaRestoreExecutionStatus::RollbackFailed;
+    case PartyQuestReplicaDurableRestoreStatus::JournalPersistenceFailed: return PartyQuestReplicaRestoreExecutionStatus::JournalPersistenceFailed;
     case PartyQuestReplicaDurableRestoreStatus::CheckpointDurabilityUnavailable:
     case PartyQuestReplicaDurableRestoreStatus::CheckpointPlanMismatch:
     case PartyQuestReplicaDurableRestoreStatus::InvalidPhase:
     case PartyQuestReplicaDurableRestoreStatus::ResumeBeforeMutation:
     case PartyQuestReplicaDurableRestoreStatus::CleanupFailed:
-    case PartyQuestReplicaDurableRestoreStatus::FaultInjected:
-        return PartyQuestReplicaRestoreExecutionStatus::InvalidPlan;
+    case PartyQuestReplicaDurableRestoreStatus::FaultInjected: return PartyQuestReplicaRestoreExecutionStatus::InvalidPlan;
     }
     return PartyQuestReplicaRestoreExecutionStatus::InvalidPlan;
 }
 } // namespace
 
-PartyQuestRuntimeRecoveryResult
-PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
-    PartyQuestRuntimeApplySession& aSession,
-    const PartyQuestCoopSavePaths& acPaths) noexcept
+PartyQuestRuntimeRecoveryResult PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(PartyQuestRuntimeApplySession& aSession, const PartyQuestCoopSavePaths& acPaths) noexcept
 {
     try
     {
@@ -192,190 +145,143 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
         const PartyQuestRuntimeApplyEntry* pRecovery = coordinator.GetActive();
         constexpr uint64_t candidateRestoreId = 0;
 
-        if (!aSession.GetCampaignId().IsValid() ||
-            !aSession.GetPlayerProfileId().IsValid())
+        if (!aSession.GetCampaignId().IsValid() || !aSession.GetPlayerProfileId().IsValid())
         {
-            return MakeLiveRecoveryResult(
-                PartyQuestRuntimeRecoveryStatus::InvalidIdentity,
-                pRecovery,
-                candidateRestoreId);
+            return MakeLiveRecoveryResult(PartyQuestRuntimeRecoveryStatus::InvalidIdentity, pRecovery, candidateRestoreId);
         }
-        if (!PartyQuestCoopSaveLayout::Matches(
-                acPaths,
-                aSession.GetCampaignId(),
-                aSession.GetPlayerProfileId()))
+        if (!PartyQuestCoopSaveLayout::Matches(acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId()))
         {
-            return MakeLiveRecoveryResult(
-                PartyQuestRuntimeRecoveryStatus::InvalidLayout,
-                pRecovery,
-                candidateRestoreId);
+            return MakeLiveRecoveryResult(PartyQuestRuntimeRecoveryStatus::InvalidLayout, pRecovery, candidateRestoreId);
         }
-        if (coordinator.IsRecoveryBlocked() ||
-            !pRecovery ||
-            !IsExpectedLiveRecoveryRecord(*pRecovery))
+        if (coordinator.IsRecoveryBlocked() || !pRecovery || !IsExpectedLiveRecoveryRecord(*pRecovery))
         {
-            return MakeLiveRecoveryResult(
-                PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState,
-                pRecovery,
-                candidateRestoreId);
+            return MakeLiveRecoveryResult(PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState, pRecovery, candidateRestoreId);
         }
 
         const uint64_t transactionId = pRecovery->TransactionId;
         const uint64_t targetWorldRevision = pRecovery->TargetWorldRevision;
-        const auto manifestPath =
-            PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(
-                acPaths,
-                PartyQuestCheckpointKind::PreRepair,
-                targetWorldRevision);
-        const auto legacyJournalPath =
-            GetLiveRestoreJournalPath(acPaths, transactionId);
+        const auto manifestPath = PartyQuestReplicaManifestStore::GetRevisionCheckpointManifestPath(acPaths, PartyQuestCheckpointKind::PreRepair, targetWorldRevision);
+        const auto legacyJournalPath = GetLiveRestoreJournalPath(acPaths, transactionId);
 
-        PartyQuestRuntimeRecoveryResult result = MakeLiveRecoveryResult(
-            PartyQuestRuntimeRecoveryStatus::CheckpointMissing,
-            pRecovery,
-            candidateRestoreId,
-            manifestPath,
-            legacyJournalPath);
+        PartyQuestRuntimeRecoveryResult result =
+            MakeLiveRecoveryResult(PartyQuestRuntimeRecoveryStatus::CheckpointMissing, pRecovery, candidateRestoreId, manifestPath, legacyJournalPath);
 
         const auto loadedManifest = PartyQuestReplicaManifestStore::Load(manifestPath);
         result.ManifestStatus = loadedManifest.Status;
         if (loadedManifest.Status == PartyQuestReplicaManifestPersistenceStatus::FileNotFound)
             return result;
-        if (loadedManifest.Status ==
-            PartyQuestReplicaManifestPersistenceStatus::BackupRecoveryRequired)
+        if (loadedManifest.Status == PartyQuestReplicaManifestPersistenceStatus::BackupRecoveryRequired)
         {
-            result.Status =
-                PartyQuestRuntimeRecoveryStatus::CheckpointManifestRecoveryRequired;
+            result.Status = PartyQuestRuntimeRecoveryStatus::CheckpointManifestRecoveryRequired;
             return result;
         }
-        if (loadedManifest.Status != PartyQuestReplicaManifestPersistenceStatus::Success ||
-            !loadedManifest.Manifest)
+        if (loadedManifest.Status != PartyQuestReplicaManifestPersistenceStatus::Success || !loadedManifest.Manifest)
         {
             result.Status = PartyQuestRuntimeRecoveryStatus::CheckpointManifestInvalid;
             return result;
         }
 
         const PartyQuestReplicaManifest& manifest = *loadedManifest.Manifest;
-        if (manifest.CampaignId != aSession.GetCampaignId() ||
-            manifest.PlayerProfileId != aSession.GetPlayerProfileId() ||
-            manifest.SnapshotType != PartyQuestReplicaSnapshotType::RevisionCheckpoint ||
-            manifest.CheckpointKind != PartyQuestCheckpointKind::PreRepair ||
+        if (manifest.CampaignId != aSession.GetCampaignId() || manifest.PlayerProfileId != aSession.GetPlayerProfileId() ||
+            manifest.SnapshotType != PartyQuestReplicaSnapshotType::RevisionCheckpoint || manifest.CheckpointKind != PartyQuestCheckpointKind::PreRepair ||
             manifest.CampaignWorldRevision != targetWorldRevision)
         {
             result.Status = PartyQuestRuntimeRecoveryStatus::CheckpointManifestInvalid;
             return result;
         }
-        if (manifest.Durability !=
-            PartyQuestReplicaManifestDurability::PowerLossDurable)
+        if (manifest.Durability != PartyQuestReplicaManifestDurability::PowerLossDurable)
         {
-            result.Status =
-                PartyQuestRuntimeRecoveryStatus::CheckpointDurabilityUnavailable;
+            result.Status = PartyQuestRuntimeRecoveryStatus::CheckpointDurabilityUnavailable;
             return result;
         }
 
-        result.VerificationStatus = PartyQuestReplicaManifestStore::VerifyPublishedFiles(
-            acPaths,
-            aSession.GetCampaignId(),
-            aSession.GetPlayerProfileId(),
-            manifest);
-        if (result.VerificationStatus !=
-            PartyQuestReplicaManifestVerificationStatus::Verified)
+        if (HasStrongCheckpointProvenance(*pRecovery))
+        {
+            const auto commitPath = PartyQuestPreRepairAuthorizationCommitStore::GetCommitPath(acPaths, targetWorldRevision);
+            const auto authorization = PartyQuestPreRepairAuthorizationCommitStore::Load(commitPath);
+            result.AuthorizationStatus = authorization.Status;
+            if (authorization.Status == PartyQuestPreRepairAuthorizationCommitPersistenceStatus::FileNotFound)
+            {
+                result.Status = PartyQuestRuntimeRecoveryStatus::CheckpointAuthorizationMissing;
+                return result;
+            }
+            if (authorization.Status != PartyQuestPreRepairAuthorizationCommitPersistenceStatus::Success || !authorization.Record)
+            {
+                result.Status = PartyQuestRuntimeRecoveryStatus::CheckpointAuthorizationInvalid;
+                return result;
+            }
+
+            const auto expected = PartyQuestPreRepairAuthorizationCommitStore::Build(
+                aSession.GetCampaignId(), aSession.GetPlayerProfileId(), *pRecovery, pRecovery->CheckpointRuntimeGeneration, pRecovery->CheckpointCaptureEpochId, manifest);
+            if (!expected || *authorization.Record != *expected)
+            {
+                result.Status = PartyQuestRuntimeRecoveryStatus::CheckpointAuthorizationMismatch;
+                return result;
+            }
+        }
+
+        result.VerificationStatus = PartyQuestReplicaManifestStore::VerifyPublishedFiles(acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), manifest);
+        if (result.VerificationStatus != PartyQuestReplicaManifestVerificationStatus::Verified)
         {
             result.Status = PartyQuestRuntimeRecoveryStatus::CheckpointVerificationFailed;
             return result;
         }
 
-        const auto restorePlan = PartyQuestReplicaRestorePlanner::Build(
-            acPaths,
-            aSession.GetCampaignId(),
-            aSession.GetPlayerProfileId(),
-            manifest);
+        const auto restorePlan = PartyQuestReplicaRestorePlanner::Build(acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), manifest);
         result.RestorePlanStatus = restorePlan.Status;
-        if (!restorePlan.IsReady() ||
-            restorePlan.CheckpointKind != PartyQuestCheckpointKind::PreRepair ||
-            restorePlan.CampaignWorldRevision != targetWorldRevision)
+        if (!restorePlan.IsReady() || restorePlan.CheckpointKind != PartyQuestCheckpointKind::PreRepair || restorePlan.CampaignWorldRevision != targetWorldRevision)
         {
             result.Status = PartyQuestRuntimeRecoveryStatus::RestorePlanInvalid;
             return result;
         }
 
-        auto workspaceCapability =
-            PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(
-                aSession,
-                acPaths);
+        auto workspaceCapability = PartyQuestRuntimeWorkspacePublicationAuthority::Acquire(aSession, acPaths);
         if (!workspaceCapability.IsVerified())
         {
             PartyQuestReplicaWorkspaceLease recoveryLease;
-            const auto leaseStatus = recoveryLease.Acquire(
-                acPaths,
-                aSession.GetCampaignId(),
-                aSession.GetPlayerProfileId());
+            const auto leaseStatus = recoveryLease.Acquire(acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId());
             if (leaseStatus != PartyQuestReplicaWorkspaceLeaseStatus::Acquired)
             {
-                result.RestoreStatus = leaseStatus ==
-                        PartyQuestReplicaWorkspaceLeaseStatus::Busy
-                    ? PartyQuestReplicaRestoreExecutionStatus::WorkspaceBusy
-                    : PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
+                result.RestoreStatus = leaseStatus == PartyQuestReplicaWorkspaceLeaseStatus::Busy ? PartyQuestReplicaRestoreExecutionStatus::WorkspaceBusy
+                                                                                                  : PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
                 result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
                 return result;
             }
-            workspaceCapability = recoveryLease.CreatePublicationCapability(
-                acPaths,
-                aSession.GetCampaignId(),
-                aSession.GetPlayerProfileId());
+            workspaceCapability = recoveryLease.CreatePublicationCapability(acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId());
             if (!workspaceCapability.IsVerified())
             {
-                result.RestoreStatus =
-                    PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
+                result.RestoreStatus = PartyQuestReplicaRestoreExecutionStatus::WorkspaceLeaseFailure;
                 result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
                 return result;
             }
         }
 
-        auto attempt = PartyQuestRuntimeRestoreAttemptStore::Load(
-            acPaths,
-            aSession.GetCampaignId(),
-            aSession.GetPlayerProfileId(),
-            transactionId);
+        auto attempt = PartyQuestRuntimeRestoreAttemptStore::Load(acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), transactionId);
         result.RestoreAttemptStatus = attempt.Status;
 
         if (attempt.Status == PartyQuestRuntimeRestoreAttemptStatus::FileNotFound)
         {
             const auto pendingPublication =
-                PartyQuestRuntimeRestoreAttemptPendingPublicationProbe::Probe(
-                    acPaths,
-                    aSession.GetCampaignId(),
-                    aSession.GetPlayerProfileId(),
-                    transactionId);
-            if (pendingPublication ==
-                PartyQuestRuntimeRestoreAttemptPendingPublicationStatus::ProbeFailed)
+                PartyQuestRuntimeRestoreAttemptPendingPublicationProbe::Probe(acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), transactionId);
+            if (pendingPublication == PartyQuestRuntimeRestoreAttemptPendingPublicationStatus::ProbeFailed)
             {
                 result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
                 return result;
             }
-            if (pendingPublication ==
-                PartyQuestRuntimeRestoreAttemptPendingPublicationStatus::Present)
+            if (pendingPublication == PartyQuestRuntimeRestoreAttemptPendingPublicationStatus::Present)
             {
-                const auto legacyEvidence =
-                    PartyQuestReplicaRestoreJournalPersistence::Load(legacyJournalPath);
-                if (legacyEvidence.Status !=
-                    PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
+                const auto legacyEvidence = PartyQuestReplicaRestoreJournalPersistence::Load(legacyJournalPath);
+                if (legacyEvidence.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
                 {
                     result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
-                    result.RestoreStatus = legacyEvidence.Status ==
-                            PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired
-                        ? PartyQuestReplicaRestoreExecutionStatus::BackupRecoveryRequired
-                        : PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
+                    result.RestoreStatus = legacyEvidence.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired
+                                               ? PartyQuestReplicaRestoreExecutionStatus::BackupRecoveryRequired
+                                               : PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
                     return result;
                 }
 
-                attempt =
-                    PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
-                        acPaths,
-                        aSession.GetCampaignId(),
-                        aSession.GetPlayerProfileId(),
-                        transactionId,
-                        workspaceCapability);
+                attempt = PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
+                    acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), transactionId, workspaceCapability);
                 result.RestoreAttemptStatus = attempt.Status;
             }
         }
@@ -385,42 +291,28 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
             const auto& currentAttempt = *attempt.State;
             const auto strongJournalPath = attempt.JournalPath;
 
-            if (strongJournalPath.lexically_normal() !=
-                legacyJournalPath.lexically_normal())
+            if (strongJournalPath.lexically_normal() != legacyJournalPath.lexically_normal())
             {
-                const auto legacyEvidence =
-                    PartyQuestReplicaRestoreJournalPersistence::Load(legacyJournalPath);
-                if (legacyEvidence.Status !=
-                    PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
+                const auto legacyEvidence = PartyQuestReplicaRestoreJournalPersistence::Load(legacyJournalPath);
+                if (legacyEvidence.Status != PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
                 {
-                    result.Status =
-                        PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
-                    result.RestoreStatus = legacyEvidence.Status ==
-                            PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired
-                        ? PartyQuestReplicaRestoreExecutionStatus::BackupRecoveryRequired
-                        : PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
+                    result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
+                    result.RestoreStatus = legacyEvidence.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired
+                                               ? PartyQuestReplicaRestoreExecutionStatus::BackupRecoveryRequired
+                                               : PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
                     return result;
                 }
             }
 
             result.RestoreId = currentAttempt.CurrentRestoreId;
             result.RestoreJournalPath = strongJournalPath;
-            result.RestoreDomain =
-                PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable;
+            result.RestoreDomain = PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable;
 
             PartyQuestReplicaDurableRestoreReport durableReport;
-            const auto strongJournal =
-                PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(
-                    strongJournalPath);
-            if (strongJournal.Status ==
-                PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
+            const auto strongJournal = PartyQuestReplicaRestoreJournalPersistence::LoadPowerLossDurably(strongJournalPath);
+            if (strongJournal.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
             {
-                const auto prepared =
-                    PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(
-                        acPaths,
-                        restorePlan,
-                        currentAttempt.CurrentRestoreId,
-                        workspaceCapability);
+                const auto prepared = PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(acPaths, restorePlan, currentAttempt.CurrentRestoreId, workspaceCapability);
                 result.DurablePreparationStatus = prepared.Status;
                 if (!prepared.IsBackupsReady())
                 {
@@ -428,108 +320,65 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
                     return result;
                 }
 
-                durableReport =
-                    PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized(
-                        acPaths,
-                        aSession.GetCampaignId(),
-                        aSession.GetPlayerProfileId(),
-                        prepared.JournalPath,
-                        workspaceCapability);
+                durableReport = PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized(
+                    acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), prepared.JournalPath, workspaceCapability);
             }
-            else if (strongJournal.Status ==
-                         PartyQuestReplicaRestoreJournalPersistenceStatus::Success &&
-                     strongJournal.State &&
-                     LiveJournalMatchesPlan(
-                         *strongJournal.State,
-                         restorePlan,
-                         currentAttempt.CurrentRestoreId))
+            else if (
+                strongJournal.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success && strongJournal.State &&
+                LiveJournalMatchesPlan(*strongJournal.State, restorePlan, currentAttempt.CurrentRestoreId))
             {
                 switch (strongJournal.State->Phase)
                 {
                 case PartyQuestReplicaRestoreJournalPhase::Prepared:
                 {
-                    const auto prepared =
-                        PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(
-                            acPaths,
-                            restorePlan,
-                            currentAttempt.CurrentRestoreId,
-                            workspaceCapability);
+                    const auto prepared = PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(acPaths, restorePlan, currentAttempt.CurrentRestoreId, workspaceCapability);
                     result.DurablePreparationStatus = prepared.Status;
                     if (!prepared.IsBackupsReady())
                     {
                         result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
                         return result;
                     }
-                    durableReport =
-                        PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized(
-                            acPaths,
-                            aSession.GetCampaignId(),
-                            aSession.GetPlayerProfileId(),
-                            prepared.JournalPath,
-                            workspaceCapability);
+                    durableReport = PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized(
+                        acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), prepared.JournalPath, workspaceCapability);
                     break;
                 }
                 case PartyQuestReplicaRestoreJournalPhase::BackupsReady:
-                    durableReport =
-                        PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized(
-                            acPaths,
-                            aSession.GetCampaignId(),
-                            aSession.GetPlayerProfileId(),
-                            strongJournalPath,
-                            workspaceCapability);
+                    durableReport = PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized(
+                        acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), strongJournalPath, workspaceCapability);
                     break;
                 case PartyQuestReplicaRestoreJournalPhase::MutationStarted:
                 case PartyQuestReplicaRestoreJournalPhase::Restored:
                 case PartyQuestReplicaRestoreJournalPhase::Committed:
                 case PartyQuestReplicaRestoreJournalPhase::RolledBack:
-                    durableReport =
-                        PartyQuestReplicaDurableRestoreExecutor::RecoverAuthorized(
-                            acPaths,
-                            aSession.GetCampaignId(),
-                            aSession.GetPlayerProfileId(),
-                            strongJournalPath,
-                            workspaceCapability);
+                    durableReport = PartyQuestReplicaDurableRestoreExecutor::RecoverAuthorized(
+                        acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), strongJournalPath, workspaceCapability);
                     break;
                 }
             }
             else
             {
                 result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
-                result.RestoreStatus =
-                    PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
+                result.RestoreStatus = PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
                 return result;
             }
 
             result.DurableRestoreStatus = durableReport.Status;
             result.RestoreStatus = MapDurableLiveRestoreStatus(durableReport.Status);
-            result.RestoreJournalPath = durableReport.JournalPath.empty()
-                ? strongJournalPath
-                : durableReport.JournalPath;
+            result.RestoreJournalPath = durableReport.JournalPath.empty() ? strongJournalPath : durableReport.JournalPath;
 
-            if (durableReport.Status ==
-                    PartyQuestReplicaDurableRestoreStatus::RecoveredRollback ||
-                durableReport.Status ==
-                    PartyQuestReplicaDurableRestoreStatus::AlreadyRolledBack)
+            if (durableReport.Status == PartyQuestReplicaDurableRestoreStatus::RecoveredRollback ||
+                durableReport.Status == PartyQuestReplicaDurableRestoreStatus::AlreadyRolledBack)
             {
-                const auto advanced =
-                    PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
-                        acPaths,
-                        aSession.GetCampaignId(),
-                        aSession.GetPlayerProfileId(),
-                        transactionId,
-                        currentAttempt.CurrentOrdinal,
-                        workspaceCapability);
+                const auto advanced = PartyQuestRuntimeRestoreAttemptStore::AdvanceAfterRolledBackAuthorized(
+                    acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), transactionId, currentAttempt.CurrentOrdinal, workspaceCapability);
                 result.RestoreAttemptStatus = advanced.Status;
-                if (advanced.Status != PartyQuestRuntimeRestoreAttemptStatus::Success &&
-                    advanced.Status !=
-                        PartyQuestRuntimeRestoreAttemptStatus::AlreadyAdvanced)
+                if (advanced.Status != PartyQuestRuntimeRestoreAttemptStatus::Success && advanced.Status != PartyQuestRuntimeRestoreAttemptStatus::AlreadyAdvanced)
                 {
                     result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
                     return result;
                 }
 
-                result.Status =
-                    PartyQuestRuntimeRecoveryStatus::RollbackRecoveredRetryRequired;
+                result.Status = PartyQuestRuntimeRecoveryStatus::RollbackRecoveredRetryRequired;
                 return result;
             }
 
@@ -541,41 +390,25 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
         }
         else if (attempt.Status == PartyQuestRuntimeRestoreAttemptStatus::FileNotFound)
         {
-            const auto loadedLegacy =
-                PartyQuestReplicaRestoreJournalPersistence::Load(legacyJournalPath);
-            if (loadedLegacy.Status ==
-                PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
+            const auto loadedLegacy = PartyQuestReplicaRestoreJournalPersistence::Load(legacyJournalPath);
+            if (loadedLegacy.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::Success)
             {
-                if (!loadedLegacy.State ||
-                    !LiveJournalMatchesPlan(
-                        *loadedLegacy.State,
-                        restorePlan,
-                        transactionId))
+                if (!loadedLegacy.State || !LiveJournalMatchesPlan(*loadedLegacy.State, restorePlan, transactionId))
                 {
-                    result.Status =
-                        PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
+                    result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
                     return result;
                 }
 
                 result.RestoreId = transactionId;
-                result.RestoreDomain =
-                    PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient;
-                auto restoreReport = PartyQuestReplicaRestoreExecutor::RecoverAuthorized(
-                    acPaths,
-                    aSession.GetCampaignId(),
-                    aSession.GetPlayerProfileId(),
-                    legacyJournalPath,
-                    workspaceCapability);
+                result.RestoreDomain = PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient;
+                auto restoreReport =
+                    PartyQuestReplicaRestoreExecutor::RecoverAuthorized(acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), legacyJournalPath, workspaceCapability);
                 result.RestoreStatus = restoreReport.Status;
-                result.RestoreJournalPath = restoreReport.JournalPath.empty()
-                    ? legacyJournalPath
-                    : restoreReport.JournalPath;
+                result.RestoreJournalPath = restoreReport.JournalPath.empty() ? legacyJournalPath : restoreReport.JournalPath;
 
-                if (restoreReport.Status ==
-                    PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback)
+                if (restoreReport.Status == PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback)
                 {
-                    result.Status =
-                        PartyQuestRuntimeRecoveryStatus::RollbackRecoveredRetryRequired;
+                    result.Status = PartyQuestRuntimeRecoveryStatus::RollbackRecoveredRetryRequired;
                     return result;
                 }
                 if (!restoreReport.IsCheckpointRestored())
@@ -584,27 +417,17 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
                     return result;
                 }
             }
-            else if (loadedLegacy.Status ==
-                PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
+            else if (loadedLegacy.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::FileNotFound)
             {
 #ifdef _WIN32
                 result.RestoreId = transactionId;
-                result.RestoreDomain =
-                    PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient;
-                auto restoreReport = PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(
-                    acPaths,
-                    restorePlan,
-                    transactionId,
-                    workspaceCapability);
+                result.RestoreDomain = PartyQuestRuntimeRestoreDurabilityDomain::ProcessCrashResilient;
+                auto restoreReport = PartyQuestReplicaRestoreExecutor::ExecuteAuthorized(acPaths, restorePlan, transactionId, workspaceCapability);
                 result.RestoreStatus = restoreReport.Status;
-                result.RestoreJournalPath = restoreReport.JournalPath.empty()
-                    ? legacyJournalPath
-                    : restoreReport.JournalPath;
-                if (restoreReport.Status ==
-                    PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback)
+                result.RestoreJournalPath = restoreReport.JournalPath.empty() ? legacyJournalPath : restoreReport.JournalPath;
+                if (restoreReport.Status == PartyQuestReplicaRestoreExecutionStatus::RecoveredRollback)
                 {
-                    result.Status =
-                        PartyQuestRuntimeRecoveryStatus::RollbackRecoveredRetryRequired;
+                    result.Status = PartyQuestRuntimeRecoveryStatus::RollbackRecoveredRetryRequired;
                     return result;
                 }
                 if (!restoreReport.IsCheckpointRestored())
@@ -613,13 +436,8 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
                     return result;
                 }
 #else
-                attempt =
-                    PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
-                        acPaths,
-                        aSession.GetCampaignId(),
-                        aSession.GetPlayerProfileId(),
-                        transactionId,
-                        workspaceCapability);
+                attempt = PartyQuestRuntimeRestoreAttemptStore::EnsureInitializedAuthorized(
+                    acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), transactionId, workspaceCapability);
                 result.RestoreAttemptStatus = attempt.Status;
                 if (!attempt.IsUsable() || !attempt.State)
                 {
@@ -627,17 +445,11 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
                     return result;
                 }
 
-                result.RestoreDomain =
-                    PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable;
+                result.RestoreDomain = PartyQuestRuntimeRestoreDurabilityDomain::PowerLossDurable;
                 result.RestoreId = attempt.State->CurrentRestoreId;
                 result.RestoreJournalPath = attempt.JournalPath;
 
-                const auto prepared =
-                    PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(
-                        acPaths,
-                        restorePlan,
-                        attempt.State->CurrentRestoreId,
-                        workspaceCapability);
+                const auto prepared = PartyQuestReplicaDurableRestorePreparation::PrepareAuthorized(acPaths, restorePlan, attempt.State->CurrentRestoreId, workspaceCapability);
                 result.DurablePreparationStatus = prepared.Status;
                 if (!prepared.IsBackupsReady())
                 {
@@ -645,19 +457,11 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
                     return result;
                 }
 
-                const auto durableReport =
-                    PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized(
-                        acPaths,
-                        aSession.GetCampaignId(),
-                        aSession.GetPlayerProfileId(),
-                        prepared.JournalPath,
-                        workspaceCapability);
+                const auto durableReport = PartyQuestReplicaDurableRestoreExecutor::ContinueAuthorized(
+                    acPaths, aSession.GetCampaignId(), aSession.GetPlayerProfileId(), prepared.JournalPath, workspaceCapability);
                 result.DurableRestoreStatus = durableReport.Status;
-                result.RestoreStatus =
-                    MapDurableLiveRestoreStatus(durableReport.Status);
-                result.RestoreJournalPath = durableReport.JournalPath.empty()
-                    ? prepared.JournalPath
-                    : durableReport.JournalPath;
+                result.RestoreStatus = MapDurableLiveRestoreStatus(durableReport.Status);
+                result.RestoreJournalPath = durableReport.JournalPath.empty() ? prepared.JournalPath : durableReport.JournalPath;
                 if (!durableReport.IsCheckpointRestored())
                 {
                     result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
@@ -668,10 +472,9 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
             else
             {
                 result.Status = PartyQuestRuntimeRecoveryStatus::RestoreJournalConflict;
-                result.RestoreStatus = loadedLegacy.Status ==
-                        PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired
-                    ? PartyQuestReplicaRestoreExecutionStatus::BackupRecoveryRequired
-                    : PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
+                result.RestoreStatus = loadedLegacy.Status == PartyQuestReplicaRestoreJournalPersistenceStatus::BackupRecoveryRequired
+                                           ? PartyQuestReplicaRestoreExecutionStatus::BackupRecoveryRequired
+                                           : PartyQuestReplicaRestoreExecutionStatus::JournalLoadFailed;
                 return result;
             }
         }
@@ -683,47 +486,32 @@ PartyQuestRuntimeRecoveryCoordinator::ResolveLiveRecovery(
 
         if (!VerifyLiveRecoveryDestinations(restorePlan))
         {
-            result.RestoreStatus =
-                PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed;
+            result.RestoreStatus = PartyQuestReplicaRestoreExecutionStatus::RestoredVerificationFailed;
             result.Status = PartyQuestRuntimeRecoveryStatus::RestoreFailed;
             return result;
         }
 
-        result.RuntimeTransition =
-            aSession.CompleteLiveCheckpointRestoreInternal(transactionId);
+        result.RuntimeTransition = aSession.CompleteLiveCheckpointRestoreInternal(transactionId);
         switch (result.RuntimeTransition)
         {
         case PartyQuestRuntimeDurableTransitionStatus::Applied:
-            result.Status = result.RestoreStatus ==
-                    PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted
-                ? PartyQuestRuntimeRecoveryStatus::AlreadyRestored
-                : PartyQuestRuntimeRecoveryStatus::Restored;
+            result.Status = result.RestoreStatus == PartyQuestReplicaRestoreExecutionStatus::AlreadyCommitted ? PartyQuestRuntimeRecoveryStatus::AlreadyRestored
+                                                                                                              : PartyQuestRuntimeRecoveryStatus::Restored;
             return result;
 
-        case PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure:
-            result.Status =
-                PartyQuestRuntimeRecoveryStatus::RuntimeStatePersistenceFailed;
-            return result;
+        case PartyQuestRuntimeDurableTransitionStatus::PersistenceFailure: result.Status = PartyQuestRuntimeRecoveryStatus::RuntimeStatePersistenceFailed; return result;
 
         case PartyQuestRuntimeDurableTransitionStatus::InvalidState:
         case PartyQuestRuntimeDurableTransitionStatus::CheckpointRestoreRequired:
-        case PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability:
-            result.Status = PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState;
-            return result;
+        case PartyQuestRuntimeDurableTransitionStatus::InsufficientDurability: result.Status = PartyQuestRuntimeRecoveryStatus::InvalidRecoveryState; return result;
         }
     }
     catch (...)
     {
         const auto* recovery = aSession.GetCoordinator().GetActive();
-        return MakeLiveRecoveryResult(
-            PartyQuestRuntimeRecoveryStatus::RestoreFailed,
-            recovery,
-            0);
+        return MakeLiveRecoveryResult(PartyQuestRuntimeRecoveryStatus::RestoreFailed, recovery, 0);
     }
 
     const auto* recovery = aSession.GetCoordinator().GetActive();
-    return MakeLiveRecoveryResult(
-        PartyQuestRuntimeRecoveryStatus::RestoreFailed,
-        recovery,
-        0);
+    return MakeLiveRecoveryResult(PartyQuestRuntimeRecoveryStatus::RestoreFailed, recovery, 0);
 }
