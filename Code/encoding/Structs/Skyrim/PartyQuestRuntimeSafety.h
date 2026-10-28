@@ -54,8 +54,7 @@ enum class PartyQuestApplyAction : uint32_t
 
 constexpr PartyQuestApplyAction operator|(PartyQuestApplyAction aLeft, PartyQuestApplyAction aRight) noexcept
 {
-    return static_cast<PartyQuestApplyAction>(
-        static_cast<uint32_t>(aLeft) | static_cast<uint32_t>(aRight));
+    return static_cast<PartyQuestApplyAction>(static_cast<uint32_t>(aLeft) | static_cast<uint32_t>(aRight));
 }
 
 constexpr PartyQuestApplyAction& operator|=(PartyQuestApplyAction& aLeft, PartyQuestApplyAction aRight) noexcept
@@ -80,12 +79,9 @@ enum class PartyQuestVerificationComponent : uint32_t
     Compatibility = 1u << 5
 };
 
-constexpr PartyQuestVerificationComponent operator|(
-    PartyQuestVerificationComponent aLeft,
-    PartyQuestVerificationComponent aRight) noexcept
+constexpr PartyQuestVerificationComponent operator|(PartyQuestVerificationComponent aLeft, PartyQuestVerificationComponent aRight) noexcept
 {
-    return static_cast<PartyQuestVerificationComponent>(
-        static_cast<uint32_t>(aLeft) | static_cast<uint32_t>(aRight));
+    return static_cast<PartyQuestVerificationComponent>(static_cast<uint32_t>(aLeft) | static_cast<uint32_t>(aRight));
 }
 
 struct PartyQuestVerificationEnvelopeV1
@@ -109,14 +105,10 @@ struct PartyQuestVerificationEnvelopeV1
 class PartyQuestVerificationPolicy final
 {
 public:
-    [[nodiscard]] static std::optional<PartyQuestVerificationEnvelopeV1> BuildExpected(
-        PartyQuestApplyAction aActions,
-        uint64_t aQuestSnapshotDigest,
-        uint64_t aCompatibilityFingerprint) noexcept;
+    [[nodiscard]] static std::optional<PartyQuestVerificationEnvelopeV1>
+    BuildExpected(PartyQuestApplyAction aActions, uint64_t aQuestSnapshotDigest, uint64_t aCompatibilityFingerprint) noexcept;
 
-    [[nodiscard]] static bool IsCompleteForActions(
-        const PartyQuestVerificationEnvelopeV1& acEnvelope,
-        PartyQuestApplyAction aActions) noexcept;
+    [[nodiscard]] static bool IsCompleteForActions(const PartyQuestVerificationEnvelopeV1& acEnvelope, PartyQuestApplyAction aActions) noexcept;
 };
 
 struct PartyQuestRuntimeSafetyFacts
@@ -148,36 +140,19 @@ public:
 
     [[nodiscard]] bool HasVerifiedNativeAdapter() const noexcept
     {
-        return static_cast<bool>(m_questId) &&
-            m_compatibilityFingerprint != 0 &&
-            m_adapterMutationComponents == PartyQuestVerificationComponent::QuestSnapshot;
+        return static_cast<bool>(m_questId) && m_compatibilityFingerprint != 0 && m_adapterMutationComponents == PartyQuestVerificationComponent::QuestSnapshot;
     }
 
-    [[nodiscard]] bool IsVerifiedFor(const GameId& acQuestId) const noexcept
-    {
-        return HasVerifiedNativeAdapter() && acQuestId == m_questId;
-    }
+    [[nodiscard]] bool IsVerifiedFor(const GameId& acQuestId) const noexcept { return HasVerifiedNativeAdapter() && acQuestId == m_questId; }
 
-    [[nodiscard]] const GameId& GetQuestId() const noexcept
-    {
-        return m_questId;
-    }
+    [[nodiscard]] const GameId& GetQuestId() const noexcept { return m_questId; }
 
-    [[nodiscard]] uint64_t GetCompatibilityFingerprint() const noexcept
-    {
-        return m_compatibilityFingerprint;
-    }
+    [[nodiscard]] uint64_t GetCompatibilityFingerprint() const noexcept { return m_compatibilityFingerprint; }
 
-    [[nodiscard]] PartyQuestVerificationComponent GetAdapterMutationComponents() const noexcept
-    {
-        return m_adapterMutationComponents;
-    }
+    [[nodiscard]] PartyQuestVerificationComponent GetAdapterMutationComponents() const noexcept { return m_adapterMutationComponents; }
 
 private:
-    PartyQuestRuntimeSafetyProfile(
-        const GameId& acQuestId,
-        uint64_t aCompatibilityFingerprint,
-        PartyQuestVerificationComponent aAdapterMutationComponents) noexcept
+    PartyQuestRuntimeSafetyProfile(const GameId& acQuestId, uint64_t aCompatibilityFingerprint, PartyQuestVerificationComponent aAdapterMutationComponents) noexcept
         : m_questId(acQuestId)
         , m_compatibilityFingerprint(aCompatibilityFingerprint)
         , m_adapterMutationComponents(aAdapterMutationComponents)
@@ -186,8 +161,7 @@ private:
 
     GameId m_questId{};
     uint64_t m_compatibilityFingerprint{};
-    PartyQuestVerificationComponent m_adapterMutationComponents{
-        PartyQuestVerificationComponent::None};
+    PartyQuestVerificationComponent m_adapterMutationComponents{PartyQuestVerificationComponent::None};
 
     friend class PartyQuestRuntimeCompatibilityPolicy;
 };
@@ -215,31 +189,15 @@ class PartyQuestRuntimeMutationAuthorization final
 public:
     PartyQuestRuntimeMutationAuthorization() noexcept = default;
 
-    [[nodiscard]] bool IsVerified() const noexcept
-    {
-        return m_verified;
-    }
+    [[nodiscard]] bool IsVerified() const noexcept { return m_verified; }
 
-    [[nodiscard]] uint64_t GetCompatibilityFingerprint() const noexcept
-    {
-        return m_compatibilityFingerprint;
-    }
+    [[nodiscard]] uint64_t GetCompatibilityFingerprint() const noexcept { return m_compatibilityFingerprint; }
 
-    [[nodiscard]] PartyQuestVerificationComponent GetAdapterMutationComponents() const noexcept
-    {
-        return m_adapterMutationComponents;
-    }
+    [[nodiscard]] PartyQuestVerificationComponent GetAdapterMutationComponents() const noexcept { return m_adapterMutationComponents; }
 
-    [[nodiscard]] bool Matches(
-        const QuestSnapshot& acSnapshot,
-        PartyQuestApplyAction aActions,
-        bool aDryRunOnly) const noexcept
+    [[nodiscard]] bool Matches(const QuestSnapshot& acSnapshot, PartyQuestApplyAction aActions, bool aDryRunOnly) const noexcept
     {
-        if (!m_verified ||
-            !acSnapshot.QuestId ||
-            acSnapshot.QuestId != m_questId ||
-            aActions != m_actions ||
-            aDryRunOnly != m_dryRunOnly)
+        if (!m_verified || !acSnapshot.QuestId || acSnapshot.QuestId != m_questId || aActions != m_actions || aDryRunOnly != m_dryRunOnly)
         {
             return false;
         }
@@ -249,12 +207,8 @@ public:
 
 private:
     PartyQuestRuntimeMutationAuthorization(
-        const GameId& acQuestId,
-        uint64_t aCanonicalDigest,
-        uint64_t aCompatibilityFingerprint,
-        PartyQuestVerificationComponent aAdapterMutationComponents,
-        PartyQuestApplyAction aActions,
-        bool aDryRunOnly) noexcept
+        const GameId& acQuestId, uint64_t aCanonicalDigest, uint64_t aCompatibilityFingerprint, PartyQuestVerificationComponent aAdapterMutationComponents,
+        PartyQuestApplyAction aActions, bool aDryRunOnly) noexcept
         : m_questId(acQuestId)
         , m_canonicalDigest(aCanonicalDigest)
         , m_compatibilityFingerprint(aCompatibilityFingerprint)
@@ -262,24 +216,21 @@ private:
         , m_actions(aActions)
         , m_dryRunOnly(aDryRunOnly)
         , m_verified(
-              static_cast<bool>(acQuestId) &&
-              aCanonicalDigest != 0 &&
-              aCompatibilityFingerprint != 0 &&
-              aAdapterMutationComponents == PartyQuestVerificationComponent::QuestSnapshot &&
-              aActions != PartyQuestApplyAction::None)
+              static_cast<bool>(acQuestId) && aCanonicalDigest != 0 && aCompatibilityFingerprint != 0 &&
+              aAdapterMutationComponents == PartyQuestVerificationComponent::QuestSnapshot && aActions != PartyQuestApplyAction::None)
     {
     }
 
     GameId m_questId{};
     uint64_t m_canonicalDigest{};
     uint64_t m_compatibilityFingerprint{};
-    PartyQuestVerificationComponent m_adapterMutationComponents{
-        PartyQuestVerificationComponent::None};
+    PartyQuestVerificationComponent m_adapterMutationComponents{PartyQuestVerificationComponent::None};
     PartyQuestApplyAction m_actions{PartyQuestApplyAction::None};
     bool m_dryRunOnly{true};
     bool m_verified{};
 
     friend class PartyQuestRuntimeSafetyPolicy;
+    friend class PartyQuestReconciliationPlanner;
     // Defined only in Code/tests; no production factory/API exists.
     friend class PartyQuestRuntimeSafetyTestAccess;
 };
@@ -290,10 +241,7 @@ struct PartyQuestRuntimeSafetyDecision
     PartyQuestRuntimeSafetyReason Reason{PartyQuestRuntimeSafetyReason::AdmissionBlocked};
     PartyQuestRuntimeSafetyFacts Facts;
 
-    [[nodiscard]] bool IsRuntimeSafe() const noexcept
-    {
-        return Status == PartyQuestRuntimeSafetyStatus::RuntimeSafe;
-    }
+    [[nodiscard]] bool IsRuntimeSafe() const noexcept { return Status == PartyQuestRuntimeSafetyStatus::RuntimeSafe; }
 };
 
 /**
@@ -308,10 +256,7 @@ struct PartyQuestApplyPlan
     PartyQuestRuntimeMutationAuthorization MutationAuthorization;
     bool DryRunOnly{true};
 
-    [[nodiscard]] bool WouldMutateQuestStage() const noexcept
-    {
-        return HasPartyQuestApplyAction(Actions, PartyQuestApplyAction::StageTransition);
-    }
+    [[nodiscard]] bool WouldMutateQuestStage() const noexcept { return HasPartyQuestApplyAction(Actions, PartyQuestApplyAction::StageTransition); }
 };
 
 class PartyQuestRuntimeSafetyPolicy final
@@ -319,16 +264,11 @@ class PartyQuestRuntimeSafetyPolicy final
 public:
     static constexpr size_t kComplexAliasThreshold = 16;
 
-    [[nodiscard]] static PartyQuestRuntimeSafetyFacts Inspect(
-        const QuestSnapshot& acSnapshot) noexcept;
+    [[nodiscard]] static PartyQuestRuntimeSafetyFacts Inspect(const QuestSnapshot& acSnapshot) noexcept;
 
-    [[nodiscard]] static PartyQuestRuntimeSafetyDecision Evaluate(
-        const PartyQuestAdmissionDecision& acAdmission,
-        const QuestSnapshot& acSnapshot,
-        const PartyQuestRuntimeSafetyProfile& acProfile = {}) noexcept;
+    [[nodiscard]] static PartyQuestRuntimeSafetyDecision
+    Evaluate(const PartyQuestAdmissionDecision& acAdmission, const QuestSnapshot& acSnapshot, const PartyQuestRuntimeSafetyProfile& acProfile = {}) noexcept;
 
-    [[nodiscard]] static PartyQuestApplyPlan BuildApplyPlan(
-        const PartyQuestAdmissionDecision& acAdmission,
-        const QuestSnapshot& acSnapshot,
-        const PartyQuestRuntimeSafetyProfile& acProfile = {}) noexcept;
+    [[nodiscard]] static PartyQuestApplyPlan
+    BuildApplyPlan(const PartyQuestAdmissionDecision& acAdmission, const QuestSnapshot& acSnapshot, const PartyQuestRuntimeSafetyProfile& acProfile = {}) noexcept;
 };

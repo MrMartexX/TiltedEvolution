@@ -19,7 +19,7 @@ dependency order, while live status remains in `CURRENT_STATUS.md`.
 | 08 | [Power-loss-durable checkpoint](08-power-loss-durable-checkpoint.md) | Local implementation; not accepted |
 | 09 | [Deterministic recovery](09-deterministic-recovery.md) | Local implementation; not accepted |
 | 10 | [Production dry-run pipeline](10-production-dry-run-pipeline.md) | Local implementation; not accepted |
-| 11 | [Divergent-save reconciliation](11-divergent-save-reconciliation.md) | Planned |
+| 11 | [Divergent-save reconciliation](11-divergent-save-reconciliation.md) | Local implementation; not accepted |
 | 12 | [Reviewed quest profiles](12-reviewed-quest-profiles.md) | Planned |
 | 13 | [Narrow mutation and two-client validation](13-narrow-mutation-two-client-validation.md) | Planned |
 | 14 | [Failure/recovery live validation](14-failure-recovery-live-validation.md) | Planned |

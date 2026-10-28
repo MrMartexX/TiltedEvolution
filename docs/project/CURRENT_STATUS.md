@@ -6,7 +6,11 @@ Last verified: **2026-10-27**
 
 ## Latest accepted integration & local Task 08/09 progress
 
-- **Integration baseline (`feature/equal-party-quest-poc`)**: `769e7fef2933f82f91698bf8828f605195bae3be` (integrates Task 08/09 pre-repair authorization, live recovery binding, and Windows NTFS durable recovery through `769e7fef`).
+- **Integration baseline (eature/equal-party-quest-poc)**: 3dd8b6c1c85c636d4ab78faf8b7510fe6be6abdf (integrates Task 10 production dry-run pipeline through 3dd8b6c1).
+- **Active local Task 11 stack (ih/task11-divergent-save-reconciliation)**:
+  - Implements pure deterministic reconciliation planner PartyQuestReconciliationPlanner classifying relationship between canonical and independent local saves.
+  - Implements explicit deterministic classifications (ExactEquivalent, LocallyBehindReviewedEdge, LocallyAheadCompatible, DivergentBranchOrState, MissingOrNotStartedOrStopped, EnvironmentMismatch, InsufficientOrUnstableObservation, RecoveryRequired).
+  - Restricts candidate production strictly to reviewed single-edge transitions without stage synthesis, reversals, or fragment skipping, producing immutable candidates for the dry-run pipeline with zero native mutation.
 - **Active local Task 10 stack (`aih/task10-production-dry-run-pipeline`)**:
   - Connects the client canonical update pipeline end-to-end in strict dry-run mode without invoking native mutation (`TESQuest::SetStage` remains uncalled).
   - Integrates `PartyQuestDeferredWorldQueue` directly into `PartyQuestRuntimeOwner` to eliminate runner shadow queues and atomically flush deferred work on lifecycle boundaries.
