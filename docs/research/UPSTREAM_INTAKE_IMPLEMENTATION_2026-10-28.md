@@ -53,7 +53,7 @@ Local tools: MSVC 2022 14.44, xmake 3.1.1+HEAD.3ba37a0d4. Workflows pin 3.1.0 an
 
 Exact refreshed baseline d6a8ab20: Windows release TPTests passed, **287023 assertions / 1022 test cases**. A separate earlier documentation-parent build produced the same counts; it is not substituted for the exact baseline rerun.
 
-Initial candidate focused suite passed **289 assertions / 14 test cases**. Full candidate TPTests then passed **287344 assertions / 1035 cases** before additional cumulative-budget regressions. Final counts must be recorded after those additions and the final configuration checks.
+Initial candidate focused suite passed **289 assertions / 14 test cases**. Full candidate TPTests then passed **287344 assertions / 1035 cases** before additional cumulative-budget regressions; these are historical intermediate results.
 
 After the cumulative-budget regressions, focused intake/playback checks passed
 **332 assertions / 17 cases**, and the full Windows 1.6.1170 configuration passed
@@ -61,21 +61,56 @@ After the cumulative-budget regressions, focused intake/playback checks passed
 SortedMap so its publication swap is compile-time verified noexcept; changing
 actor traversal order does not change the map's wire schema or per-actor action order.
 
-Initial MSVC 1.6.1170 product builds passed for SkyrimTogetherClient,
-SkyrimImmersiveLauncher, SkyrimServerRunner (including STServer),
-PartyQuestCompatibilityAnalyzer and PartyQuestSkseLineageBridge. Final product
-rebuilds after the last codec representation change and the separate latest
-configuration remain required before local validation is complete.
+Final tested code SHA: **f806ee0a6ff32e8e059402bf84e2116672550e1b**.
+The following results are bound to that code commit. A later documentation-only
+commit records them; it does not receive implicit CI or gameplay acceptance.
+
+| Windows x64 release configuration | Product builds | Focused TPTests | Full TPTests |
+|---|---|---|---|
+| 1.6.1170 | All six targets passed | 332 assertions / 17 cases | 287356 assertions / 1037 cases |
+| latest (1.7.104) | All six targets passed | 332 assertions / 17 cases | 287356 assertions / 1037 cases |
+
+The six targets were SkyrimTogetherClient, SkyrimImmersiveLauncher,
+SkyrimServerRunner (including STServer), PartyQuestCompatibilityAnalyzer,
+PartyQuestSkseLineageBridge and TPTests. Both server config-generation smoke
+checks returned zero. This did not start a multiplayer server or Skyrim session.
+
+The [machine-readable validation record](upstream-intake-2026-10-28/validation.json)
+contains artifact SHA256 values, x64 PE checks and the matching build identity in
+both SkyrimTogether.exe and STServer.dll for both configurations.
+
+Reusing a pre-commit xmake configuration initially retained an old git-describe
+stamp. That artifact was not admitted: clean configuration and rebuilding
+replaced it, and both binary identities were verified against the tested commit.
+After changing HEAD, use clean xmake configuration and check the generated
+identity before pairing incremental client/server artifacts.
+
+Additional component suites: Console_Tests **6 passed**, Resources_Tests
+**13 passed**. ESLoader_Tests initially lacked Data fixtures; with the five real
+base ESMs and loadorder.txt, **1 passed / 7 failed**. ESLoader::BuildRecordCollection
+returns an empty collection while its record-loading code is commented out.
+The loader and its tests are byte-identical to the refreshed baseline. This is
+a recorded pre-existing unfinished component, not an intake regression or a
+green optional suite. Its implementation was not broadened or its tests weakened.
 
 Production UI also built successfully with pnpm 9.15.9 and local Node 24.19.0;
 hosted CI's pinned Node 18 configuration remains separate evidence to obtain.
 
-Offline analyzer comparisons are review-only: adding the shipped plugins leaves
-the two reviewed quests' topology unchanged, but changes the plugin environment
-and therefore winning-override fingerprints (which include that environment).
-The initial reduced archive overlay is not the full installed script environment;
-its script digest must not be substituted for runtime evidence. No reviewed
-profile constants were edited to admit the new environment.
+Offline analyzer comparisons were repeated with the final code's analyzer and
+all **19 base BSA archives / 14013156171 bytes** mirrored by hard links, plus any
+base loose PEX files. The [base result](upstream-intake-2026-10-28/base-environment.json)
+exactly reproduces the existing reference environment: plugins 0x62557d41e3e9a150,
+scripts 0x28ae1c01a4a2ead7. With both shipped STR plugins, the
+[intake result](upstream-intake-2026-10-28/with-str-plugins.json) has plugins
+0xbbd5af5215bc4c47 and the same script fingerprint. Both reviewed quest topologies
+and winning plugin identities remain unchanged. Their winning-override
+fingerprints change because that fingerprint includes the plugin environment.
+
+These are read-only offline evidence and do not represent the complete MO2 VFS
+or grant runtime/mutation authority. The initial reduced-archive experiment's
+different script digest was not used. Reviewed profile constants were not edited
+to admit the new environment; full intended runtime-content admission remains
+a gate before integration/activation.
 
 Existing Windows symlink tests warn that directory-symlink creation privilege is unavailable locally. Those specific branches have not acquired new coverage merely because the overall suite passed.
 
@@ -83,7 +118,7 @@ Actionlint v1.7.12 was downloaded from its official release on drive D, checked 
 
 GitHub dispatch of Build Linux, Build Windows and diagnostics returned HTTP 422: Actions has been disabled for this repository. Repository settings simultaneously reported enabled=true and active workflows. The user's GitHub banner confirmed the fork-specific suspension due to the scale of Actions usage. This is an external execution blocker, not a failed C++ test or a green CI signal.
 
-No candidate CI acceptance, live Skyrim run, power-interruption test or integration merge is claimed. Candidate product-build results and final test counts are recorded when independently observed.
+No candidate CI acceptance, live Skyrim run, power-interruption test or merge into the integration/dev branches is claimed. The tested code commit itself is an isolated upstream merge candidate.
 
 ## Required before integration
 
