@@ -1,6 +1,8 @@
 #include <Structs/Inventory.h>
 #include <TiltedCore/Serialization.hpp>
 
+#include <limits>
+
 using TiltedPhoques::Serialization;
 
 void Inventory::EffectItem::Serialize(TiltedPhoques::Buffer::Writer& aWriter) const noexcept
@@ -143,21 +145,34 @@ int32_t Inventory::GetEntryCountById(GameId& aItemId) const noexcept
     return entry->Count;
 }
 
-// TODO: unit testing
-void Inventory::AddOrRemoveEntry(const Entry& acEntry) noexcept
+bool Inventory::AddOrRemoveEntry(const Entry& acEntry) noexcept
 {
+    if (acEntry.Count == 0)
+        return false;
+
     auto duplicate = std::find_if(Entries.begin(), Entries.end(), [acEntry](Entry& entry) { return entry.CanBeMerged(acEntry); });
 
     if (duplicate != Entries.end())
     {
-        duplicate->Count += acEntry.Count;
-        if (duplicate->Count <= 0)
+        const int64_t cNewCount = static_cast<int64_t>(duplicate->Count) + static_cast<int64_t>(acEntry.Count);
+        if (cNewCount > std::numeric_limits<int32_t>::max())
+            return false;
+
+        if (cNewCount <= 0)
+        {
             Entries.erase(duplicate);
+            return true;
+        }
+
+        duplicate->Count = static_cast<int32_t>(cNewCount);
+        return true;
     }
-    else
-    {
-        Entries.push_back(acEntry);
-    }
+
+    if (acEntry.Count < 0)
+        return false;
+
+    Entries.push_back(acEntry);
+    return true;
 }
 
 void Inventory::UpdateEquipment(const Inventory& acNewInventory) noexcept

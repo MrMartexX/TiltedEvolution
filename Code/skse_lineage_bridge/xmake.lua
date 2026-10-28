@@ -1,0 +1,6 @@
+target("PartyQuestSkseLineageBridge")
+    set_basename("SkyrimTogetherLineageBridge")
+    set_kind("shared")
+    set_group("Client")
+    add_files("PartyQuestSkseLineageBridge.cpp")
+    add_syslinks("bcrypt")

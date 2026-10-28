@@ -23,7 +23,7 @@ struct TESWorldSpace;
 struct DiscoveryService final : BSTEventSink<TESLoadGameEvent>
 {
     DiscoveryService(World& aWorld, entt::dispatcher& aDispatcher) noexcept;
-    ~DiscoveryService() noexcept = default;
+    ~DiscoveryService() noexcept;
 
     TP_NOCOPYMOVE(DiscoveryService);
 
@@ -101,6 +101,8 @@ private:
     uint32_t m_worldSpaceId = 0;
     uint32_t m_interiorCellId = 0;
     struct TESForm* m_pLocation = nullptr;
+
+    EventDispatcher<TESLoadGameEvent>* m_pLoadGameDispatcher{};
 
     entt::scoped_connection m_preUpdateConnection;
     entt::scoped_connection m_connectedConnection;

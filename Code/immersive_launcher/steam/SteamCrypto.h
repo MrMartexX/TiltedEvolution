@@ -16,6 +16,7 @@
  * along with this program.  If not, see http://www.gnu.org/licenses/
  */
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 namespace steam
@@ -26,16 +27,17 @@ struct SteamStubHeaderV31
     uint32_t Signature;            // The signature to ensure the xor decoding was successful.
     uintptr_t ImageBase;           // The base of the image that was protected.
     uintptr_t AddressOfEntryPoint; // The entry point that is set from the DRM.
-    uint32_t BindSectionOffset;    // The starting offset to the .bind section data. RVA(AddressOfEntryPoint -
-    uint32_t Unknown0000;          // [Cyanic: This field is most likely the .bind code size.] public
+    uint32_t BindSectionOffset;    // The starting offset to the .bind section data. RVA(AddressOfEntryPoint - BindSectionOffset)
+    uint32_t Unknown0000;          // [Cyanic: This field is most likely the .bind code size.]
     uintptr_t OriginalEntryPoint;  // The original entry point of the binary before it was protected.
     uint32_t Unknown0001;          // [Cyanic: This field is most likely an offset to a string table.]
     uint32_t PayloadSize;
-    uint32_t DRMPDllOffset;              // The offset to the SteamDrmp.dll file.
-    uint32_t DRMPDllSize;                // The size of the SteamDrmp.dll file. uint32_tSteamAppId; // The Steam application id of this
-    uint32_t Flags;                      // The DRM flags used while protecting this program.
-    uint32_t BindSectionVirtualSize;     // The .bind section virtual size.
-    uint32_t Unknown0002;                // [Cyanic: This field is most likely a hash of some sort.]
+    uint32_t DRMPDllOffset;          // The offset to the SteamDrmp.dll file.
+    uint32_t DRMPDllSize;            // The size of the SteamDrmp.dll file.
+    uint32_t SteamAppId;              // Steam application id. Skyrim SE is 489830 (0x77966).
+    uint32_t Flags;                   // The DRM flags used while protecting this program.
+    uint32_t BindSectionVirtualSize;  // The .bind section virtual size.
+    uint32_t Unknown0002;             // [Cyanic: This field is most likely a hash of some sort.]
     uintptr_t CodeSectionVirtualAddress; // The code section virtual address.
     uintptr_t CodeSectionRawSize;        // The code section raw size.
 
@@ -52,5 +54,28 @@ struct SteamStubHeaderV31
     uintptr_t GetProcAddress_Rva;   // The rva to GetProcAddress.
 };
 
+// Steamless Variant 3.1 x64 reference layout. Size alone was insufficient to
+// detect the previous missing SteamAppId field because 8-byte alignment inserted
+// compensating padding before CodeSectionVirtualAddress.
 static_assert(sizeof(SteamStubHeaderV31) == 240);
+static_assert(offsetof(SteamStubHeaderV31, SteamAppId) == 0x38);
+static_assert(offsetof(SteamStubHeaderV31, Flags) == 0x3C);
+static_assert(offsetof(SteamStubHeaderV31, BindSectionVirtualSize) == 0x40);
+static_assert(offsetof(SteamStubHeaderV31, CodeSectionVirtualAddress) == 0x48);
+static_assert(offsetof(SteamStubHeaderV31, AES_Key) == 0x58);
+
+enum class SteamStubDrmFlags : uint32_t
+{
+    NoModuleVerification = 0x02,
+    NoEncryption = 0x04,
+    NoOwnershipCheck = 0x10,
+    NoDebuggerCheck = 0x20,
+    NoErrorDialog = 0x40
+};
+
+[[nodiscard]] constexpr bool HasEncryptedCodeSection(
+    const SteamStubHeaderV31& acHeader) noexcept
+{
+    return (acHeader.Flags & static_cast<uint32_t>(SteamStubDrmFlags::NoEncryption)) == 0;
+}
 } // namespace steam

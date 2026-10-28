@@ -2,6 +2,8 @@
 
 #include <Services/TransportService.h>
 
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
+
 #include <Events/UpdateEvent.h>
 #include <Events/DisconnectedEvent.h>
 #include <Events/PartyJoinedEvent.h>
@@ -164,6 +166,31 @@ void PartyService::OnPartyJoined(const NotifyPartyJoined& acPartyJoined) noexcep
 void PartyService::OnPartyLeft(const NotifyPartyLeft& acPartyLeft) noexcept
 {
     spdlog::debug("[PartyService]: Left party");
+
+    // NotifyPartyLeft is sent to the local player only after the server has
+    // already removed that player from the party. The network transition cannot
+    // be rolled back, but the local runtime repair owner must establish its
+    // durable disposition before party/campaign state is destroyed downstream.
+    auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto lifecycle = runtimeOwner.PrepareAndRelease(
+        PartyQuestRuntimeLifecycleEvent::PartyLeave);
+    if (!lifecycle.CanProceed())
+    {
+        // Reflect the already-authoritative server leave locally while retaining
+        // the runtime owner, SaveGuard and recovery journal for exact recovery.
+        spdlog::error(
+            "PartyQuest party leave retained runtime recovery state: status={} transaction={} guardHeld={}",
+            static_cast<uint32_t>(lifecycle.Status),
+            lifecycle.TransactionId,
+            lifecycle.GuardHeld);
+    }
+    else if (lifecycle.Status ==
+             PartyQuestRuntimeLifecycleFenceStatus::SafeAbortApplied)
+    {
+        spdlog::info(
+            "PartyQuest party leave durably aborted pre-mutation runtime work: transaction={}",
+            lifecycle.TransactionId);
+    }
 
     DestroyParty();
 

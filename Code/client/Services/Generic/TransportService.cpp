@@ -22,8 +22,11 @@
 #include <Messages/NotifySettingsChange.h>
 #include <Packet.hpp>
 
+#include <PartyQuestP0LiveDiagnostics.h>
 #include <ScriptExtender.h>
 #include <Services/DiscordService.h>
+#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
+#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
 // #include <imgui_internal.h>
 
@@ -162,13 +165,69 @@ void TransportService::OnConnected()
     request.PlayerTime.Month = pGameTime->GameMonth->f;
     request.PlayerTime.Day = pGameTime->GameDay->f;
 
+    PartyQuestP0LiveDiagnostics::RecordTransportState("socket-connected-auth-request");
     Send(request);
 }
 
 void TransportService::OnDisconnected(EDisconnectReason aReason)
 {
-    m_connected = false;
+    // A real network disconnect cannot be rolled back. Publish the disconnected
+    // transport bit even if the generation lock layer has failed, but never
+    // pretend runtime ownership became safe: a failed invalidation poisons the
+    // fence and PrepareAndRelease below must retain the owner fail-closed.
+    auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t generationBefore = generationFence.GetGeneration();
+    uint64_t generationAfter = 0;
+    {
+        auto generationInvalidation = generationFence.TryBeginInvalidation();
+        m_connected = false;
+        if (generationInvalidation && generationInvalidation->IsValid())
+        {
+            generationAfter = generationInvalidation->GetGeneration();
+            PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                "transport-disconnect",
+                "disconnected-state-published",
+                generationBefore,
+                generationAfter);
+        }
+        else
+        {
+            PartyQuestP0LiveDiagnostics::RecordGenerationTransition(
+                "transport-disconnect",
+                "generation-barrier-unavailable-fail-closed",
+                generationBefore,
+                0);
+            spdlog::error(
+                "PartyQuest could not acquire disconnect generation barrier; runtime generation domain is fail-closed");
+        }
+    }
 
+    auto& runtimeOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
+    const auto lifecycle = runtimeOwner.PrepareAndRelease(
+        PartyQuestRuntimeLifecycleEvent::Disconnect);
+    if (!lifecycle.CanProceed())
+    {
+        // The network disconnect has already happened and cannot be rolled back.
+        // Keep the owner/recovery evidence intact and only allow downstream
+        // services to mirror disconnected session state; they must not infer
+        // that canonical runtime repair became safe again.
+        spdlog::error(
+            "PartyQuest disconnect retained runtime recovery lock: status={} transaction={} guardHeld={} reason={}",
+            static_cast<uint32_t>(lifecycle.Status),
+            lifecycle.TransactionId,
+            lifecycle.GuardHeld,
+            static_cast<uint32_t>(aReason));
+    }
+    else if (lifecycle.Status ==
+             PartyQuestRuntimeLifecycleFenceStatus::SafeAbortApplied)
+    {
+        spdlog::info(
+            "PartyQuest disconnect durably aborted pre-mutation runtime work: transaction={} reason={}",
+            lifecycle.TransactionId,
+            static_cast<uint32_t>(aReason));
+    }
+
+    PartyQuestP0LiveDiagnostics::RecordTransportState("disconnected");
     spdlog::warn("Disconnected from server {}", aReason);
 
     m_dispatcher.trigger(DisconnectedEvent());
@@ -186,6 +245,7 @@ void TransportService::HandleUpdate(const UpdateEvent& acEvent) noexcept
 void TransportService::HandleConnected(const ConnectedEvent& acEvent) noexcept
 {
     m_localPlayerId = acEvent.PlayerId;
+    PartyQuestP0LiveDiagnostics::RecordTransportState("connected-event");
 }
 
 void TransportService::HandleDisconnected(const DisconnectedEvent& acEvent) noexcept
@@ -199,9 +259,14 @@ void TransportService::HandleAuthenticationResponse(const AuthenticationResponse
     if (acMessage.Type == AR::kAccepted)
     {
         m_connected = true;
+        PartyQuestP0LiveDiagnostics::RecordTransportState("authentication-accepted-pre-mapping");
 
         m_world.SetServerSettings(acMessage.Settings);
 
+        // UserMods is delivered before ConnectedEvent. ModSystem::HandleMods owns
+        // the process generation invalidation barrier across the complete
+        // server<->local FormID mapping rebuild, so reconnects cannot reuse a
+        // previous runtime witness even when the visible mod list is unchanged.
         m_dispatcher.trigger(acMessage.UserMods);
         m_dispatcher.trigger(acMessage.Settings);
         m_dispatcher.trigger(ConnectedEvent(acMessage.PlayerId));

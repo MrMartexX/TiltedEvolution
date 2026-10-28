@@ -173,20 +173,22 @@ void PlayerService::OnPlayerRespawnRequest(const PacketEvent<PlayerRespawnReques
             entry.BaseId = goldId;
             entry.Count = -goldToRemove;
 
-            inventoryComponent.Content.AddOrRemoveEntry(entry);
+            const bool inventoryChanged = inventoryComponent.Content.AddOrRemoveEntry(entry);
+            if (inventoryChanged)
+            {
+                NotifyInventoryChanges notifyInventoryChanges{};
+                notifyInventoryChanges.ServerId = World::ToInteger(*character);
+                notifyInventoryChanges.Item = entry;
+                notifyInventoryChanges.Drop = false;
 
-            NotifyInventoryChanges notifyInventoryChanges{};
-            notifyInventoryChanges.ServerId = World::ToInteger(*character);
-            notifyInventoryChanges.Item = entry;
-            notifyInventoryChanges.Drop = false;
-
-            // Exclude respawned player from inventory changes notification...
-            if (!GameServer::Get()->SendToPlayersInRange(notifyInventoryChanges, *character, acMessage.GetSender()))
-                spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
+                // Exclude respawned player from inventory changes notification...
+                if (!GameServer::Get()->SendToPlayersInRange(notifyInventoryChanges, *character, acMessage.GetSender()))
+                    spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
+            }
 
             // ...and instead, send NotifyPlayerRespawn so that the client can print a message.
             NotifyPlayerRespawn notifyPlayerRespawn{};
-            notifyPlayerRespawn.GoldLost = goldToRemove;
+            notifyPlayerRespawn.GoldLost = inventoryChanged ? goldToRemove : 0;
 
             acMessage.pPlayer->Send(notifyPlayerRespawn);
         }

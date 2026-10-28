@@ -16,6 +16,7 @@
 #include <Messages/NotifyLockChange.h>
 #include <Messages/ScriptAnimationRequest.h>
 #include <Messages/NotifyScriptAnimation.h>
+#include <Structs/Skyrim/PartyQuestExternalSinkLifetime.h>
 
 #include <PlayerCharacter.h>
 #include <Forms/TESObjectCELL.h>
@@ -38,7 +39,16 @@ ObjectService::ObjectService(World& aWorld, entt::dispatcher& aDispatcher, Trans
     m_scriptAnimationConnection = aDispatcher.sink<ScriptAnimationEvent>().connect<&ObjectService::OnScriptAnimationEvent>(this);
     m_scriptAnimationNotifyConnection = aDispatcher.sink<NotifyScriptAnimation>().connect<&ObjectService::OnNotifyScriptAnimation>(this);
 
-    EventDispatcherManager::Get()->activateEvent.RegisterSink(this);
+    if (auto* pEventList = EventDispatcherManager::Get())
+    {
+        m_pActivateDispatcher = &pEventList->activateEvent;
+        m_pActivateDispatcher->RegisterSink(this);
+    }
+}
+
+ObjectService::~ObjectService() noexcept
+{
+    PartyQuestReleaseExternalSink(m_pActivateDispatcher, this);
 }
 
 bool IsPlayerHome(const TESObjectCELL* pCell) noexcept

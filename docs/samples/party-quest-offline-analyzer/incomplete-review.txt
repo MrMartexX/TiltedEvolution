@@ -1,0 +1,8 @@
+Party Quest offline compatibility review
+Status: INCOMPLETE
+Analyzer version: 1
+Runtime: 1.6.1170.0
+Plugin environment: 0x0000000000000000
+Script environment: 0x0000000000000000
+Important: this report is review input only; it authorizes no quest or mutation.
+ERROR: environment snapshot is unreadable or incomplete
