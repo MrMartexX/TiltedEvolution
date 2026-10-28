@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Structs/Skyrim/PartyQuestCompatibilityAdmission.h>
 #include <Structs/Skyrim/PartyQuestCompatibilityEnvironmentCache.h>
 #include <Structs/Skyrim/PartyQuestRuntimeCompatibility.h>
 #include <Structs/Skyrim/PartyQuestRuntimeProcessRequestGate.h>
@@ -33,17 +34,18 @@ public:
 
     // Reviewed identity of the current narrow QuestSnapshot-only native adapter
     // contract. This is deterministic contract identity, not a secret.
-    static constexpr uint64_t NativeAdapterFingerprint =
-        0x5354525153544147ull; // "STRQSTAG"
+    static constexpr uint64_t NativeAdapterFingerprint = 0x5354525153544147ull; // "STRQSTAG"
 
-    [[nodiscard]] static PartyQuestRuntimeCompatibilityManifest
-    BuildReviewedManifest() noexcept;
+    [[nodiscard]] static PartyQuestRuntimeCompatibilityManifest BuildReviewedManifest() noexcept;
 
     [[nodiscard]] static bool HasReviewedProfile(const GameId& acQuestId) noexcept;
 
+    [[nodiscard]] static PartyQuestReviewedTransitionManifest BuildReviewedTransitionManifest() noexcept;
+
+    [[nodiscard]] static const PartyQuestReviewedTransition* FindReviewedTransition(const PartyQuestTransitionIdentity& acIdentity) noexcept;
+
     /** Capture paths/order only; the caller may hash this snapshot off-thread. */
-    [[nodiscard]] static std::optional<PartyQuestCompatibilityEnvironmentSnapshot>
-    CaptureEnvironmentSnapshot() noexcept;
+    [[nodiscard]] static std::optional<PartyQuestCompatibilityEnvironmentSnapshot> CaptureEnvironmentSnapshot() noexcept;
 
     /**
      * Collect the same live compatibility fingerprints used by production
@@ -54,17 +56,10 @@ public:
      * add such an entry. Callers must never reinterpret the returned facts as a
      * PartyQuestRuntimeCanonicalAuthorization or process planning request.
      */
-    [[nodiscard]] static std::optional<PartyQuestRuntimeCompatibilityFacts>
-    ObserveDiagnostic(
-        TESQuest* apQuest,
-        const ModSystem& acModSystem,
-        const GameId& acExpectedQuestId,
-        const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept;
+    [[nodiscard]] static std::optional<PartyQuestRuntimeCompatibilityFacts> ObserveDiagnostic(
+        TESQuest* apQuest, const ModSystem& acModSystem, const GameId& acExpectedQuestId, const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept;
 
-    [[nodiscard]] static std::optional<PartyQuestRuntimeProcessPlanningEvidence>
-    ObserveFresh(
-        TESQuest* apQuest,
-        const ModSystem& acModSystem,
-        const PartyQuestRuntimeCanonicalCandidate& acCandidate,
+    [[nodiscard]] static std::optional<PartyQuestRuntimeProcessPlanningEvidence> ObserveFresh(
+        TESQuest* apQuest, const ModSystem& acModSystem, const PartyQuestRuntimeCanonicalCandidate& acCandidate,
         const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept;
 };

@@ -2,6 +2,8 @@
 
 #include <PartyQuestSkyrimRuntimeCompatibilityEvidence.h>
 
+#include <Structs/Skyrim/PartyQuestReviewedQuestProfiles.h>
+
 #include <Services/QuestSnapshotCollector.h>
 #include <Systems/ModSystem.h>
 
@@ -30,8 +32,7 @@ public:
         }
     }
 
-    template <class T>
-    void MixPod(const T& acValue) noexcept
+    template <class T> void MixPod(const T& acValue) noexcept
     {
         static_assert(std::is_trivially_copyable_v<T>);
         Mix(&acValue, sizeof(acValue));
@@ -39,24 +40,14 @@ public:
 
     void MixString(std::string aValue) noexcept
     {
-        std::transform(
-            aValue.begin(),
-            aValue.end(),
-            aValue.begin(),
-            [](unsigned char aCharacter)
-            {
-                return static_cast<char>(std::tolower(aCharacter));
-            });
+        std::transform(aValue.begin(), aValue.end(), aValue.begin(), [](unsigned char aCharacter) { return static_cast<char>(std::tolower(aCharacter)); });
         const uint64_t size = static_cast<uint64_t>(aValue.size());
         MixPod(size);
         if (!aValue.empty())
             Mix(aValue.data(), aValue.size());
     }
 
-    [[nodiscard]] uint64_t Value() const noexcept
-    {
-        return m_value == 0 ? 1 : m_value;
-    }
+    [[nodiscard]] uint64_t Value() const noexcept { return m_value == 0 ? 1 : m_value; }
 
 private:
     uint64_t m_value{14695981039346656037ull};
@@ -68,15 +59,11 @@ std::optional<std::filesystem::path> GetSkyrimDataDirectory() noexcept
     try
     {
         std::array<wchar_t, 32768> path{};
-        const DWORD length = GetModuleFileNameW(
-            nullptr,
-            path.data(),
-            static_cast<DWORD>(path.size()));
+        const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
         if (length == 0 || length >= path.size())
             return std::nullopt;
 
-        std::filesystem::path executable(
-            std::wstring_view(path.data(), static_cast<size_t>(length)));
+        std::filesystem::path executable(std::wstring_view(path.data(), static_cast<size_t>(length)));
         const auto data = executable.parent_path() / L"Data";
         std::error_code ec;
         if (!std::filesystem::is_directory(data, ec) || ec)
@@ -92,10 +79,7 @@ std::optional<std::filesystem::path> GetSkyrimDataDirectory() noexcept
 #endif
 }
 
-uint64_t HashResolvedQuestTopology(
-    TESQuest* apQuest,
-    const ModSystem& acModSystem,
-    const GameId& acExpectedQuestId) noexcept
+uint64_t HashResolvedQuestTopology(TESQuest* apQuest, const ModSystem& acModSystem, const GameId& acExpectedQuestId) noexcept
 {
     if (!apQuest || !acExpectedQuestId)
         return 0;
@@ -103,8 +87,7 @@ uint64_t HashResolvedQuestTopology(
     try
     {
         GameId observedQuestId;
-        if (!acModSystem.GetServerModId(apQuest->formID, observedQuestId) ||
-            observedQuestId != acExpectedQuestId)
+        if (!acModSystem.GetServerModId(apQuest->formID, observedQuestId) || observedQuestId != acExpectedQuestId)
         {
             return 0;
         }
@@ -120,12 +103,7 @@ uint64_t HashResolvedQuestTopology(
         // Exclude runtime state flags (Enabled/Completed/Failed/StageWait/Active).
         // The remaining bits describe static quest behavior relevant to adapter
         // compatibility rather than the current playthrough state.
-        constexpr uint16_t kRuntimeFlags =
-            TESQuest::Flags::Enabled |
-            TESQuest::Flags::Completed |
-            TESQuest::Flags::Failed |
-            TESQuest::Flags::StageWait |
-            TESQuest::Flags::Active;
+        constexpr uint16_t kRuntimeFlags = TESQuest::Flags::Enabled | TESQuest::Flags::Completed | TESQuest::Flags::Failed | TESQuest::Flags::StageWait | TESQuest::Flags::Active;
         const uint16_t staticFlags = apQuest->flags & ~kRuntimeFlags;
         hash.MixPod(staticFlags);
         hash.MixString(apQuest->idName.AsAscii());
@@ -139,8 +117,7 @@ uint64_t HashResolvedQuestTopology(
             hash.MixPod(pStage->stageIndex);
         }
 
-        const uint64_t objectiveCount =
-            static_cast<uint64_t>(apQuest->objectives.Size());
+        const uint64_t objectiveCount = static_cast<uint64_t>(apQuest->objectives.Size());
         hash.MixPod(objectiveCount);
         for (auto* pObjective : apQuest->objectives)
         {
@@ -189,9 +166,7 @@ uint64_t HashResolvedQuestTopology(
     }
 }
 
-uint64_t CombineWinningOverrideFingerprint(
-    uint64_t aResolvedRecordFingerprint,
-    uint64_t aPluginEnvironmentFingerprint) noexcept
+uint64_t CombineWinningOverrideFingerprint(uint64_t aResolvedRecordFingerprint, uint64_t aPluginEnvironmentFingerprint) noexcept
 {
     if (aResolvedRecordFingerprint == 0 || aPluginEnvironmentFingerprint == 0)
         return 0;
@@ -204,39 +179,29 @@ uint64_t CombineWinningOverrideFingerprint(
     return hash.Value();
 }
 
-// No production quest is authorized merely because its local observations are
-// internally self-consistent. Entries are added here only after a concrete
-// quest/version profile has been reviewed against a reference runtime and the
-// exact expected fingerprints have been recorded in source review.
-constexpr std::array<PartyQuestRuntimeCompatibilityRequirement, 0>
-    kReviewedProfiles{};
 } // namespace
 
-PartyQuestRuntimeCompatibilityManifest
-PartyQuestSkyrimRuntimeCompatibilityEvidence::BuildReviewedManifest() noexcept
+PartyQuestRuntimeCompatibilityManifest PartyQuestSkyrimRuntimeCompatibilityEvidence::BuildReviewedManifest() noexcept
 {
-    PartyQuestRuntimeCompatibilityManifest manifest;
-    for (const auto& profile : kReviewedProfiles)
-    {
-        if (!manifest.AddRequirement(profile))
-            return {};
-    }
-    return manifest;
+    return PartyQuestReviewedQuestProfiles::BuildReviewedManifest();
 }
 
-bool PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(
-    const GameId& acQuestId) noexcept
+bool PartyQuestSkyrimRuntimeCompatibilityEvidence::HasReviewedProfile(const GameId& acQuestId) noexcept
 {
-    for (const auto& profile : kReviewedProfiles)
-    {
-        if (profile.QuestId == acQuestId)
-            return true;
-    }
-    return false;
+    return PartyQuestReviewedQuestProfiles::HasReviewedProfile(acQuestId);
 }
 
-std::optional<PartyQuestCompatibilityEnvironmentSnapshot>
-PartyQuestSkyrimRuntimeCompatibilityEvidence::CaptureEnvironmentSnapshot() noexcept
+PartyQuestReviewedTransitionManifest PartyQuestSkyrimRuntimeCompatibilityEvidence::BuildReviewedTransitionManifest() noexcept
+{
+    return PartyQuestReviewedQuestProfiles::BuildReviewedTransitionManifest();
+}
+
+const PartyQuestReviewedTransition* PartyQuestSkyrimRuntimeCompatibilityEvidence::FindReviewedTransition(const PartyQuestTransitionIdentity& acIdentity) noexcept
+{
+    return PartyQuestReviewedQuestProfiles::FindReviewedTransition(acIdentity);
+}
+
+std::optional<PartyQuestCompatibilityEnvironmentSnapshot> PartyQuestSkyrimRuntimeCompatibilityEvidence::CaptureEnvironmentSnapshot() noexcept
 {
     try
     {
@@ -254,8 +219,7 @@ PartyQuestSkyrimRuntimeCompatibilityEvidence::CaptureEnvironmentSnapshot() noexc
             std::string filename(pMod->filename);
             if (filename.empty())
                 return std::nullopt;
-            snapshot.OrderedPlugins.push_back(
-                {std::filesystem::path(std::move(filename)), pMod->IsLite()});
+            snapshot.OrderedPlugins.push_back({std::filesystem::path(std::move(filename)), pMod->IsLite()});
         }
         if (snapshot.OrderedPlugins.empty())
             return std::nullopt;
@@ -267,23 +231,14 @@ PartyQuestSkyrimRuntimeCompatibilityEvidence::CaptureEnvironmentSnapshot() noexc
     }
 }
 
-std::optional<PartyQuestRuntimeCompatibilityFacts>
-PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
-    TESQuest* apQuest,
-    const ModSystem& acModSystem,
-    const GameId& acExpectedQuestId,
-    const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept
+std::optional<PartyQuestRuntimeCompatibilityFacts> PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
+    TESQuest* apQuest, const ModSystem& acModSystem, const GameId& acExpectedQuestId, const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept
 {
     if (!apQuest || !acExpectedQuestId || !acEnvironment.IsValid())
         return std::nullopt;
 
-    const uint64_t resolvedRecord = HashResolvedQuestTopology(
-        apQuest,
-        acModSystem,
-        acExpectedQuestId);
-    const uint64_t winningOverride = CombineWinningOverrideFingerprint(
-        resolvedRecord,
-        acEnvironment.PluginEnvironment);
+    const uint64_t resolvedRecord = HashResolvedQuestTopology(apQuest, acModSystem, acExpectedQuestId);
+    const uint64_t winningOverride = CombineWinningOverrideFingerprint(resolvedRecord, acEnvironment.PluginEnvironment);
     if (resolvedRecord == 0 || winningOverride == 0)
         return std::nullopt;
 
@@ -293,31 +248,21 @@ PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveDiagnostic(
     facts.WinningOverrideFingerprint = winningOverride;
     facts.ScriptFingerprint = acEnvironment.ScriptEnvironment;
     facts.NativeAdapterFingerprint = NativeAdapterFingerprint;
-    facts.AdapterMutationComponents =
-        PartyQuestVerificationComponent::QuestSnapshot;
+    facts.AdapterMutationComponents = PartyQuestVerificationComponent::QuestSnapshot;
     return facts;
 }
 
-std::optional<PartyQuestRuntimeProcessPlanningEvidence>
-PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveFresh(
-    TESQuest* apQuest,
-    const ModSystem& acModSystem,
-    const PartyQuestRuntimeCanonicalCandidate& acCandidate,
+std::optional<PartyQuestRuntimeProcessPlanningEvidence> PartyQuestSkyrimRuntimeCompatibilityEvidence::ObserveFresh(
+    TESQuest* apQuest, const ModSystem& acModSystem, const PartyQuestRuntimeCanonicalCandidate& acCandidate,
     const PartyQuestCompatibilityEnvironmentFingerprints& acEnvironment) noexcept
 {
-    if (!apQuest || !acCandidate.CampaignId.IsValid() ||
-        acCandidate.TransactionId == 0 || acCandidate.WorldRevision == 0 ||
-        !acCandidate.CanonicalSnapshot.QuestId ||
+    if (!apQuest || !acCandidate.CampaignId.IsValid() || acCandidate.TransactionId == 0 || acCandidate.WorldRevision == 0 || !acCandidate.CanonicalSnapshot.QuestId ||
         !HasReviewedProfile(acCandidate.CanonicalSnapshot.QuestId))
     {
         return std::nullopt;
     }
 
-    const auto compatibility = ObserveDiagnostic(
-        apQuest,
-        acModSystem,
-        acCandidate.CanonicalSnapshot.QuestId,
-        acEnvironment);
+    const auto compatibility = ObserveDiagnostic(apQuest, acModSystem, acCandidate.CanonicalSnapshot.QuestId, acEnvironment);
     if (!compatibility)
         return std::nullopt;
 

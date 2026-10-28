@@ -78,6 +78,8 @@ struct PartyQuestTransitionEvidence
     bool RequiresQuiescence{};
     bool PostconditionsKnown{};
     PartyQuestRecoveryClass RecoveryClass{PartyQuestRecoveryClass::Unknown};
+
+    bool operator==(const PartyQuestTransitionEvidence&) const noexcept = default;
 };
 
 struct PartyQuestReviewedTransition
@@ -95,6 +97,8 @@ struct PartyQuestReviewedTransition
     bool RequiresReadiness{};
     bool RequiresQuiescence{};
     PartyQuestRecoveryClass RecoveryClass{PartyQuestRecoveryClass::Unknown};
+
+    bool operator==(const PartyQuestReviewedTransition&) const noexcept = default;
 };
 
 struct PartyQuestTransitionAdmissionDecision
@@ -108,9 +112,7 @@ struct PartyQuestTransitionAdmissionDecision
 
     [[nodiscard]] bool IsEligible() const noexcept
     {
-        return Status == PartyQuestTransitionAdmissionStatus::Eligible &&
-            StructuralEligibility && EnvironmentCompatible &&
-            !AuthorizationGranted && TransitionFingerprint != 0;
+        return Status == PartyQuestTransitionAdmissionStatus::Eligible && StructuralEligibility && EnvironmentCompatible && !AuthorizationGranted && TransitionFingerprint != 0;
     }
 };
 
@@ -118,19 +120,14 @@ class PartyQuestCompatibilityAdmissionPolicy final
 {
 public:
     [[nodiscard]] static PartyQuestTransitionAdmissionDecision Evaluate(
-        const PartyQuestReviewedTransition& acReviewed,
-        const PartyQuestTransitionEvidence& acEvidence,
-        uint64_t aLastAcceptedRevision = 0,
-        uint64_t aLastOperationId = 0) noexcept;
+        const PartyQuestReviewedTransition& acReviewed, const PartyQuestTransitionEvidence& acEvidence, uint64_t aLastAcceptedRevision = 0, uint64_t aLastOperationId = 0) noexcept;
 };
 
 class PartyQuestReviewedTransitionManifest final
 {
 public:
-    [[nodiscard]] bool Publish(
-        std::span<const PartyQuestReviewedTransition> acReviewed) noexcept;
-    [[nodiscard]] const PartyQuestReviewedTransition* Find(
-        const PartyQuestTransitionIdentity& acIdentity) const noexcept;
+    [[nodiscard]] bool Publish(std::span<const PartyQuestReviewedTransition> acReviewed) noexcept;
+    [[nodiscard]] const PartyQuestReviewedTransition* Find(const PartyQuestTransitionIdentity& acIdentity) const noexcept;
     [[nodiscard]] size_t Size() const noexcept { return m_entries.size(); }
 
 private:
@@ -138,6 +135,5 @@ private:
     {
         size_t operator()(const PartyQuestTransitionIdentity& acIdentity) const noexcept;
     };
-    std::unordered_map<PartyQuestTransitionIdentity,
-        PartyQuestReviewedTransition, KeyHash> m_entries;
+    std::unordered_map<PartyQuestTransitionIdentity, PartyQuestReviewedTransition, KeyHash> m_entries;
 };

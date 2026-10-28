@@ -6,10 +6,17 @@ Last verified: **2026-10-27**
 
 ## Latest accepted integration & local Task 08/09 progress
 
-- **Integration baseline (eature/equal-party-quest-poc)**: 3dd8b6c1c85c636d4ab78faf8b7510fe6be6abdf (integrates Task 10 production dry-run pipeline through 3dd8b6c1).
-- **Active local Task 11 stack (ih/task11-divergent-save-reconciliation)**:
-  - Implements pure deterministic reconciliation planner PartyQuestReconciliationPlanner classifying relationship between canonical and independent local saves.
-  - Implements explicit deterministic classifications (ExactEquivalent, LocallyBehindReviewedEdge, LocallyAheadCompatible, DivergentBranchOrState, MissingOrNotStartedOrStopped, EnvironmentMismatch, InsufficientOrUnstableObservation, RecoveryRequired).
+- **Integration baseline (`feature/equal-party-quest-poc`)**: `d840f4a0a789a77ef8627e2689ef062e74da05df` (integrates Task 11 divergent save reconciliation through `d840f4a0`).
+- **Active local Task 12 stack (`aih/task12-reviewed-quest-profiles`)**:
+  - Populates `PartyQuestReviewedQuestProfiles` and `PartyQuestSkyrimRuntimeCompatibilityEvidence::BuildReviewedManifest()` / `BuildReviewedTransitionManifest()` with the first two evidence-backed reviewed vanilla quest profiles (`dunNorthwatchKeepQST` FormID `0x000C07C1` stages `[0, 100]` and `dunKarthspireRedoubtQST` FormID `0x000357E5` stages `[10, 100]`).
+  - Commits offline analyzer output in `docs/equal-party-quest-sync/reviewed-profiles/production-candidates.json` and `production-candidates.txt` generated from the reference 1.6.1170 environment proving zero aliases, zero scenes, zero fragments, zero created references, and zero side effects.
+  - Enforces all-or-nothing publication atomicity and strict fail-closed validation under mismatched load order, plugin/script environments, or unreviewed adjacent edges.
+  - Fixes MSVC `PartyQuestCompatibilityEnvironmentCache` loose script directory existence check (`std::errc::no_such_file_or_directory`).
+  - Implements 13 comprehensive Catch2 test cases in `Code/tests/party_quest_reviewed_quest_profiles.cpp`.
+  - Native mutation (`TESQuest::SetStage`) remains completely disabled.
+- **Active local Task 11 stack (`aih/task11-divergent-save-reconciliation`)**:
+  - Implements pure deterministic reconciliation planner `PartyQuestReconciliationPlanner` classifying relationship between canonical and independent local saves.
+  - Implements explicit deterministic classifications (`ExactEquivalent`, `LocallyBehindReviewedEdge`, `LocallyAheadCompatible`, `DivergentBranchOrState`, `MissingOrNotStartedOrStopped`, `EnvironmentMismatch`, `InsufficientOrUnstableObservation`, `RecoveryRequired`).
   - Restricts candidate production strictly to reviewed single-edge transitions without stage synthesis, reversals, or fragment skipping, producing immutable candidates for the dry-run pipeline with zero native mutation.
 - **Active local Task 10 stack (`aih/task10-production-dry-run-pipeline`)**:
   - Connects the client canonical update pipeline end-to-end in strict dry-run mode without invoking native mutation (`TESQuest::SetStage` remains uncalled).

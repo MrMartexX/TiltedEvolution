@@ -22,8 +22,7 @@ public:
         }
     }
 
-    template <class T>
-    void MixPod(const T& acValue) noexcept
+    template <class T> void MixPod(const T& acValue) noexcept
     {
         static_assert(std::is_trivially_copyable_v<T>);
         Mix(&acValue, sizeof(acValue));
@@ -31,21 +30,14 @@ public:
 
     void MixString(std::string aValue) noexcept
     {
-        std::transform(aValue.begin(), aValue.end(), aValue.begin(),
-            [](unsigned char aCharacter)
-            {
-                return static_cast<char>(std::tolower(aCharacter));
-            });
+        std::transform(aValue.begin(), aValue.end(), aValue.begin(), [](unsigned char aCharacter) { return static_cast<char>(std::tolower(aCharacter)); });
         const uint64_t size = static_cast<uint64_t>(aValue.size());
         MixPod(size);
         if (!aValue.empty())
             Mix(aValue.data(), aValue.size());
     }
 
-    [[nodiscard]] uint64_t Value() const noexcept
-    {
-        return m_value == 0 ? 1 : m_value;
-    }
+    [[nodiscard]] uint64_t Value() const noexcept { return m_value == 0 ? 1 : m_value; }
 
 private:
     uint64_t m_value{14695981039346656037ull};
@@ -63,10 +55,7 @@ bool IsContainedRelativePath(const std::filesystem::path& acPath) noexcept
     return true;
 }
 
-bool MixFile(
-    CompatibilityHash& aHash,
-    const std::filesystem::path& acPath,
-    std::stop_token aStopToken) noexcept
+bool MixFile(CompatibilityHash& aHash, const std::filesystem::path& acPath, std::stop_token aStopToken) noexcept
 {
     try
     {
@@ -100,9 +89,7 @@ bool MixFile(
     }
 }
 
-uint64_t HashOrderedPlugins(
-    const PartyQuestCompatibilityEnvironmentSnapshot& acSnapshot,
-    std::stop_token aStopToken) noexcept
+uint64_t HashOrderedPlugins(const PartyQuestCompatibilityEnvironmentSnapshot& acSnapshot, std::stop_token aStopToken) noexcept
 {
     try
     {
@@ -113,8 +100,7 @@ uint64_t HashOrderedPlugins(
         uint64_t count = 0;
         for (const auto& plugin : acSnapshot.OrderedPlugins)
         {
-            if (aStopToken.stop_requested() ||
-                !IsContainedRelativePath(plugin.RelativePath))
+            if (aStopToken.stop_requested() || !IsContainedRelativePath(plugin.RelativePath))
             {
                 return 0;
             }
@@ -123,10 +109,7 @@ uint64_t HashOrderedPlugins(
             hash.MixPod(count);
             hash.MixString(plugin.RelativePath.generic_string());
             hash.MixPod(plugin.IsLite);
-            if (!MixFile(
-                    hash,
-                    acSnapshot.DataDirectory / plugin.RelativePath,
-                    aStopToken))
+            if (!MixFile(hash, acSnapshot.DataDirectory / plugin.RelativePath, aStopToken))
             {
                 return 0;
             }
@@ -143,28 +126,20 @@ uint64_t HashOrderedPlugins(
     }
 }
 
-uint64_t HashScripts(
-    const std::filesystem::path& acDataDirectory,
-    std::stop_token aStopToken) noexcept
+uint64_t HashScripts(const std::filesystem::path& acDataDirectory, std::stop_token aStopToken) noexcept
 {
     try
     {
         std::vector<std::filesystem::path> files;
         std::error_code ec;
-        for (std::filesystem::directory_iterator it(acDataDirectory, ec), end;
-             !ec && it != end;
-             it.increment(ec))
+        for (std::filesystem::directory_iterator it(acDataDirectory, ec), end; !ec && it != end; it.increment(ec))
         {
             if (aStopToken.stop_requested())
                 return 0;
             if (!it->is_regular_file(ec) || ec)
                 continue;
             auto extension = it->path().extension().string();
-            std::transform(extension.begin(), extension.end(), extension.begin(),
-                [](unsigned char aCharacter)
-                {
-                    return static_cast<char>(std::tolower(aCharacter));
-                });
+            std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char aCharacter) { return static_cast<char>(std::tolower(aCharacter)); });
             if (extension == ".bsa")
                 files.push_back(it->path());
         }
@@ -175,51 +150,35 @@ uint64_t HashScripts(
         ec.clear();
         if (std::filesystem::is_directory(scripts, ec) && !ec)
         {
-            for (std::filesystem::recursive_directory_iterator it(
-                     scripts,
-                     std::filesystem::directory_options::skip_permission_denied,
-                     ec),
-                 end;
-                 !ec && it != end;
-                 it.increment(ec))
+            for (std::filesystem::recursive_directory_iterator it(scripts, std::filesystem::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec))
             {
                 if (aStopToken.stop_requested())
                     return 0;
                 if (!it->is_regular_file(ec) || ec)
                     continue;
                 auto extension = it->path().extension().string();
-                std::transform(extension.begin(), extension.end(), extension.begin(),
-                    [](unsigned char aCharacter)
-                    {
-                        return static_cast<char>(std::tolower(aCharacter));
-                    });
+                std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char aCharacter) { return static_cast<char>(std::tolower(aCharacter)); });
                 if (extension == ".pex")
                     files.push_back(it->path());
             }
             if (ec)
                 return 0;
         }
-        else if (ec)
+        else if (ec && ec != std::errc::no_such_file_or_directory)
         {
             return 0;
         }
 
-        std::sort(files.begin(), files.end(), [](const auto& acLeft, const auto& acRight)
-        {
-            auto left = acLeft.generic_string();
-            auto right = acRight.generic_string();
-            std::transform(left.begin(), left.end(), left.begin(),
-                [](unsigned char aCharacter)
-                {
-                    return static_cast<char>(std::tolower(aCharacter));
-                });
-            std::transform(right.begin(), right.end(), right.begin(),
-                [](unsigned char aCharacter)
-                {
-                    return static_cast<char>(std::tolower(aCharacter));
-                });
-            return left < right;
-        });
+        std::sort(
+            files.begin(), files.end(),
+            [](const auto& acLeft, const auto& acRight)
+            {
+                auto left = acLeft.generic_string();
+                auto right = acRight.generic_string();
+                std::transform(left.begin(), left.end(), left.begin(), [](unsigned char aCharacter) { return static_cast<char>(std::tolower(aCharacter)); });
+                std::transform(right.begin(), right.end(), right.begin(), [](unsigned char aCharacter) { return static_cast<char>(std::tolower(aCharacter)); });
+                return left < right;
+            });
 
         CompatibilityHash hash;
         constexpr uint64_t domain = 0x534352495054454Eull; // "SCRIPTEN"
@@ -231,8 +190,7 @@ uint64_t HashScripts(
             if (aStopToken.stop_requested())
                 return 0;
             std::error_code relativeEc;
-            const auto relative = std::filesystem::relative(
-                file, acDataDirectory, relativeEc);
+            const auto relative = std::filesystem::relative(file, acDataDirectory, relativeEc);
             if (relativeEc || !IsContainedRelativePath(relative))
                 return 0;
             hash.MixString(relative.generic_string());
@@ -246,30 +204,23 @@ uint64_t HashScripts(
         return 0;
     }
 }
-}
+} // namespace
 
 std::optional<PartyQuestCompatibilityEnvironmentFingerprints>
-ComputePartyQuestCompatibilityEnvironmentFingerprints(
-    const PartyQuestCompatibilityEnvironmentSnapshot& acSnapshot,
-    std::stop_token aStopToken) noexcept
+ComputePartyQuestCompatibilityEnvironmentFingerprints(const PartyQuestCompatibilityEnvironmentSnapshot& acSnapshot, std::stop_token aStopToken) noexcept
 {
     try
     {
-        if (acSnapshot.DataDirectory.empty() ||
-            !acSnapshot.DataDirectory.is_absolute() ||
-            acSnapshot.OrderedPlugins.empty() || aStopToken.stop_requested())
+        if (acSnapshot.DataDirectory.empty() || !acSnapshot.DataDirectory.is_absolute() || acSnapshot.OrderedPlugins.empty() || aStopToken.stop_requested())
         {
             return std::nullopt;
         }
 
         PartyQuestCompatibilityEnvironmentFingerprints fingerprints;
-        fingerprints.PluginEnvironment =
-            HashOrderedPlugins(acSnapshot, aStopToken);
-        if (!aStopToken.stop_requested() &&
-            fingerprints.PluginEnvironment != 0)
+        fingerprints.PluginEnvironment = HashOrderedPlugins(acSnapshot, aStopToken);
+        if (!aStopToken.stop_requested() && fingerprints.PluginEnvironment != 0)
         {
-            fingerprints.ScriptEnvironment =
-                HashScripts(acSnapshot.DataDirectory, aStopToken);
+            fingerprints.ScriptEnvironment = HashScripts(acSnapshot.DataDirectory, aStopToken);
         }
         if (aStopToken.stop_requested() || !fingerprints.IsValid())
             return std::nullopt;
@@ -286,29 +237,19 @@ PartyQuestCompatibilityEnvironmentCache::~PartyQuestCompatibilityEnvironmentCach
     Stop();
 }
 
-bool PartyQuestCompatibilityEnvironmentCache::Start(
-    PartyQuestCompatibilityEnvironmentSnapshot aSnapshot) noexcept
+bool PartyQuestCompatibilityEnvironmentCache::Start(PartyQuestCompatibilityEnvironmentSnapshot aSnapshot) noexcept
 {
     try
     {
-        PartyQuestCompatibilityEnvironmentCacheStatus expected =
-            PartyQuestCompatibilityEnvironmentCacheStatus::Empty;
-        if (!m_status.compare_exchange_strong(
-                expected,
-                PartyQuestCompatibilityEnvironmentCacheStatus::Computing,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire))
+        PartyQuestCompatibilityEnvironmentCacheStatus expected = PartyQuestCompatibilityEnvironmentCacheStatus::Empty;
+        if (!m_status.compare_exchange_strong(expected, PartyQuestCompatibilityEnvironmentCacheStatus::Computing, std::memory_order_acq_rel, std::memory_order_acquire))
         {
             return false;
         }
 
-        if (aSnapshot.DataDirectory.empty() ||
-            !aSnapshot.DataDirectory.is_absolute() ||
-            aSnapshot.OrderedPlugins.empty())
+        if (aSnapshot.DataDirectory.empty() || !aSnapshot.DataDirectory.is_absolute() || aSnapshot.OrderedPlugins.empty())
         {
-            m_status.store(
-                PartyQuestCompatibilityEnvironmentCacheStatus::Failed,
-                std::memory_order_release);
+            m_status.store(PartyQuestCompatibilityEnvironmentCacheStatus::Failed, std::memory_order_release);
             return false;
         }
 
@@ -316,22 +257,16 @@ bool PartyQuestCompatibilityEnvironmentCache::Start(
             [this, snapshot = std::move(aSnapshot)](std::stop_token aStopToken)
             {
                 m_computationCount.fetch_add(1, std::memory_order_relaxed);
-                const auto fingerprints =
-                    ComputePartyQuestCompatibilityEnvironmentFingerprints(
-                        snapshot, aStopToken);
+                const auto fingerprints = ComputePartyQuestCompatibilityEnvironmentFingerprints(snapshot, aStopToken);
 
                 if (aStopToken.stop_requested())
                 {
-                    m_status.store(
-                        PartyQuestCompatibilityEnvironmentCacheStatus::Cancelled,
-                        std::memory_order_release);
+                    m_status.store(PartyQuestCompatibilityEnvironmentCacheStatus::Cancelled, std::memory_order_release);
                     return;
                 }
                 if (!fingerprints)
                 {
-                    m_status.store(
-                        PartyQuestCompatibilityEnvironmentCacheStatus::Failed,
-                        std::memory_order_release);
+                    m_status.store(PartyQuestCompatibilityEnvironmentCacheStatus::Failed, std::memory_order_release);
                     return;
                 }
 
@@ -339,17 +274,13 @@ bool PartyQuestCompatibilityEnvironmentCache::Start(
                     std::scoped_lock lock(m_mutex);
                     m_ready = *fingerprints;
                 }
-                m_status.store(
-                    PartyQuestCompatibilityEnvironmentCacheStatus::Ready,
-                    std::memory_order_release);
+                m_status.store(PartyQuestCompatibilityEnvironmentCacheStatus::Ready, std::memory_order_release);
             });
         return true;
     }
     catch (...)
     {
-        m_status.store(
-            PartyQuestCompatibilityEnvironmentCacheStatus::Failed,
-            std::memory_order_release);
+        m_status.store(PartyQuestCompatibilityEnvironmentCacheStatus::Failed, std::memory_order_release);
         return false;
     }
 }
@@ -361,23 +292,18 @@ void PartyQuestCompatibilityEnvironmentCache::Stop() noexcept
         m_worker.request_stop();
         m_worker.join();
     }
-    if (m_status.load(std::memory_order_acquire) ==
-        PartyQuestCompatibilityEnvironmentCacheStatus::Computing)
+    if (m_status.load(std::memory_order_acquire) == PartyQuestCompatibilityEnvironmentCacheStatus::Computing)
     {
-        m_status.store(
-            PartyQuestCompatibilityEnvironmentCacheStatus::Cancelled,
-            std::memory_order_release);
+        m_status.store(PartyQuestCompatibilityEnvironmentCacheStatus::Cancelled, std::memory_order_release);
     }
 }
 
-PartyQuestCompatibilityEnvironmentCacheStatus
-PartyQuestCompatibilityEnvironmentCache::GetStatus() const noexcept
+PartyQuestCompatibilityEnvironmentCacheStatus PartyQuestCompatibilityEnvironmentCache::GetStatus() const noexcept
 {
     return m_status.load(std::memory_order_acquire);
 }
 
-std::optional<PartyQuestCompatibilityEnvironmentFingerprints>
-PartyQuestCompatibilityEnvironmentCache::GetReady() const noexcept
+std::optional<PartyQuestCompatibilityEnvironmentFingerprints> PartyQuestCompatibilityEnvironmentCache::GetReady() const noexcept
 {
     if (GetStatus() != PartyQuestCompatibilityEnvironmentCacheStatus::Ready)
         return std::nullopt;
