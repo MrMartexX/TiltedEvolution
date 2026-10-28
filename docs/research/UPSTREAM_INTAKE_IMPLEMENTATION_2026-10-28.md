@@ -161,6 +161,45 @@ transitions, courier/guard behavior, two-client ownership handoff/reconnect and
 the exact native/content checks required by the approved plan. No canonical mutation
 or save repair is authorized by these tests. Integration/dev still remain unchanged.
 
+## Connected follower trade crash — 2026-10-29
+
+The user isolated the overlay symptom to the connected state: disconnected trade
+works, whereas connected trade leaves dialogue above inventory. Transferring items
+in that connected state also crashed the exact deployed 80894cbc build. Treat the
+overlay and crash as two observations; a common root cause is not yet established.
+
+At local log time 01:48:46.027–.029 the client reported item 0x13ED9 count -6 for
+player 0x14 and +6 for actor 0x1348C, followed by equipment events. At .030 thread
+2192 raised c0000005 at mapped-game RVA 0x1792B8 while reading 0x10286F.
+Register r9 was 0x10285C, r8 was 0x13. The instruction tests a presence-bit byte
+using data loaded from object offset 0x10; the caller supplies extra-data type
+0x9B (Enchantment in this source). This is consistent with an invalid extra-data
+pointer; it does not identify its writer, prove use-after-free, or implicate the
+new lock implementation specifically.
+
+WinDbg's initial launcher-module stack could not unwind the mapped game. Loading
+the exact local SkyrimSE image's unwind metadata recovered an engine call chain:
+0x1792B8 -> 0x16DD2E -> 0x223115 -> 0x92B190 -> 0x8FE7D0 -> 0x8FCC4F ->
+0x8FA4C3 -> 0xFA4520 -> 0x6D2399. No fork C++ caller appears in that recovered
+chain, which does not rule out earlier hook corruption. Referenced heap contents
+are absent from this minidump. There is no new event 2004 near this crash; the
+earlier system-wide exhaustion is not an established explanation for this one.
+
+Local evidence: D:/Codex/Artifacts/upstream-intake-2026-10-28/follower-trade-2026-10-29
+and crash-follower-trade-*-80894cbc.txt in its parent. The dump remains at
+D:/Games/Skyrim Special Edition 1.6.1170/crash_UTC_2026-10-28_23-48-46.dmp;
+it was not duplicated. No speculative native fix, broader dump collection,
+test weakening or integration update was performed. The next acceptance work is
+to classify the connected-trade failure against the exact pre-intake baseline,
+then investigate its ownership/lifetime or menu transition cause with sufficient
+native evidence. A historical report of similar dialogue symptoms is not proof
+that this crash is pre-existing. T1/T10 connected trade acceptance remains open.
+
+Separately, the server started from the MO2 junction-backed mod path rejects
+canonical protocol admission because stable-storage node validation fails. That
+fail-closed environment issue does not establish the trade-crash cause; future
+canonical diagnostics must use the prepared physical D: server directory instead.
+
 ## Required before integration
 
 1. Preserve the hosted CI acceptance and exact counts for 80894cbc above; repeat required checks if code changes.
