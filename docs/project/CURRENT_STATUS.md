@@ -2,7 +2,7 @@
 
 Status: upstream intake candidate under local validation; P0 NOT CLOSED
 
-Last verified: **2026-10-28**
+Last verified: **2026-10-29**
 
 ## Current upstream intake
 
@@ -11,7 +11,8 @@ Last verified: **2026-10-28**
 - Implementation, exact local evidence, deliberate exclusions and open gates are in the [dated intake report](../research/UPSTREAM_INTAKE_IMPLEMENTATION_2026-10-28.md). The candidate is not accepted or merged into integration/dev.
 - Exact refreshed integration baseline Windows TPTests: 287023 assertions / 1022 cases. Tested candidate code: f806ee0a6ff32e8e059402bf84e2116672550e1b. Windows 1.6.1170 and latest/1.7.104 each built all six native/test targets and passed 287356 assertions / 1037 TPTests cases; focused suite 332 assertions / 17 cases. UI built locally. Matching build stamps and x64 artifacts were checked. These are local results, not hosted CI or gameplay acceptance.
 - Additional suites: Console 6 passed, Resources 13 passed; legacy ESLoader has 7 pre-existing failures even with fixtures because its record-loading path is a stub. See the intake report for the exact scope.
-- GitHub rejected all three workflow dispatches because fork Actions are suspended due to usage scale. Linux/Windows hosted acceptance remains blocked until the fork is re-enabled.
+- Fork Actions were re-enabled. Exact candidate 80894cbc68f192277d03f67d504e13d37ba9181d passed all required hosted jobs: Linux build and diagnostics each 286380 assertions / 983 cases; Windows build for both 1.6.1170 and latest plus Windows diagnostics each 287367 assertions / 1037 cases. Actual build/test steps ran; only optional release packaging was skipped. See the dated intake report for run links and remaining live gates.
+- Live 1.6.1170: the user reports a successful subsequent save load and no immediate NPC clothing regeneration after theft. Follower trade still leaves dialogue over inventory; this was reportedly observed before intake, but baseline equivalence and root cause are not proven. This is partial live evidence, not completed T1–T10 acceptance.
 - The newer controlled SetStage route from d6a8ab20 is disconnected in this candidate according to the approved plan. Canonical native SetStage is physically absent, and research activation cannot override the production mutation gate.
 - Held quest stages, asynchronous NPC rebuilding, the zero-section SteamStub bypass and unaccepted release/arm64 publication are explicitly deferred. Native/runtime/content and multiplayer proof remain required.
 

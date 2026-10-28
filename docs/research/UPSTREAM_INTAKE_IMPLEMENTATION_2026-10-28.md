@@ -1,6 +1,6 @@
 # Upstream intake implementation — 2026-10-28
 
-Status: Local implementation; not accepted. P0 NOT CLOSED.
+Status: Candidate published; required hosted CI passed on 80894cbc; live acceptance incomplete. P0 NOT CLOSED.
 
 This candidate follows the [approved conflict resolution review](UPSTREAM_CONFLICT_RESOLUTIONS_2026-10-28.md) and its [36-region manifest](UPSTREAM_CONFLICT_RESOLUTIONS_2026-10-28.json). Historical research remains unchanged.
 
@@ -120,10 +120,51 @@ GitHub dispatch of Build Linux, Build Windows and diagnostics returned HTTP 422:
 
 No candidate CI acceptance, live Skyrim run, power-interruption test or merge into the integration/dev branches is claimed. The tested code commit itself is an isolated upstream merge candidate.
 
+## Follow-up evidence — 2026-10-29
+
+Fork Actions were re-enabled. All following runs completed successfully on exact
+80894cbc68f192277d03f67d504e13d37ba9181d; the earlier suspension above is historical.
+
+| Hosted validation | Assertions | Cases |
+|---|---:|---:|
+| [Linux full build](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40764786774) | 286380 | 983 |
+| [Windows full build, 1.6.1170](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40764792137) | 287367 | 1037 |
+| Windows full build, latest/1.7.104, same run | 287367 | 1037 |
+| [Linux diagnostics](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40764797515) | 286380 | 983 |
+| Windows diagnostics, same run | 287367 | 1037 |
+
+Actual required build/test steps executed; optional release packaging was skipped.
+Runtime-separated live Windows artifacts exist. Full logs were retained locally at
+D:/Codex/Artifacts/upstream-intake-2026-10-28/hosted-80894cbc.
+These results bind to 80894cbc, not to a later documentation-only commit.
+
+The same HEAD was rebuilt locally for 1.6.1170 and installed as a separate MO2 mod.
+Client/server build identities match. An initial high-parallelism build exhausted
+Windows commit; rebuilding with two jobs succeeded. During the first live save
+load Windows event 2004 recorded commit charge 98136285184 of limit 98149163008;
+the game and other system processes crashed. The dump shows a write access
+violation in a runtime memory-copy routine called from mapped game code. This
+supports memory exhaustion as a lead, not a proven exclusive root cause or save
+corruption diagnosis.
+
+The user subsequently reports no crash and no immediate clothing regeneration
+after theft. Follower trade still opens inventory with dialogue overlaid. The user
+reports this symptom also existed before intake; a controlled baseline comparison
+has not established equivalence. The current log records a LoadGame transition
+at 01:10:13, connection at 01:11:46 and missing server identity for dialogue actor
+0x1A6D6 at 01:17:55 (local log times). That error path exists in the baseline and
+returns before sending a dialogue request. It does not establish the UI bug's cause.
+
+Do not silently turn partial gameplay evidence into completed T1–T10 acceptance.
+Remaining evidence includes dialogue/trade regression classification, save/load/menu
+transitions, courier/guard behavior, two-client ownership handoff/reconnect and
+the exact native/content checks required by the approved plan. No canonical mutation
+or save repair is authorized by these tests. Integration/dev still remain unchanged.
+
 ## Required before integration
 
-1. Re-enable fork Actions and execute all required real Linux/Windows jobs on the final candidate.
-2. Capture exact test counts, actual client/server build steps and runtime-separated artifacts.
+1. Preserve the hosted CI acceptance and exact counts for 80894cbc above; repeat required checks if code changes.
+2. Keep runtime-separated artifacts paired with their exact source/build identity.
 3. Finish native runtime, dialogue/inventory/ownership and content/compatibility checks from T1–T10.
 4. Review final source against both merge parents and retain the exclusions above in the merge record.
 5. Only then update integration/dev and project acceptance status.
