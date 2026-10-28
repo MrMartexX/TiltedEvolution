@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <TiltedCore/Serialization.hpp>
 #include "AnimationVariables.h"
 #include "CachedString.h"
 

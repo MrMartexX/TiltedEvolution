@@ -4,181 +4,143 @@ on:
   workflow_dispatch:
   pull_request:
   push:
-    branches:
-      - master
-      - prerel
+    branches: [master]
   workflow_call:
     inputs:
       build-mode:
-        required: true
         type: string
-        default: 'releasedbg'
+        default: releasedbg
+      skyrim-version:
+        type: string
+        default: ''
       upload-build-for-next-job:
-        required: true
         type: boolean
         default: false
-    outputs:
-      str-version:
-        description: "Skyrim Together version string"
-        value: ${{ jobs.build.outputs.version }}
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+env:
+  BUILD_MODE: ${{ inputs.build-mode || 'releasedbg' }}
 
 jobs:
   build:
+    runs-on: windows-2022
+    timeout-minutes: 60
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-2022]
         arch: [x64]
-
-    runs-on: ${{ matrix.os }}
-    if: "!contains(github.event.head_commit.message, 'ci skip')"
-
-    outputs:
-      version: ${{ steps.output-version.outputs.version }}
-
+        skyrim-version: ${{ fromJSON(inputs.skyrim-version && format('["{0}"]', inputs.skyrim-version) || '["1.6.1170","latest"]') }}
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ matrix.skyrim-version }}-${{ inputs.build-mode || 'releasedbg' }}-windows
+      cancel-in-progress: true
+    defaults:
+      run:
+        shell: bash
+    env:
+      SKYRIM_VERSION: ${{ matrix.skyrim-version }}
     steps:
       - uses: actions/checkout@v7
         with:
-          # We need full history in order to create a version string (BuildInfo.h)
-          # and to classify the PR diff without a second checkout.
           fetch-depth: 0
-
-      - name: Classify validation scope
-        id: scope
-        shell: pwsh
-        run: |
-          $needsFull = ("${{ github.event_name }}" -ne "pull_request") -or ("${{ github.event.action }}" -ne "synchronize") -or [string]::IsNullOrWhiteSpace("${{ github.event.before }}") -or [string]::IsNullOrWhiteSpace("${{ github.event.after }}")
-          if ($needsFull) {
-            "full=true" >> $env:GITHUB_OUTPUT
-            Write-Host "Full validation: non-synchronize event or missing push range."
-            exit 0
-          }
-
-          $before = "${{ github.event.before }}"
-          $after = "${{ github.event.after }}"
-          $files = @(git diff --name-only $before $after)
-          $isolated = $files.Count -gt 0
-
-          foreach ($file in $files) {
-            $isPartyQuest = ($file -match '^Code/encoding/Structs/Skyrim/PartyQuest') -or ($file -match '^Code/tests/party_quest_')
-            if (-not $isPartyQuest) {
-              $isolated = $false
-              break
-            }
-          }
-
-          $full = (-not $isolated).ToString().ToLowerInvariant()
-          "full=$full" >> $env:GITHUB_OUTPUT
-          Write-Host "PartyQuest-only pushed range: $isolated"
-
-      - name: Checkout master on tag push
-        if: github.ref_type == 'tag'
-        # Checkout only if the tag was pushed to master
-        run: (git rev-parse HEAD) -eq (git rev-parse origin/master) -and (git checkout master)
-
       - name: Checkout submodules
-        if: steps.scope.outputs.full == 'true'
         run: |
           git submodule sync --recursive
-          git submodule update --init --force --recursive --depth=1
-
-      - name: Cache xmake dependencies
-        if: steps.scope.outputs.full == 'true'
-        uses: actions/cache@v6
+          git submodule update --init --recursive --depth=1
+      - uses: actions/cache@v6
         with:
           path: ~/AppData/Local/.xmake/packages
-          # Keep full source-built GNS packages isolated from targeted caches.
-          key: ${{ runner.os }}-xmake-full-${{ matrix.arch }}-${{ inputs.build-mode || 'releasedbg' }}-3.0.9-${{ hashFiles('**/xmake.lua') }}
-
-      # Install xmake
-      - name: Setup xmake
-        if: steps.scope.outputs.full == 'true'
-        uses: xmake-io/github-action-setup-xmake@v1
+          key: windows-full-x64-${{ env.BUILD_MODE }}-${{ matrix.skyrim-version }}-3.1.0-source-gns-${{ hashFiles('**/xmake.lua') }}
+      - uses: xmake-io/github-action-setup-xmake@v1
         with:
-          xmake-version: 3.0.9
-          actions-cache-folder: '.xmake-cache' # This doesn't cache dependencies, only xmake itself
-          actions-cache-key: ${{ matrix.os }}
-
-      - name: Configure xmake and install dependencies
-        if: steps.scope.outputs.full == 'true'
-        run: xmake config --arch=${{ matrix.arch }} --mode=${{ inputs.build-mode || 'releasedbg' }} --yes -vD
-
-      # Build the client
-      - name: Build with xmake
-        if: steps.scope.outputs.full == 'true'
+          xmake-version: '3.1.0'
+      - name: Configure exact runtime
         run: |
-          xmake -y
-          echo "STR_BUILD_DIR=build/windows/${{ matrix.arch }}/${{ inputs.build-mode || 'releasedbg' }}/" >> $env:GITHUB_ENV
-
-      # Create distrib
-      - name: Output distrib binaries via xmake
-        if: steps.scope.outputs.full == 'true'
+          xmake config --plat=windows --arch=x64 --mode="$BUILD_MODE" --skyrim_version="$SKYRIM_VERSION" --builddir="build/$SKYRIM_VERSION" --yes -vD
+          echo "STR_BUILD_DIR=build/$SKYRIM_VERSION/windows/x64/$BUILD_MODE" >> "$GITHUB_ENV"
+      - name: Build all product and test targets
+        run: xmake -y
+      - name: Run complete TPTests with permanent summary
+        shell: pwsh
+        run: |
+          $testTemp = Join-Path $env:RUNNER_TEMP "tpq"
+          New-Item -ItemType Directory -Force -Path $testTemp | Out-Null
+          $env:TEMP = $testTemp
+          $env:TMP = $testTemp
+          xmake run TPTests *> windows-tptests.log
+          $testStatus = $LASTEXITCODE
+          Get-Content windows-tptests.log | Write-Host
+          exit $testStatus
+      - name: Install runtime files
         run: |
           xmake install -o distrib
-          cp -Force -Recurse distrib/bin/* ${{ env.STR_BUILD_DIR }}
-
+          cp -rf distrib/bin/* "$STR_BUILD_DIR/"
+      - name: Generate server configuration
+        run: |
+          "$STR_BUILD_DIR/SkyrimTogetherServer.exe" --generate-config "$STR_BUILD_DIR/config/STServer.ini"
+          cat "$STR_BUILD_DIR/config/STServer.ini"
       - name: Stage SKSE lineage bridge
-        if: steps.scope.outputs.full == 'true'
         shell: pwsh
         run: |
           $plugin = Join-Path $env:STR_BUILD_DIR "SkyrimTogetherLineageBridge.dll"
-          $pluginDir = "GameFiles/Skyrim/SKSE/Plugins"
           if (-not (Test-Path -LiteralPath $plugin -PathType Leaf)) {
-            throw "Missing built SKSE lineage bridge: $plugin"
+            throw "Missing SKSE lineage bridge: $plugin"
           }
-
+          $pluginDir = "GameFiles/Skyrim/SKSE/Plugins"
           New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
-          Move-Item -LiteralPath $plugin -Destination (Join-Path $pluginDir "SkyrimTogetherLineageBridge.dll") -Force
-
-          if (-not (Test-Path -LiteralPath (Join-Path $pluginDir "SkyrimTogetherLineageBridge.dll") -PathType Leaf)) {
-            throw "Failed to stage SKSE lineage bridge in Data-relative plugin layout"
-          }
-
-      # Building the Together UI
-      - name: Setup pnpm
-        if: steps.scope.outputs.full == 'true'
-        uses: pnpm/action-setup@v6
+          Copy-Item -LiteralPath $plugin -Destination (Join-Path $pluginDir "SkyrimTogetherLineageBridge.dll") -Force
+          Remove-Item -LiteralPath $plugin
+      - uses: pnpm/action-setup@v6
         with:
           version: 9
-
-      - name: Setup Node
-        if: steps.scope.outputs.full == 'true'
-        uses: actions/setup-node@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/iron
+          cache: pnpm
           cache-dependency-path: Code/skyrim_ui/pnpm-lock.yaml
-          cache: 'pnpm'
-
-      - name: Build the UI
-        if: steps.scope.outputs.full == 'true'
+      - name: Build UI
         run: |
-          pnpm --prefix Code/skyrim_ui/ install
+          pnpm --prefix Code/skyrim_ui/ install --frozen-lockfile
           pnpm --prefix Code/skyrim_ui/ deploy:production
-          cp -r Code/skyrim_ui/dist/UI ${{ env.STR_BUILD_DIR }}
-
-      - id: output-version
-        run: echo "version=$(git describe --tags --always)" >> $env:GITHUB_OUTPUT
-
-      - name: Upload build files for the next job
-        if: ${{ inputs.upload-build-for-next-job && steps.scope.outputs.full == 'true' }}
+          cp -r Code/skyrim_ui/dist/UI "$STR_BUILD_DIR/"
+      - name: Upload candidate for isolated live validation
         uses: actions/upload-artifact@v7
         with:
-          name: internal-job-files
-          retention-days: 1
-          path: |
-            ${{ env.STR_BUILD_DIR }}
-            GameFiles/Skyrim/
-
-      - name: Upload short-lived PR live-validation build
-        if: ${{ github.event_name == 'pull_request' && steps.scope.outputs.full == 'true' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: equal-party-p0-live-windows-${{ github.sha }}
+          name: equal-party-live-windows-x64-${{ matrix.skyrim-version }}-${{ github.sha }}
           retention-days: 3
           if-no-files-found: error
           path: |
-            ${{ env.STR_BUILD_DIR }}
+            ${{ env.STR_BUILD_DIR }}/
             GameFiles/Skyrim/
+      - name: Resolve safe artifact version
+        if: inputs.upload-build-for-next-job
+        shell: pwsh
+        run: |
+          $raw = git describe --tags --always
+          if ($LASTEXITCODE -ne 0) { throw "Cannot identify artifact version" }
+          $safe = $raw -replace '[\\/:*?"<>|\r\n]', '-'
+          if ([string]::IsNullOrWhiteSpace($safe)) { $safe = "${{ github.sha }}" }
+          "ARTIFACT_VERSION=$safe" >> $env:GITHUB_ENV
+      - name: Package playable build and debug symbols
+        if: inputs.upload-build-for-next-job
+        run: |
+          mkdir -p str-build/SkyrimTogetherReborn str-pdb release-assets
+          cp -r "$STR_BUILD_DIR"/* str-build/SkyrimTogetherReborn/
+          cp -r GameFiles/Skyrim/* str-build/
+          find str-build/SkyrimTogetherReborn -maxdepth 1 -name '*.pdb' -exec cp {} str-pdb/ \;
+          rm -f str-build/SkyrimTogetherReborn/*.pdb str-build/SkyrimTogetherReborn/*.lib str-build/SkyrimTogetherReborn/*.exp str-build/SkyrimTogetherReborn/*Tests.exe
+          (cd str-build && 7z a -tzip "../release-assets/SkyrimTogether-${ARTIFACT_VERSION}-windows-x64-${SKYRIM_VERSION}.zip" .)
+          (cd str-pdb && 7z a -tzip "../release-assets/SkyrimTogether-${ARTIFACT_VERSION}-windows-x64-${SKYRIM_VERSION}-debug-symbols.zip" .)
+      - name: Upload packaged artifacts
+        if: inputs.upload-build-for-next-job
+        uses: actions/upload-artifact@v7
+        with:
+          name: SkyrimTogether-${{ env.ARTIFACT_VERSION }}-windows-x64-${{ matrix.skyrim-version }}
+          retention-days: 7
+          if-no-files-found: error
+          path: release-assets/*.zip
+      - name: Preserve test log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-tests-${{ matrix.skyrim-version }}-${{ github.sha }}
+          path: windows-tptests.log
+          retention-days: 7

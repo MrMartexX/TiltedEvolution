@@ -1,10 +1,22 @@
 # Current project status
 
-Status: consolidated integration; P0 NOT CLOSED
+Status: upstream intake candidate under local validation; P0 NOT CLOSED
 
-Last verified: **2026-10-27**
+Last verified: **2026-10-28**
 
-## Latest accepted integration & local Task 08/09 progress
+## Current upstream intake
+
+- Live integration source: d6a8ab205d3223facd30f54cc0f52d50bd1fe542; fork dev remains 9d81ef07d68e4bb2bd94fca246e798a564b7fb92.
+- Isolated working branch: codex/upstream-dev-candidate, importing reviewed upstream 25a0049a00900b8714e105f795380caf33678012 according to the [approved conflict plan](../research/UPSTREAM_CONFLICT_RESOLUTIONS_2026-10-28.md).
+- Implementation, exact local evidence, deliberate exclusions and open gates are in the [dated intake report](../research/UPSTREAM_INTAKE_IMPLEMENTATION_2026-10-28.md). The candidate is not accepted or merged into integration/dev.
+- Exact refreshed integration baseline Windows TPTests: 287023 assertions / 1022 cases. Candidate 1.6.1170 local TPTests: 287356 assertions / 1037 cases; focused intake/playback suite: 332 assertions / 17 cases. These are not hosted CI counts. Final product/configuration checks remain in progress.
+- GitHub rejected all three workflow dispatches because fork Actions are suspended due to usage scale. Linux/Windows hosted acceptance remains blocked until the fork is re-enabled.
+- The newer controlled SetStage route from d6a8ab20 is disconnected in this candidate according to the approved plan. Canonical native SetStage is physically absent, and research activation cannot override the production mutation gate.
+- Held quest stages, asynchronous NPC rebuilding, the zero-section SteamStub bypass and unaccepted release/arm64 publication are explicitly deferred. Native/runtime/content and multiplayer proof remain required.
+
+The sections below retain earlier milestone snapshots; they do not supersede this intake's current state or establish acceptance of later source commits.
+
+## Historical integration and Task 08/09 progress
 
 - **Integration baseline (`feature/equal-party-quest-poc`)**: `d840f4a0a789a77ef8627e2689ef062e74da05df` (integrates Task 11 divergent save reconciliation through `d840f4a0`).
 - **Active local Task 12 stack (`aih/task12-reviewed-quest-profiles`)**:

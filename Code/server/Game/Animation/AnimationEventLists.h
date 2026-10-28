@@ -1,8 +1,10 @@
 #pragma once
 
 #include <string_view>
+#include <TiltedCore/Stl.hpp>
 
 using TiltedPhoques::Set;
+using TiltedPhoques::Map;
 
 namespace AnimationEventLists
 {

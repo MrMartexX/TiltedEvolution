@@ -2,7 +2,6 @@
 #include <GameServer.h>
 #include <Packet.hpp>
 
-#include <Events/AdminPacketEvent.h>
 #include <Events/CharacterRemoveEvent.h>
 #include <Events/OwnershipTransferEvent.h>
 #include <Events/PacketEvent.h>
@@ -12,8 +11,6 @@
 #include <Events/UpdateEvent.h>
 #include <steam/isteamnetworkingutils.h>
 
-#include <AdminMessages/AdminSessionOpen.h>
-#include <AdminMessages/ClientAdminMessageFactory.h>
 #include <Messages/AuthenticationResponse.h>
 #include <Messages/ClientMessageFactory.h>
 #include <Messages/NotifyPlayerJoined.h>
@@ -27,26 +24,27 @@ constexpr size_t kMaxServerNameLength = 128u;
 // -- Cvars --
 Console::Setting uServerPort{"GameServer:uPort", "Which port to host the server on", 10578u};
 Console::Setting uMaxPlayerCount{"GameServer:uMaxPlayerCount", "Maximum number of players allowed on the server (going over the default of 8 is not recommended)", 8u};
-Console::Setting bPremiumTickrate{"GameServer:bPremiumMode", "Use premium tick rate", true};
+Console::Setting bPremiumTickrate{"GameServer:bPremiumMode", "Server tick rate: 60 updates per second if true, 30 if false", true};
 
 Console::StringSetting sServerName{"GameServer:sServerName", "Name that shows up in the server list", "Dedicated Together Server"};
-Console::StringSetting sAdminPassword{"GameServer:sAdminPassword", "Admin authentication password", ""};
-Console::StringSetting sPassword{"GameServer:sPassword", "Server password", ""};
+Console::StringSetting sAdminPassword{"GameServer:sAdminPassword", "Password for server admins. Joining with it gives admin rights. Leave empty to disable", ""};
+Console::StringSetting sPassword{"GameServer:sPassword", "Password players need to join the server. Leave empty to let anyone join", ""};
+Console::Setting bAnnounceServer{"LiveServices:bAnnounceServer", "Whether to list the server on the public server list", false};
 
 // Gameplay
 // TODO: to make this easier for users, use game names for difficulty instead of int
-Console::Setting uDifficulty{"Gameplay:uDifficulty", "In game difficulty (0 to 5)", 4u};
+Console::Setting uDifficulty{"Gameplay:uDifficulty", "Difficulty for all players: 0 Novice, 1 Apprentice, 2 Adept, 3 Expert, 4 Master, 5 Legendary", 4u};
 Console::Setting bEnableGreetings{"Gameplay:bEnableGreetings", "Enables NPC greetings (disabled by default since they can be spammy with dialogue sync)", false};
 Console::Setting bEnablePvp{"Gameplay:bEnablePvp", "Enables pvp", false};
 Console::Setting bSyncPlayerHomes{"Gameplay:bSyncPlayerHomes", "Sync chests and displays in player homes and other NoResetZones", false};
-Console::Setting bEnableDeathSystem{"Gameplay:bEnableDeathSystem", "Enables the custom multiplayer death system", true};
+Console::Setting bEnableDeathSystem{"Gameplay:bEnableDeathSystem", "Enables the custom multiplayer death system. Only disable it if you use another mod that replaces death", true};
 Console::Setting uTimeScale{"Gameplay:uTimeScale", "How many seconds pass ingame for every real second (0 to 1000). Changing this can make the game unstable", 20u};
 Console::Setting bSyncPlayerCalendar{"Gameplay:bSyncPlayerCalendar", "Syncs up all player calendars to be the same day, month, and year. This uses the date of the player with the furthest ahead date at connection.", false};
 Console::Setting bAutoPartyJoin{"Gameplay:bAutoPartyJoin", "Join parties automatically, as long as there is only one party in the server", true};
 // ModPolicy Stuff
-Console::Setting bEnableModCheck{"ModPolicy:bEnableModCheck", "Bypass the checking of mods on the server", false, Console::SettingsFlags::kLocked};
-Console::Setting bAllowSKSE{"ModPolicy:bAllowSKSE", "Allow clients with SKSE active to join", true, Console::SettingsFlags::kLocked};
-Console::Setting bAllowMO2{"ModPolicy:bAllowMO2", "Allow clients running Mod Organizer 2 to join", true, Console::SettingsFlags::kLocked};
+Console::Setting bEnableModCheck{"ModPolicy:bEnableModCheck", "Refuse clients whose mods do not match Data/loadorder.txt", false, Console::SettingsFlags::kLocked};
+Console::Setting bAllowSKSE{"ModPolicy:bAllowSKSE", "Allow players using SKSE to join. Applies even when bEnableModCheck is off", true, Console::SettingsFlags::kLocked};
+Console::Setting bAllowMO2{"ModPolicy:bAllowMO2", "Allow players using Mod Organizer 2 to join. Applies even when bEnableModCheck is off", true, Console::SettingsFlags::kLocked};
 
 // -- Commands --
 Console::Command<> TogglePremium(
@@ -203,6 +201,16 @@ GameServer* GameServer::Get() noexcept
     return s_pInstance;
 }
 
+bool GameServer::IsPublicServer() const noexcept
+{
+    return bAnnounceServer;
+}
+
+bool GameServer::AllowsAutoPartyJoin() const noexcept
+{
+    return bAutoPartyJoin && !IsPublicServer();
+}
+
 void GameServer::Initialize()
 {
     if (!CheckMoPo())
@@ -273,21 +281,6 @@ void GameServer::BindMessageHandlers()
         const auto pRealMessage = CastUnique<AuthenticationRequest>(std::move(apMessage));
         HandleAuthenticationRequest(aConnectionId, pRealMessage);
     };
-
-    auto adminHandlerGenerator = [this](auto& x)
-    {
-        using T = typename std::remove_reference_t<decltype(x)>::Type;
-
-        m_adminMessageHandlers[T::Opcode] = [this](UniquePtr<ClientAdminMessage>& apMessage, ConnectionId_t aConnectionId)
-        {
-            const auto pRealMessage = CastUnique<T>(std::move(apMessage));
-            m_pWorld->GetDispatcher().trigger(AdminPacketEvent<T>(pRealMessage.get(), aConnectionId));
-        };
-
-        return false;
-    };
-
-    ClientAdminMessageFactory::Visit(adminHandlerGenerator);
 }
 
 void GameServer::BindServerCommands()
@@ -563,21 +556,6 @@ void GameServer::OnConsume(const void* apData, const uint32_t aSize, const Conne
     ViewBuffer buf((uint8_t*)apData, aSize);
     Buffer::Reader reader(&buf);
 
-    // TODO: ClientAdminMessageFactory
-    /*if (m_adminSessions.contains(aConnectionId)) [[unlikely]]
-    {
-        const ClientAdminMessageFactory factory;
-        auto pMessage = factory.Extract(reader);
-        if (!pMessage)
-        {
-            spdlog::error("Couldn't parse packet from {:x}", aConnectionId);
-            return;
-        }
-
-        m_adminMessageHandlers[pMessage->GetOpcode()](pMessage, aConnectionId);
-    }
-    else
-    {*/
     const ClientMessageFactory factory;
     auto pMessage = factory.Extract(reader);
     if (!pMessage)
@@ -587,7 +565,6 @@ void GameServer::OnConsume(const void* apData, const uint32_t aSize, const Conne
     }
 
     m_messageHandlers[pMessage->GetOpcode()](pMessage, aConnectionId);
-    //}
 }
 
 void GameServer::OnConnection(const ConnectionId_t aHandle)
@@ -649,7 +626,7 @@ void GameServer::OnDisconnection(const ConnectionId_t aConnectionId, EDisconnect
     UpdateTitle();
 }
 
-void GameServer::Send(const ConnectionId_t aConnectionId, const ServerMessage& acServerMessage) const
+void GameServer::Send(const ConnectionId_t aConnectionId, const ServerMessage& acServerMessage, const TiltedPhoques::EPacketFlags aPacketFlags) const
 {
     static thread_local TiltedPhoques::ScratchAllocator s_allocator{1 << 18};
 
@@ -660,23 +637,7 @@ void GameServer::Send(const ConnectionId_t aConnectionId, const ServerMessage& a
     acServerMessage.Serialize(writer);
 
     TiltedPhoques::PacketView packet(reinterpret_cast<char*>(buffer.GetWriteData()), static_cast<uint32_t>(writer.Size()));
-    Server::Send(aConnectionId, &packet);
-
-    s_allocator.Reset();
-}
-
-void GameServer::Send(ConnectionId_t aConnectionId, const ServerAdminMessage& acServerMessage) const
-{
-    static thread_local TiltedPhoques::ScratchAllocator s_allocator{1 << 18};
-
-    Buffer buffer(1 << 20);
-    Buffer::Writer writer(&buffer);
-    writer.WriteBits(0, 8); // Skip the first byte as it is used by packet
-
-    acServerMessage.Serialize(writer);
-
-    TiltedPhoques::PacketView packet(reinterpret_cast<char*>(buffer.GetWriteData()), static_cast<uint32_t>(writer.Size()));
-    Server::Send(aConnectionId, &packet);
+    Server::Send(aConnectionId, &packet, aPacketFlags);
 
     s_allocator.Reset();
 }
@@ -997,14 +958,6 @@ void GameServer::HandleAuthenticationRequest(const ConnectionId_t aConnectionId,
 
         m_pWorld->GetDispatcher().trigger(PlayerJoinEvent(pPlayer, acRequest->WorldSpaceId, acRequest->CellId, acRequest->PlayerTime));
     }
-    /*else if (acRequest->Token == sAdminPassword.value() && !sAdminPassword.empty())
-    {
-        AdminSessionOpen response;
-        Send(aConnectionId, response);
-
-        m_adminSessions.insert(aConnectionId);
-        spdlog::warn("New admin session for {:x} '{}'", aConnectionId, remoteAddress);
-    } */
     else
     {
         spdlog::info("New player {:x} '{}' has a bad password, kicking.", aConnectionId, remoteAddress);

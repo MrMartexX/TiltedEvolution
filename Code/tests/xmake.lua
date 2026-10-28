@@ -6,6 +6,10 @@ target("TPTests")
         ".", "../encoding", "../client", "../immersive_launcher")
     add_headerfiles("**.h")
     add_files("*.cpp")
+    add_files("../client/Systems/PlaybackClock.cpp")
+    add_includedirs("../server")
+    add_files("../server/Game/Animation/ActionReplayCache.cpp")
+    add_files("../server/Game/Animation/AnimationEventLists.cpp")
     if is_plat("windows") then
         add_files(
             "TPTests.rc",

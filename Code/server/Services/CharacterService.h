@@ -8,8 +8,10 @@ struct CharacterInteriorCellChangeEvent;
 struct CharacterSpawnedEvent;
 struct World;
 struct AssignCharacterRequest;
+struct AssignCharacterResponse;
 struct CharacterSpawnRequest;
 struct ClientReferencesMoveRequest;
+struct RequestActionEvents;
 struct RequestFactionsChanges;
 struct GridCellCoords;
 struct RequestOwnershipTransfer;
@@ -23,6 +25,7 @@ struct RequestRespawn;
 struct SyncExperienceRequest;
 struct DialogueRequest;
 struct SubtitleRequest;
+struct Player;
 
 /**
  * @brief Manages player and actor state.
@@ -37,6 +40,15 @@ struct CharacterService
     static void Serialize(World& aRegistry, entt::entity aEntity, CharacterSpawnRequest* apSpawnRequest) noexcept;
 
 protected:
+    enum class OwnershipTransferReason : uint8_t
+    {
+        LeaderAssignment,
+        LeaderClaim,
+        Mount,
+        Relinquish,
+        OwnerUnavailable
+    };
+
     void OnUpdate(const UpdateEvent& acEvent) const noexcept;
     void OnCharacterExteriorCellChange(const CharacterExteriorCellChangeEvent& acEvent) const noexcept;
     void OnCharacterInteriorCellChange(const CharacterInteriorCellChangeEvent& acEvent) const noexcept;
@@ -47,6 +59,7 @@ protected:
     void OnCharacterRemoveEvent(const CharacterRemoveEvent& acEvent) const noexcept;
     void OnCharacterSpawned(const CharacterSpawnedEvent& acEvent) const noexcept;
     void OnReferencesMoveRequest(const PacketEvent<ClientReferencesMoveRequest>& acMessage) const noexcept;
+    void OnActionEventsRequest(const PacketEvent<RequestActionEvents>& acMessage) const noexcept;
     void OnFactionsChanges(const PacketEvent<RequestFactionsChanges>& acMessage) const noexcept;
     void OnMountRequest(const PacketEvent<MountRequest>& acMessage) const noexcept;
     void OnNewPackageRequest(const PacketEvent<NewPackageRequest>& acMessage) const noexcept;
@@ -56,13 +69,14 @@ protected:
     void OnSubtitleRequest(const PacketEvent<SubtitleRequest>& acMessage) const noexcept;
 
     void CreateCharacter(const PacketEvent<AssignCharacterRequest>& acMessage) const noexcept;
-    void TransferOwnership(Player* apPlayer, const uint32_t acServerId, const ActorData& acActorData) const noexcept;
+    void PopulateAssignmentResponse(entt::entity aEntity, AssignCharacterResponse& aResponse) const noexcept;
+    static const char* GetOwnershipTransferReasonName(OwnershipTransferReason aReason) noexcept;
+    bool CanClaimOwnership(Player* apPlayer, entt::entity aEntity, uint32_t aExpectedOwnershipEpoch, OwnershipTransferReason aReason) const noexcept;
+    bool TransferOwnership(Player* apPlayer, entt::entity aEntity, OwnershipTransferReason aReason, bool aResetInvalidOwners = true) const noexcept;
+    void TransferToNextOwner(entt::entity aEntity, OwnershipTransferReason aReason) const noexcept;
     ActorData BuildActorData(const entt::entity acEntity) const noexcept;
-    void ApplyActorData(const entt::entity acEntity, const ActorData& acActorData) const noexcept;
-    void BroadcastActorData(Player* apPlayer, const entt::entity acEntity, const ActorData& acActorData) const noexcept;
 
     void ProcessFactionsChanges() const noexcept;
-    void ProcessMovementChanges() const noexcept;
 
 private:
     World& m_world;
@@ -77,6 +91,7 @@ private:
     entt::scoped_connection m_removeCharacterConnection;
     entt::scoped_connection m_characterSpawnedConnection;
     entt::scoped_connection m_referenceMovementSnapshotConnection;
+    entt::scoped_connection m_actionEventsConnection;
     entt::scoped_connection m_factionsChangesConnection;
     entt::scoped_connection m_mountConnection;
     entt::scoped_connection m_newPackageConnection;

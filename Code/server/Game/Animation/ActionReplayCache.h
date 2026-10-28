@@ -1,5 +1,7 @@
 #pragma once
 
+#include <TiltedCore/Stl.hpp>
+
 #include <Structs/ActionEvent.h>
 #include <Structs/ActionReplayChain.h>
 #include <optional>

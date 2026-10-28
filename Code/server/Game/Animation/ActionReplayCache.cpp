@@ -1,4 +1,7 @@
 #include "ActionReplayCache.h"
+#include <algorithm>
+#include <array>
+#include <string_view>
 #include <Game/Animation/AnimationEventLists.h>
 #include <optional>
 

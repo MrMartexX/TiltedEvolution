@@ -16,7 +16,9 @@
 struct AnimationVariables;
 struct TESWorldSpace;
 struct TESBoundObject;
+struct TESActorBase;
 struct TESContainer;
+struct BGSScene;
 
 enum class ITEM_REMOVE_REASON
 {
@@ -78,7 +80,7 @@ struct TESObjectREFR : TESForm
     virtual void sub_47();
     virtual void sub_48();
     virtual void sub_49();
-    virtual void sub_4A();
+    virtual BGSScene* GetCurrentScene() const; // ExtraDataType::SceneData; actors only while Actor::HAS_SCENE_DATA is set
     virtual void sub_4B();
     virtual void sub_4C();
     virtual void sub_4D();
@@ -136,7 +138,7 @@ struct TESObjectREFR : TESForm
     virtual void sub_81();
     virtual void sub_82();
     virtual void sub_83();
-    virtual void SetBaseForm(TESForm* apForm);
+    virtual void SetObjectReference(TESBoundObject* apObject);
     virtual void sub_85();
     virtual void sub_86();
     virtual void sub_87();
@@ -155,13 +157,16 @@ struct TESObjectREFR : TESForm
     virtual void sub_94();
     virtual void sub_95();
     virtual void sub_96();
-    virtual struct TESObjectCELL* GetParentCell() const;
+    // The actual parent cell is the field below at offset 0x60; use GetParentCellEx() when the
+    // effective cell is needed.
+    virtual struct TESObjectCELL* GetSaveParentCell() const;
     virtual void SetParentCell(struct TESObjectCELL* apParentCell);
     virtual bool VirtIsDead(bool abNotEssential); // TODO: Use this or papyrus IsDead?
     virtual void sub_9A();
     virtual void sub_9B();
 
     void SetRotation(float aX, float aY, float aZ) noexcept;
+    void SetLeveledCreature(TESActorBase* apOriginalBase, TESActorBase* apTemplateA) noexcept;
 
     BSPointerHandle<TESObjectREFR> GetHandle() const noexcept;
     uint32_t GetCellId() const noexcept;
@@ -220,10 +225,11 @@ struct TESObjectREFR : TESForm
     TESObjectCELL* parentCell;
     void* loadedState;
     ExtraDataList extraData;
-    BSRecursiveLock refLock;
+    uint64_t unk90;
     uint16_t scale;
     uint16_t referenceFlags;
 };
 
 static_assert(sizeof(TESObjectREFR) == 0xA0);
+static_assert(offsetof(TESObjectREFR, parentCell) == 0x60);
 static_assert(offsetof(TESObjectREFR, loadedState) == 0x68);

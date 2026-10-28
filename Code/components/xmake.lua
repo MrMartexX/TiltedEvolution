@@ -8,7 +8,6 @@ function component(name)
       ".",
       "../",
       "../../", 
-      "../../../build", 
       {public = true})
     add_headerfiles("**.h")
     add_files("**.cpp")
@@ -29,7 +28,6 @@ function unittest(name)
         ".",
         "../",
         "../../", 
-        "../../../build", 
         {public = true})
       add_headerfiles(
           "**.h")

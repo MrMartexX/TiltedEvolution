@@ -22,6 +22,8 @@
 #include <Forms/TESObjectCELL.h>
 #include <Forms/TESWorldSpace.h>
 #include <Forms/BGSEncounterZone.h>
+#include <Forms/TESFaction.h>
+#include <Games/TES.h>
 
 #include <inttypes.h>
 
@@ -70,11 +72,41 @@ bool IsPlayerHome(const TESObjectCELL* pCell) noexcept
     return false;
 }
 
-bool ShouldSyncObject(const TESObjectREFR* apObject) noexcept
+// Find each loaded faction's containers for a jailed player's belongings and stolen items.
+// Do not sync them: each player's items must stay separate (#700).
+// Only compare the container pointers; never read through them.
+Set<const TESObjectREFR*> GetPlayerStashContainers() noexcept
+{
+    Set<const TESObjectREFR*> containers{};
+
+    ModManager* pModManager = ModManager::Get();
+    if (!pModManager)
+        return containers;
+
+    for (const TESFaction* pFaction : pModManager->factions)
+    {
+        if (!pFaction)
+            continue;
+
+        if (pFaction->crimeData.playerInventoryContainer)
+            containers.insert(pFaction->crimeData.playerInventoryContainer);
+
+        if (pFaction->crimeData.stolenGoodsContainer)
+            containers.insert(pFaction->crimeData.stolenGoodsContainer);
+    }
+
+    return containers;
+}
+
+bool ShouldSyncObject(const TESObjectREFR* apObject, const Set<const TESObjectREFR*>& acPlayerStashContainers) noexcept
 {
     if (!apObject)
         return false;
 
+    if (acPlayerStashContainers.contains(apObject))
+        return false;
+
+    // Quest chests that take the player's whole inventory without going through faction crime data.
     switch (apObject->formID)
     {
     case 0x39CF1: // Don't sync the chest in the "Diplomatic Immunity" quest
@@ -127,9 +159,11 @@ void ObjectService::OnCellChange(const CellChangeEvent& acEvent) noexcept
 
     AssignObjectsRequest request{};
 
+    const Set<const TESObjectREFR*> playerStashContainers = GetPlayerStashContainers();
+
     for (TESObjectREFR* pObject : objects)
     {
-        if (!ShouldSyncObject(pObject))
+        if (!ShouldSyncObject(pObject, playerStashContainers))
         {
             spdlog::warn("Excluding sync for {:X}", pObject->formID);
             continue;
@@ -257,7 +291,7 @@ void ObjectService::OnActivate(const ActivateEvent& acEvent) noexcept
 
     if (!m_world.GetModSystem().GetServerModId(pCell->formID, request.CellId))
     {
-        spdlog::error("Server cell id not found for cell form id {:X}", acEvent.pObject->parentCell->formID);
+        spdlog::error("Server cell id not found for cell form id {:X}", pCell->formID);
         return;
     }
 
@@ -339,7 +373,7 @@ void ObjectService::OnLockChange(const LockChangeEvent& acEvent) noexcept
 
     if (!m_world.GetModSystem().GetServerModId(pCell->formID, request.CellId))
     {
-        spdlog::error("Server cell id for cell not found, cell form id: {:X}", pObject->parentCell->formID);
+        spdlog::error("Server cell id for cell not found, cell form id: {:X}", pCell->formID);
         return;
     }
 

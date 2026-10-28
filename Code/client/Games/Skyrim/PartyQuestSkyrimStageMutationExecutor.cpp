@@ -4,12 +4,6 @@
 #include <PartyQuestSkyrimRuntimeThread.h>
 
 #include <Structs/Skyrim/PartyQuestPersistenceDurability.h>
-#include <Structs/Skyrim/PartyQuestReviewedQuestProfiles.h>
-#include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
-#include <Structs/Skyrim/PartyQuestRuntimeOwner.h>
-#include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
-#include <PartyQuestSkyrimPapyrusRuntimeObserver.h>
-#include <Structs/Skyrim/PartyQuestStageMutationAdapter.h>
 
 #include <Forms/TESQuest.h>
 #include <Services/QuestSnapshotCollector.h>
@@ -17,23 +11,39 @@
 
 namespace
 {
-constexpr uint32_t kAllowedStageOnlyActions = static_cast<uint32_t>(PartyQuestApplyAction::StageTransition) | static_cast<uint32_t>(PartyQuestApplyAction::VerifyObjectives) |
-                                              static_cast<uint32_t>(PartyQuestApplyAction::WaitForPapyrusQuiescence) |
-                                              static_cast<uint32_t>(PartyQuestApplyAction::ResnapshotAndVerify);
+constexpr uint32_t kAllowedStageOnlyActions =
+    static_cast<uint32_t>(PartyQuestApplyAction::StageTransition) |
+    static_cast<uint32_t>(PartyQuestApplyAction::VerifyObjectives) |
+    static_cast<uint32_t>(PartyQuestApplyAction::WaitForPapyrusQuiescence) |
+    static_cast<uint32_t>(PartyQuestApplyAction::ResnapshotAndVerify);
 
 bool HasOnlyStageMutationSurface(const QuestSnapshot& acSnapshot) noexcept
 {
-    return PartyQuestStageMutationAdapter::HasOnlyStageMutationSurface(acSnapshot);
+    return acSnapshot.Status == QuestSnapshotStatus::Running &&
+        acSnapshot.ReferenceAliases.empty() &&
+        acSnapshot.LocationAliases.empty() &&
+        acSnapshot.CreatedReferences.empty() &&
+        !acSnapshot.SceneParticipantPlayerId.has_value();
 }
 
 bool IsNarrowStagePlan(const PartyQuestRuntimeApplyRequest& acRequest) noexcept
 {
     const uint32_t actions = static_cast<uint32_t>(acRequest.Plan.Actions);
-    return acRequest.TransactionId != 0 && !acRequest.Plan.DryRunOnly && acRequest.Plan.Safety.Status == PartyQuestRuntimeSafetyStatus::RuntimeSafe &&
-           acRequest.Plan.MutationAuthorization.IsVerified() && acRequest.Plan.MutationAuthorization.Matches(acRequest.CanonicalSnapshot, acRequest.Plan.Actions, false) &&
-           acRequest.Plan.MutationAuthorization.GetAdapterMutationComponents() == PartyQuestVerificationComponent::QuestSnapshot &&
-           HasPartyQuestApplyAction(acRequest.Plan.Actions, PartyQuestApplyAction::StageTransition) && (actions & ~kAllowedStageOnlyActions) == 0 &&
-           HasOnlyStageMutationSurface(acRequest.CanonicalSnapshot);
+    return acRequest.TransactionId != 0 &&
+        !acRequest.Plan.DryRunOnly &&
+        acRequest.Plan.Safety.Status == PartyQuestRuntimeSafetyStatus::RuntimeSafe &&
+        acRequest.Plan.MutationAuthorization.IsVerified() &&
+        acRequest.Plan.MutationAuthorization.Matches(
+            acRequest.CanonicalSnapshot,
+            acRequest.Plan.Actions,
+            false) &&
+        acRequest.Plan.MutationAuthorization.GetAdapterMutationComponents() ==
+            PartyQuestVerificationComponent::QuestSnapshot &&
+        HasPartyQuestApplyAction(
+            acRequest.Plan.Actions,
+            PartyQuestApplyAction::StageTransition) &&
+        (actions & ~kAllowedStageOnlyActions) == 0 &&
+        HasOnlyStageMutationSurface(acRequest.CanonicalSnapshot);
 }
 
 bool ContainsStage(TESQuest& aQuest, uint16_t aStage) noexcept
@@ -48,19 +58,12 @@ bool ContainsStage(TESQuest& aQuest, uint16_t aStage) noexcept
 }
 } // namespace
 
-void PartyQuestSkyrimStageMutationExecutor::SetControlledActivationEnabled(bool aEnabled) noexcept
+bool PartyQuestSkyrimStageMutationExecutor::Execute(
+    const PartyQuestRuntimeApplyRequest& acRequest,
+    ModSystem& aModSystem) noexcept
 {
-    PartyQuestStageMutationAdapter::SetControlledActivationEnabled(aEnabled);
-}
-
-bool PartyQuestSkyrimStageMutationExecutor::IsControlledActivationEnabled() noexcept
-{
-    return PartyQuestStageMutationAdapter::IsControlledActivationEnabled();
-}
-
-bool PartyQuestSkyrimStageMutationExecutor::Execute(const PartyQuestRuntimeApplyRequest& acRequest, ModSystem& aModSystem) noexcept
-{
-    if (!PartyQuestSkyrimRuntimeThread::IsCurrentUpdateThread() || !IsNarrowStagePlan(acRequest))
+    if (!PartyQuestSkyrimRuntimeThread::IsCurrentUpdateThread() ||
+        !IsNarrowStagePlan(acRequest))
     {
         return false;
     }
@@ -74,13 +77,16 @@ bool PartyQuestSkyrimStageMutationExecutor::Execute(const PartyQuestRuntimeApply
         return false;
 
     GameId roundTripId;
-    if (!aModSystem.GetServerModId(pQuest->formID, roundTripId) || roundTripId != acRequest.CanonicalSnapshot.QuestId)
+    if (!aModSystem.GetServerModId(pQuest->formID, roundTripId) ||
+        roundTripId != acRequest.CanonicalSnapshot.QuestId)
     {
         return false;
     }
 
     const auto current = QuestSnapshotCollector::Collect(pQuest, aModSystem);
-    if (!current || current->QuestId != acRequest.CanonicalSnapshot.QuestId || !HasOnlyStageMutationSurface(*current))
+    if (!current ||
+        current->QuestId != acRequest.CanonicalSnapshot.QuestId ||
+        !HasOnlyStageMutationSurface(*current))
     {
         return false;
     }
@@ -97,62 +103,17 @@ bool PartyQuestSkyrimStageMutationExecutor::Execute(const PartyQuestRuntimeApply
     if (targetStage == pQuest->currentStage)
         return true;
 
-    // Durability policy and controlled-activation check
+    // INV-DURABILITY-001: a future native SetStage side effect may not execute
+    // merely because process-crash persistence succeeded. Production mutation
+    // remains physically fenced until file/device and parent-directory stable
+    // storage semantics raise CurrentLocalGuarantee to PowerLossDurable.
     if (!PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation())
         return false;
 
-    PartyQuestStageMutationContext context;
-    context.CollectSnapshot = [&]() -> std::optional<QuestSnapshot>
-    {
-        return QuestSnapshotCollector::Collect(pQuest, aModSystem);
-    };
-    context.ContainsStage = [&](uint16_t aStage) noexcept -> bool
-    {
-        return ContainsStage(*pQuest, aStage);
-    };
-    context.NativeSetStage = [&](uint16_t aStage) noexcept -> bool
-    {
-        return pQuest->SetStage(aStage);
-    };
-    context.IsPapyrusQuiescent = [](uint64_t aTransactionId) noexcept -> bool
-    {
-        const auto obs = PartyQuestSkyrimPapyrusRuntimeObserver::GetProcessObserver().Observe(aTransactionId);
-        return obs.Status == PartyQuestPapyrusRuntimeObservationStatus::Idle;
-    };
-    context.IsCurrentUpdateThread = []() noexcept -> bool
-    {
-        return PartyQuestSkyrimRuntimeThread::IsCurrentUpdateThread();
-    };
-    context.OnRecoveryRequired = [](uint64_t aTransactionId, PartyQuestStageMutationStatus aReason) noexcept
-    {
-        spdlog::error(
-            "PartyQuestSkyrimStageMutationExecutor entering recovery: "
-            "transaction={} reason={}",
-            aTransactionId, PartyQuestStageMutationStatusName(aReason));
-    };
-
-    auto& sessionOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
-    auto* pGuarded = sessionOwner.IsBound() ? sessionOwner.GetGuardedSession() : nullptr;
-    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-
-    std::optional<std::reference_wrapper<PartyQuestRuntimeGuardedSession>> guardedOpt;
-    if (pGuarded)
-        guardedOpt = *pGuarded;
-
-    const auto result = PartyQuestStageMutationAdapter::Execute(acRequest, context, guardedOpt, fence);
-
-    if (result.WasApplied())
-    {
-        spdlog::info(
-            "PartyQuestSkyrimStageMutationExecutor: stage mutation completed: "
-            "quest={:016X} targetStage={} status={}",
-            acRequest.CanonicalSnapshot.QuestId.LogFormat(), targetStage, PartyQuestStageMutationStatusName(result.Status));
-        return true;
-    }
-
-    spdlog::warn(
-        "PartyQuestSkyrimStageMutationExecutor: mutation rejected fail-closed: "
-        "quest={:016X} targetStage={} status={}",
-        acRequest.CanonicalSnapshot.QuestId.LogFormat(), targetStage, PartyQuestStageMutationStatusName(result.Status));
+    // P0 safety boundary: the adapter may prove that a request is structurally
+    // eligible, but it must not execute canonical Skyrim mutation yet. Keep the
+    // native SetStage call physically absent until P0-A..H are closed on one
+    // final GREEN SHA and the mutation milestone explicitly re-enables it with
+    // its own live proof.
     return false;
 }

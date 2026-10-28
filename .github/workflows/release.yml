@@ -1,0 +1,14 @@
+name: Create GitHub Release
+
+# Publication remains gated until the intake's native/runtime and arm64 gates pass.
+on:
+  workflow_dispatch:
+
+jobs:
+  acceptance-required:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Require reviewed release acceptance
+        run: |
+          echo "::error::Release publication is deferred until the upstream intake has accepted Linux arm64 and both Skyrim runtime artifacts."
+          exit 1

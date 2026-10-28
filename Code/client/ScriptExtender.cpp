@@ -77,7 +77,7 @@ bool IsScriptExtenderLoaded()
     return g_SKSEModuleHandle != nullptr;
 }
 
-void LoadScriptExender()
+void LoadScriptExtender()
 {
     // RunTiltedInit is expected to call this once. Keep repeated calls
     // idempotent rather than taking an additional loader reference or invoking
@@ -188,11 +188,11 @@ void LoadScriptExender()
         // present. StartSKSE itself installs SKSE's pre/post CRT hooks.
         g_SKSEModuleHandle = module;
         spdlog::info(
-            "Starting SKSE {}... be aware that messages that start without a colored [timestamp] prefix are "
+            "Installing SKSE {} startup hooks... be aware that messages that start without a colored [timestamp] prefix are "
             "logs from the Script Extender and its loaded mods.",
             skseVersion);
         pStartSKSE();
-        spdlog::info("SKSE is active");
+        spdlog::info("SKSE startup hooks installed; initialization will continue during game startup");
     }
     catch (const std::exception& acException)
     {

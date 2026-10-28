@@ -25,6 +25,19 @@ add_vectorexts("neon")
 
 -- build configurations
 add_rules("mode.debug", "mode.releasedbg", "mode.release")
+-- Generated headers follow the selected output directory, including each runtime build.
+add_includedirs(path.absolute(get_config("builddir") or "build"))
+
+option("skyrim_version")
+    set_default("latest")
+    set_values("latest", "1.6.1170")
+    set_description("Skyrim SE runtime the client is built for")
+    after_check(function (option)
+        if not table.contains(option:get("values"), option:value()) then
+            raise("unsupported skyrim_version: %s", tostring(option:value()))
+        end
+    end)
+option_end()
 
 if has_config("unitybuild") then
     add_rules("c.unity_build")
@@ -34,7 +47,6 @@ end
 -- direct dependencies version pinning 
 add_requires(
     "entt v3.10.0", 
-    "recastnavigation v1.6.0", 
     "tiltedcore 0.2.9",
     "cryptopp 8.9.0", 
     "spdlog v1.13.0", 
@@ -92,7 +104,7 @@ before_build(function (target)
     bool_to_number[branch == "prerel"])
 
     -- fix always-compiles problem by updating the file only if content has changed.
-    local filepath = "build/BranchInfo.h"
+    local filepath = path.join(get_config("builddir") or "build", "BranchInfo.h")
     local old_content = nil
     if os.exists(filepath) then
         old_content = io.readfile(filepath)

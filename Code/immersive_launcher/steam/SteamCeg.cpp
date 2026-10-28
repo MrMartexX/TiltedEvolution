@@ -29,14 +29,15 @@ uintptr_t CrackCEGInPlace(const CEGLocationInfo& acInfo)
     SteamStubHeaderV31 stub{};
     std::memcpy(&stub, acInfo.start - sizeof(SteamStubHeaderV31), sizeof(SteamStubHeaderV31));
     SteamXor(reinterpret_cast<uint8_t*>(&stub), sizeof(SteamStubHeaderV31), stub.XorKey);
-    if (stub.Signature != 0xC0DEC0DF || stub.OriginalEntryPoint == 0)
+    const auto action = SelectCodeSectionAction(stub);
+    if (action == CodeSectionAction::Reject)
         return 0;
 
     // SteamStub 3.1 retains the wrapper and decoded header when its
     // NoEncryption flag is set. In that mode .text is already executable and
     // the AES fields are intentionally empty. Decrypting it would corrupt the
     // game image before the original entry point is called.
-    if (!HasEncryptedCodeSection(stub))
+    if (action == CodeSectionAction::EnterPlaintext)
         return stub.OriginalEntryPoint;
 
     // decrypt IV in place

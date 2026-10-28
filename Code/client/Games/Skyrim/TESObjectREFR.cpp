@@ -31,11 +31,50 @@
 #include <Havok/hkbStateMachine.h>
 #include <Forms/TESObjectCELL.h>
 #include <Forms/TESWorldSpace.h>
+#include <Forms/TESActorBase.h>
 
 #include <Structs/AnimationGraphDescriptorManager.h>
 #include <Structs/AnimationVariables.h>
 
 extern const AnimationGraphDescriptor* BehaviorVarPatch(BSAnimationGraphManager* pManager, Actor* pActor);
+
+namespace
+{
+void QueueReferenceInventoryChange(TESObjectREFR* apReference, InventoryChangeEvent aEvent, TESObjectREFR* apTransferReference)
+{
+    if (const auto* pActor = Cast<Actor>(apReference))
+    {
+        auto ownershipToken = Utils::GetLocalOwnershipToken(pActor->formID);
+        if (!ownershipToken && apTransferReference == PlayerCharacter::Get())
+            ownershipToken = Utils::GetRemoteOwnershipToken(pActor->formID);
+
+        if (!ownershipToken)
+            return;
+
+        aEvent.ServerId = ownershipToken->ServerId;
+        aEvent.OwnershipEpoch = ownershipToken->OwnershipEpoch;
+    }
+
+    World::Get().GetRunner().Trigger(std::move(aEvent));
+}
+
+// Descriptor indices are only valid for the behavior project they came from, and the same Actor can switch projects
+// (e.g. Respawn() re-rolling a leveled hare into a fox), so recompute the descriptor whenever the project changes.
+void UpdateGraphDescriptorHash(Actor* apActor, BSAnimationGraphManager* apManager, int aForceIndex) noexcept
+{
+    auto* pExtension = apActor->GetExtension();
+    const auto cProjectKey = apManager->GetProjectKey(aForceIndex);
+    if (pExtension->GraphDescriptorHash != 0 && pExtension->GraphDescriptorProjectKey == cProjectKey)
+        return;
+
+    const auto cPreviousHash = pExtension->GraphDescriptorHash;
+    pExtension->GraphDescriptorHash = apManager->GetDescriptorKey(aForceIndex);
+    pExtension->GraphDescriptorProjectKey = cProjectKey;
+
+    if (cPreviousHash != 0)
+        spdlog::info("Animation graph project of actor {:X} changed, graph descriptor {} -> {}", apActor->formID, cPreviousHash, pExtension->GraphDescriptorHash);
+}
+}
 
 TP_THIS_FUNCTION(TActivate, bool, TESObjectREFR, TESObjectREFR* apActivator, uint8_t aUnk1, TESBoundObject* apObjectToGet, int32_t aCount, char aDefaultProcessing);
 TP_THIS_FUNCTION(TAddInventoryItem, void, TESObjectREFR, TESBoundObject* apItem, ExtraDataList* apExtraData, int32_t aCount, TESObjectREFR* apOldOwner);
@@ -45,6 +84,7 @@ TP_THIS_FUNCTION(TPlayAnimationAndWait, bool, void, uint32_t auiStackID, TESObje
 TP_THIS_FUNCTION(TPlayAnimation, bool, void, uint32_t auiStackID, TESObjectREFR* apSelf, BSFixedString* apEventName);
 TP_THIS_FUNCTION(TRotate, void, TESObjectREFR, float aAngle);
 TP_THIS_FUNCTION(TLockChange, void, TESObjectREFR);
+TP_THIS_FUNCTION(TSetLeveledCreature, void, TESObjectREFR, TESActorBase* apOriginalBase, TESActorBase* apTemplateBase);
 
 static TActivate* RealActivate = nullptr;
 static TAddInventoryItem* RealAddInventoryItem = nullptr;
@@ -55,6 +95,7 @@ static TRotate* RealRotateX = nullptr;
 static TRotate* RealRotateY = nullptr;
 static TRotate* RealRotateZ = nullptr;
 static TLockChange* RealLockChange = nullptr;
+static TSetLeveledCreature* RealSetLeveledCreature = nullptr;
 
 #ifdef SAVE_STUFF
 
@@ -142,14 +183,22 @@ void TESObjectREFR::SetRotation(float aX, float aY, float aZ) noexcept
     TiltedPhoques::ThisCall(RealRotateZ, this, aZ);
 }
 
+void TESObjectREFR::SetLeveledCreature(TESActorBase* apOriginalBase, TESActorBase* apTemplateA) noexcept
+{
+    TP_THIS_FUNCTION(TSetLeveledCreature, void, TESObjectREFR, TESActorBase*, TESActorBase*);
+    POINTER_SKYRIMSE(TSetLeveledCreature, s_SetLeveledCreature, 20231);
+    TiltedPhoques::ThisCall(s_SetLeveledCreature, this, apOriginalBase, apTemplateA);
+}
+
 using TiltedPhoques::Serialization;
 
 void TESObjectREFR::SaveAnimationVariables(AnimationVariables& aVariables) const noexcept
 {
-    BSAnimationGraphManager* pManager = nullptr;
-    if (animationGraphHolder.GetBSAnimationGraph(&pManager))
+    const auto spManager = animationGraphHolder.GetAnimationGraphManagerPtr();
+    if (spManager)
     {
-        BSScopedLock<BSRecursiveLock> _{pManager->lock};
+        BSAnimationGraphManager* pManager = spManager.get();
+        BSSpinLockGuard _{pManager->lock};
 
         if (pManager->animationGraphIndex < pManager->animationGraphs.size)
         {
@@ -170,15 +219,9 @@ void TESObjectREFR::SaveAnimationVariables(AnimationVariables& aVariables) const
             if (!pGraph->behaviorGraph || !pGraph->behaviorGraph->stateMachine || !pGraph->behaviorGraph->stateMachine->name)
                 return;
 
+            // Force third person graph to be used on player
+            UpdateGraphDescriptorHash(pActor, pManager, pActor->formID == 0x14 ? 0 : -1);
             auto* pExtendedActor = pActor->GetExtension();
-            if (pExtendedActor->GraphDescriptorHash == 0)
-            {
-                // Force third person graph to be used on player
-                if (pActor->formID == 0x14)
-                    pExtendedActor->GraphDescriptorHash = pManager->GetDescriptorKey(0);
-                else
-                    pExtendedActor->GraphDescriptorHash = pManager->GetDescriptorKey();
-            }
 
             auto pDescriptor = AnimationGraphDescriptorManager::Get().GetDescriptor(pExtendedActor->GraphDescriptorHash);
 
@@ -202,7 +245,7 @@ void TESObjectREFR::SaveAnimationVariables(AnimationVariables& aVariables) const
             {
                 const auto idx = pDescriptor->BooleanLookUpTable[i];
 
-                if (pVariableSet->data[idx] != 0)
+                if (pVariableSet->size > idx && pVariableSet->data[idx] != 0)
                     aVariables.Booleans[i] = true;
             }
 
@@ -210,27 +253,28 @@ void TESObjectREFR::SaveAnimationVariables(AnimationVariables& aVariables) const
             {
                 const auto idx = pDescriptor->FloatLookupTable[i];
 
-                aVariables.Floats[i] = *reinterpret_cast<float*>(&pVariableSet->data[idx]);
+                if (pVariableSet->size > idx)
+                    aVariables.Floats[i] = *reinterpret_cast<float*>(&pVariableSet->data[idx]);
             }
 
             for (size_t i = 0; i < pDescriptor->IntegerLookupTable.size(); ++i)
             {
                 const auto idx = pDescriptor->IntegerLookupTable[i];
 
-                aVariables.Integers[i] = *reinterpret_cast<uint32_t*>(&pVariableSet->data[idx]);
+                if (pVariableSet->size > idx)
+                    aVariables.Integers[i] = *reinterpret_cast<uint32_t*>(&pVariableSet->data[idx]);
             }
         }
-
-        pManager->Release();
     }
 }
 
 void TESObjectREFR::LoadAnimationVariables(const AnimationVariables& aVariables) const noexcept
 {
-    BSAnimationGraphManager* pManager = nullptr;
-    if (animationGraphHolder.GetBSAnimationGraph(&pManager))
+    const auto spManager = animationGraphHolder.GetAnimationGraphManagerPtr();
+    if (spManager)
     {
-        BSScopedLock<BSRecursiveLock> _{pManager->lock};
+        BSAnimationGraphManager* pManager = spManager.get();
+        BSSpinLockGuard _{pManager->lock};
 
         if (pManager->animationGraphIndex < pManager->animationGraphs.size)
         {
@@ -246,9 +290,8 @@ void TESObjectREFR::LoadAnimationVariables(const AnimationVariables& aVariables)
             if (!pActor)
                 return;
 
+            UpdateGraphDescriptorHash(pActor, pManager, -1);
             auto* pExtendedActor = pActor->GetExtension();
-            if (pExtendedActor->GraphDescriptorHash == 0)
-                pExtendedActor->GraphDescriptorHash = pManager->GetDescriptorKey();
 
             auto pDescriptor = AnimationGraphDescriptorManager::Get().GetDescriptor(pExtendedActor->GraphDescriptorHash);
 
@@ -259,16 +302,19 @@ void TESObjectREFR::LoadAnimationVariables(const AnimationVariables& aVariables)
             if (!pDescriptor)
                 return;
 
-            const auto* pVariableSet = pGraph->behaviorGraph->animationVariables;
+            const auto* pBehaviorGraph = pGraph->behaviorGraph;
+            const auto* pVariableSet = pBehaviorGraph->animationVariables;
 
             if (!pVariableSet)
                 return;
 
+            // Never write into a variable whose word is an index: a wrong descriptor would turn the synced value into an
+            // out-of-bounds index that Havok reads later, when it copies the variable to a bound node.
             for (size_t i = 0; i < pDescriptor->BooleanLookUpTable.size(); ++i)
             {
                 const auto idx = pDescriptor->BooleanLookUpTable[i];
 
-                if (pVariableSet->size > idx)
+                if (pVariableSet->size > idx && pBehaviorGraph->IsWordVariable(idx))
                 {
                     pVariableSet->data[idx] = aVariables.Booleans.size() > i ? aVariables.Booleans[i] : false;
                 }
@@ -278,18 +324,22 @@ void TESObjectREFR::LoadAnimationVariables(const AnimationVariables& aVariables)
             {
                 const auto idx = pDescriptor->FloatLookupTable[i];
 
-                *reinterpret_cast<float*>(&pVariableSet->data[idx]) = aVariables.Floats.size() > i ? aVariables.Floats[i] : 0.f;
+                if (pVariableSet->size > idx && pBehaviorGraph->IsWordVariable(idx))
+                {
+                    *reinterpret_cast<float*>(&pVariableSet->data[idx]) = aVariables.Floats.size() > i ? aVariables.Floats[i] : 0.f;
+                }
             }
 
             for (size_t i = 0; i < pDescriptor->IntegerLookupTable.size(); ++i)
             {
                 const auto idx = pDescriptor->IntegerLookupTable[i];
 
-                *reinterpret_cast<uint32_t*>(&pVariableSet->data[idx]) = aVariables.Integers.size() > i ? aVariables.Integers[i] : 0;
+                if (pVariableSet->size > idx && pBehaviorGraph->IsWordVariable(idx))
+                {
+                    *reinterpret_cast<uint32_t*>(&pVariableSet->data[idx]) = aVariables.Integers.size() > i ? aVariables.Integers[i] : 0;
+                }
             }
         }
-
-        pManager->Release();
     }
 }
 
@@ -305,8 +355,8 @@ uint32_t TESObjectREFR::GetCellId() const noexcept
 
 TESWorldSpace* TESObjectREFR::GetWorldSpace() const noexcept
 {
-    auto* pParentCell = parentCell ? parentCell : GetParentCell();
-    if (pParentCell && !(pParentCell->cellFlags[0] & 1))
+    auto* pParentCell = GetParentCellEx();
+    if (pParentCell && !(pParentCell->cellFlags & 1))
         return pParentCell->worldspace;
 
     return nullptr;
@@ -457,7 +507,7 @@ int64_t TESObjectREFR::GetItemCountInInventory(TESForm* apItem) const noexcept
 
 TESObjectCELL* TESObjectREFR::GetParentCellEx() const noexcept
 {
-    return parentCell ? parentCell : GetParentCell();
+    return parentCell ? parentCell : GetSaveParentCell();
 }
 
 void TESObjectREFR::GetItemFromExtraData(Inventory::Entry& arEntry, ExtraDataList* apExtraDataList) noexcept
@@ -1011,7 +1061,7 @@ void TP_MAKE_THISCALL(HookAddInventoryItem, TESObjectREFR, TESBoundObject* apIte
         if (apExtraData)
             apThis->GetItemFromExtraData(item, apExtraData);
 
-        World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->formID, std::move(item)));
+        QueueReferenceInventoryChange(apThis, InventoryChangeEvent(apThis->formID, std::move(item)), apOldOwner);
     }
 
     spdlog::debug("Adding inventory item {:X} to {:X}", apItem->formID, apThis->formID);
@@ -1037,7 +1087,7 @@ TP_MAKE_THISCALL(HookRemoveInventoryItem, TESObjectREFR, BSPointerHandle<TESObje
 
         item.Count = -aCount;
 
-        World::Get().GetRunner().Trigger(InventoryChangeEvent(apThis->formID, std::move(item)));
+        QueueReferenceInventoryChange(apThis, InventoryChangeEvent(apThis->formID, std::move(item)), apMoveToRef);
     }
 
     spdlog::debug("Removing inventory item {:X} from {:X}", apItem->formID, apThis->formID);
@@ -1100,6 +1150,7 @@ static TiltedPhoques::Initializer s_objectReferencesHooks(
     []()
     {
         POINTER_SKYRIMSE(TLockChange, s_lockChange, 19512);
+        // POINTER_SKYRIMSE(TSetLeveledCreature, s_SetLeveledCreature, 20231);
         POINTER_SKYRIMSE(TRotate, s_rotateX, 19787);
         POINTER_SKYRIMSE(TRotate, s_rotateY, 19788);
         POINTER_SKYRIMSE(TRotate, s_rotateZ, 19789);
@@ -1110,6 +1161,7 @@ static TiltedPhoques::Initializer s_objectReferencesHooks(
         POINTER_SKYRIMSE(TPlayAnimation, s_playAnimation, 56205);
 
         RealLockChange = s_lockChange.Get();
+        // RealSetLeveledCreature = s_SetLeveledCreature.Get();
         RealRotateX = s_rotateX.Get();
         RealRotateY = s_rotateY.Get();
         RealRotateZ = s_rotateZ.Get();
@@ -1120,6 +1172,7 @@ static TiltedPhoques::Initializer s_objectReferencesHooks(
         RealPlayAnimation = s_playAnimation.Get();
 
         TP_HOOK(&RealLockChange, HookLockChange);
+        // TP_HOOK(&RealSetLeveledCreature, HookSetLeveledCreature);
         TP_HOOK(&RealRotateX, HookRotateX);
         TP_HOOK(&RealRotateY, HookRotateY);
         TP_HOOK(&RealRotateZ, HookRotateZ);

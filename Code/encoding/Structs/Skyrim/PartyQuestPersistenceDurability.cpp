@@ -34,5 +34,6 @@ bool PartyQuestPersistenceDurabilityPolicy::IsControlledActivationEnabled() noex
 
 bool PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation() noexcept
 {
-    return IsProductionRuntimeMutationReady(CurrentLocalGuarantee) || IsControlledActivationEnabled();
+    // A research/mock activation request cannot grant production mutation authority.
+    return IsProductionRuntimeMutationReady(CurrentLocalGuarantee);
 }
