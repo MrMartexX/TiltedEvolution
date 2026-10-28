@@ -29,12 +29,10 @@ void ResetRuntimeReadiness(PartyQuestDeferredWorldEntry& aEntry) noexcept
 }
 } // namespace
 
-std::vector<GameId> PartyQuestDeferredWorldQueue::CollectReferenceTargets(
-    const QuestSnapshot& acSnapshot)
+std::vector<GameId> PartyQuestDeferredWorldQueue::CollectReferenceTargets(const QuestSnapshot& acSnapshot)
 {
     std::vector<GameId> targets;
-    targets.reserve(
-        acSnapshot.ReferenceAliases.size() + acSnapshot.CreatedReferences.size());
+    targets.reserve(acSnapshot.ReferenceAliases.size() + acSnapshot.CreatedReferences.size());
 
     for (const QuestReferenceAliasSnapshot& alias : acSnapshot.ReferenceAliases)
     {
@@ -52,8 +50,7 @@ std::vector<GameId> PartyQuestDeferredWorldQueue::CollectReferenceTargets(
     return targets;
 }
 
-std::vector<GameId> PartyQuestDeferredWorldQueue::CollectLocationTargets(
-    const QuestSnapshot& acSnapshot)
+std::vector<GameId> PartyQuestDeferredWorldQueue::CollectLocationTargets(const QuestSnapshot& acSnapshot)
 {
     std::vector<GameId> targets;
     targets.reserve(acSnapshot.LocationAliases.size());
@@ -68,8 +65,7 @@ std::vector<GameId> PartyQuestDeferredWorldQueue::CollectLocationTargets(
     return targets;
 }
 
-std::vector<GameId> PartyQuestDeferredWorldQueue::CollectWorldTargets(
-    const QuestSnapshot& acSnapshot)
+std::vector<GameId> PartyQuestDeferredWorldQueue::CollectWorldTargets(const QuestSnapshot& acSnapshot)
 {
     auto targets = CollectReferenceTargets(acSnapshot);
     auto locations = CollectLocationTargets(acSnapshot);
@@ -78,8 +74,7 @@ std::vector<GameId> PartyQuestDeferredWorldQueue::CollectWorldTargets(
     return targets;
 }
 
-PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
-    PartyQuestRuntimeApplyRequest aRequest)
+PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(PartyQuestRuntimeApplyRequest aRequest)
 {
     if (!aRequest.Plan.DryRunOnly)
         return PartyQuestDeferredWorldEnqueueStatus::RuntimeOwnerRequired;
@@ -88,9 +83,7 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::Enqueue(
 }
 
 PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::EnqueueRuntime(
-    PartyQuestRuntimeApplyRequest aRequest,
-    const PartyQuestRuntimeGuardedSession& acGuardedSession,
-    PartyQuestRuntimeGenerationFence& aGenerationFence) noexcept
+    PartyQuestRuntimeApplyRequest aRequest, const PartyQuestRuntimeGuardedSession& acGuardedSession, PartyQuestRuntimeGenerationFence& aGenerationFence) noexcept
 {
     if (aRequest.Plan.DryRunOnly)
         return PartyQuestDeferredWorldEnqueueStatus::NotDeferred;
@@ -108,8 +101,7 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::EnqueueRuntim
 
     try
     {
-        return EnqueueBound(
-            std::move(aRequest), &campaignId, &playerProfileId, generation);
+        return EnqueueBound(std::move(aRequest), &campaignId, &playerProfileId, generation);
     }
     catch (...)
     {
@@ -118,46 +110,33 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::EnqueueRuntim
 }
 
 PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::EnqueueBound(
-    PartyQuestRuntimeApplyRequest aRequest,
-    const PartyQuestCampaignId* apCampaignId,
-    const PartyQuestPlayerProfileId* apPlayerProfileId,
-    uint64_t aEnqueueGeneration)
+    PartyQuestRuntimeApplyRequest aRequest, const PartyQuestCampaignId* apCampaignId, const PartyQuestPlayerProfileId* apPlayerProfileId, uint64_t aEnqueueGeneration)
 {
-    if (aRequest.TransactionId == 0 ||
-        aRequest.TargetWorldRevision == 0 ||
-        aRequest.SidecarManifestFingerprint == 0 ||
-        !aRequest.CanonicalSnapshot.QuestId ||
+    if (aRequest.TransactionId == 0 || aRequest.TargetWorldRevision == 0 || aRequest.SidecarManifestFingerprint == 0 || !aRequest.CanonicalSnapshot.QuestId ||
         aRequest.CanonicalSnapshot.Revision == 0)
     {
         return PartyQuestDeferredWorldEnqueueStatus::InvalidRequest;
     }
 
-    if (aRequest.Plan.Safety.Status != PartyQuestRuntimeSafetyStatus::RuntimeSafe ||
-        !HasPartyQuestApplyAction(aRequest.Plan.Actions, PartyQuestApplyAction::WaitForWorldTargets))
+    if (aRequest.Plan.Safety.Status != PartyQuestRuntimeSafetyStatus::RuntimeSafe || !HasPartyQuestApplyAction(aRequest.Plan.Actions, PartyQuestApplyAction::WaitForWorldTargets))
     {
         return PartyQuestDeferredWorldEnqueueStatus::NotDeferred;
     }
 
-    if (!aRequest.Plan.MutationAuthorization.Matches(
-            aRequest.CanonicalSnapshot,
-            aRequest.Plan.Actions,
-            aRequest.Plan.DryRunOnly))
+    if (!aRequest.Plan.MutationAuthorization.Matches(aRequest.CanonicalSnapshot, aRequest.Plan.Actions, aRequest.Plan.DryRunOnly))
     {
         return PartyQuestDeferredWorldEnqueueStatus::UnsafePlan;
     }
 
     aRequest.CanonicalSnapshot.Canonicalize();
-    const auto fingerprint =
-        PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aRequest);
+    const auto fingerprint = PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aRequest);
     if (!fingerprint)
         return PartyQuestDeferredWorldEnqueueStatus::UnsafePlan;
 
     const auto seenIt = m_transactionFingerprints.find(aRequest.TransactionId);
     if (seenIt != m_transactionFingerprints.end())
     {
-        return seenIt->second == *fingerprint
-            ? PartyQuestDeferredWorldEnqueueStatus::Duplicate
-            : PartyQuestDeferredWorldEnqueueStatus::TransactionConflict;
+        return seenIt->second == *fingerprint ? PartyQuestDeferredWorldEnqueueStatus::Duplicate : PartyQuestDeferredWorldEnqueueStatus::TransactionConflict;
     }
 
     if (m_transactionFingerprints.size() >= MaxRememberedTransactions)
@@ -234,29 +213,20 @@ PartyQuestDeferredWorldEnqueueStatus PartyQuestDeferredWorldQueue::EnqueueBound(
 }
 
 bool PartyQuestDeferredWorldQueue::MatchesRuntimeOwner(
-    const PartyQuestDeferredWorldEntry& acEntry,
-    const PartyQuestRuntimeGuardedSession& acGuardedSession,
-    uint64_t aGeneration) noexcept
+    const PartyQuestDeferredWorldEntry& acEntry, const PartyQuestRuntimeGuardedSession& acGuardedSession, uint64_t aGeneration) noexcept
 {
     const auto& session = acGuardedSession.GetRuntimeSession();
-    return acEntry.CampaignId.has_value() &&
-        acEntry.PlayerProfileId.has_value() &&
-        acEntry.EnqueueGeneration != 0 &&
-        acEntry.EnqueueGeneration == aGeneration &&
-        *acEntry.CampaignId == session.GetCampaignId() &&
-        *acEntry.PlayerProfileId == session.GetPlayerProfileId();
+    return acEntry.CampaignId.has_value() && acEntry.PlayerProfileId.has_value() && acEntry.EnqueueGeneration != 0 && acEntry.EnqueueGeneration == aGeneration &&
+           *acEntry.CampaignId == session.GetCampaignId() && *acEntry.PlayerProfileId == session.GetPlayerProfileId();
 }
 
-void PartyQuestDeferredWorldQueue::Retire(
-    std::unordered_map<GameId, PartyQuestDeferredWorldEntry>::iterator aIt) noexcept
+void PartyQuestDeferredWorldQueue::Retire(std::unordered_map<GameId, PartyQuestDeferredWorldEntry>::iterator aIt) noexcept
 {
     m_transactionQuests.erase(aIt->second.Request.TransactionId);
     m_entries.erase(aIt);
 }
 
-bool PartyQuestDeferredWorldQueue::MarkReady(
-    PartyQuestRuntimeApplyRequest aCurrentRequest,
-    uint64_t aCurrentCanonicalQuestRevision) noexcept
+bool PartyQuestDeferredWorldQueue::MarkReady(PartyQuestRuntimeApplyRequest aCurrentRequest, uint64_t aCurrentCanonicalQuestRevision) noexcept
 {
     if (!aCurrentRequest.Plan.DryRunOnly)
         return false;
@@ -270,14 +240,12 @@ bool PartyQuestDeferredWorldQueue::MarkReady(
         return false;
 
     const auto entryIt = m_entries.find(transactionIt->second);
-    if (entryIt == m_entries.end() ||
-        entryIt->second.Request.TransactionId != transactionId)
+    if (entryIt == m_entries.end() || entryIt->second.Request.TransactionId != transactionId)
     {
         return false;
     }
 
-    const uint64_t queuedRevision =
-        entryIt->second.Request.CanonicalSnapshot.Revision;
+    const uint64_t queuedRevision = entryIt->second.Request.CanonicalSnapshot.Revision;
 
     if (aCurrentCanonicalQuestRevision > queuedRevision)
     {
@@ -286,21 +254,17 @@ bool PartyQuestDeferredWorldQueue::MarkReady(
         return false;
     }
 
-    if (aCurrentCanonicalQuestRevision != queuedRevision ||
-        aCurrentRequest.CanonicalSnapshot.Revision !=
-            aCurrentCanonicalQuestRevision)
+    if (aCurrentCanonicalQuestRevision != queuedRevision || aCurrentRequest.CanonicalSnapshot.Revision != aCurrentCanonicalQuestRevision)
     {
         return false;
     }
 
-    const auto currentIdentity =
-        PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aCurrentRequest);
+    const auto currentIdentity = PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aCurrentRequest);
     if (!currentIdentity)
         return false;
 
     const auto fingerprintIt = m_transactionFingerprints.find(transactionId);
-    if (fingerprintIt == m_transactionFingerprints.end() ||
-        fingerprintIt->second != *currentIdentity)
+    if (fingerprintIt == m_transactionFingerprints.end() || fingerprintIt->second != *currentIdentity)
     {
         return false;
     }
@@ -312,18 +276,13 @@ bool PartyQuestDeferredWorldQueue::MarkReady(
     return true;
 }
 
-PartyQuestDeferredWorldRuntimeReadinessResult
-PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
-    const PartyQuestDeferredWorldEntry& acEntry,
-    PartyQuestRuntimeGenerationFence& aGenerationFence,
-    const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+PartyQuestDeferredWorldRuntimeReadinessResult PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
+    const PartyQuestDeferredWorldEntry& acEntry, PartyQuestRuntimeGenerationFence& aGenerationFence, const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
     const PartyQuestDeferredWorldRuntimeReadinessSources& acSources) noexcept
 {
     PartyQuestDeferredWorldRuntimeReadinessResult result;
 
-    if (acEntry.Request.Plan.DryRunOnly ||
-        acEntry.Request.TransactionId == 0 ||
-        acEntry.Request.CanonicalSnapshot.Revision == 0)
+    if (acEntry.Request.Plan.DryRunOnly || acEntry.Request.TransactionId == 0 || acEntry.Request.CanonicalSnapshot.Revision == 0)
     {
         result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::NotRuntimePlan;
         return result;
@@ -331,8 +290,7 @@ PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
 
     if (!acReferenceReadiness.UsesGenerationFence(aGenerationFence))
     {
-        result.Status =
-            PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceReadinessDomainMismatch;
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceReadinessDomainMismatch;
         return result;
     }
 
@@ -344,15 +302,13 @@ PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
     // deliberately unsupported and fail closed.
     if (!acEntry.LocationTargets.empty())
     {
-        result.Status =
-            PartyQuestDeferredWorldRuntimeReadinessStatus::LocationReadinessUnavailable;
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::LocationReadinessUnavailable;
         return result;
     }
 
     if (acEntry.Request.CanonicalSnapshot.SceneParticipantPlayerId)
     {
-        result.Status =
-            PartyQuestDeferredWorldRuntimeReadinessStatus::SceneReadinessUnavailable;
+        result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::SceneReadinessUnavailable;
         return result;
     }
 
@@ -382,8 +338,7 @@ PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
         {
             if (!acSources.ResolveReferenceFormId)
             {
-                result.Status =
-                    PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceMappingUnavailable;
+                result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceMappingUnavailable;
                 return result;
             }
 
@@ -392,8 +347,7 @@ PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
                 const uint32_t localFormId = acSources.ResolveReferenceFormId(target);
                 if (localFormId == 0)
                 {
-                    result.Status =
-                        PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceMappingUnavailable;
+                    result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceMappingUnavailable;
                     return result;
                 }
                 localReferenceIds.push_back(localFormId);
@@ -416,9 +370,8 @@ PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
     {
         if (!acReferenceReadiness.AreLoaded(localReferenceIds, expectedGeneration))
         {
-            result.Status = aGenerationFence.GetGeneration() == expectedGeneration
-                ? PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceNotReady
-                : PartyQuestDeferredWorldRuntimeReadinessStatus::RuntimeGenerationChanged;
+            result.Status = aGenerationFence.GetGeneration() == expectedGeneration ? PartyQuestDeferredWorldRuntimeReadinessStatus::ReferenceNotReady
+                                                                                   : PartyQuestDeferredWorldRuntimeReadinessStatus::RuntimeGenerationChanged;
             return result;
         }
     }
@@ -434,13 +387,9 @@ PartyQuestDeferredWorldQueue::EvaluateRuntimeReadiness(
     return result;
 }
 
-PartyQuestDeferredWorldRuntimeReadinessResult
-PartyQuestDeferredWorldQueue::TryMarkRuntimeReady(
-    PartyQuestRuntimeApplyRequest aCurrentRequest,
-    uint64_t aCurrentCanonicalQuestRevision,
-    const PartyQuestRuntimeGuardedSession& acGuardedSession,
-    PartyQuestRuntimeGenerationFence& aGenerationFence,
-    const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+PartyQuestDeferredWorldRuntimeReadinessResult PartyQuestDeferredWorldQueue::TryMarkRuntimeReady(
+    PartyQuestRuntimeApplyRequest aCurrentRequest, uint64_t aCurrentCanonicalQuestRevision, const PartyQuestRuntimeGuardedSession& acGuardedSession,
+    PartyQuestRuntimeGenerationFence& aGenerationFence, const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
     const PartyQuestDeferredWorldRuntimeReadinessSources& acSources) noexcept
 {
     PartyQuestDeferredWorldRuntimeReadinessResult result;
@@ -460,8 +409,7 @@ PartyQuestDeferredWorldQueue::TryMarkRuntimeReady(
         return result;
 
     const auto entryIt = m_entries.find(transactionIt->second);
-    if (entryIt == m_entries.end() ||
-        entryIt->second.Request.TransactionId != transactionId)
+    if (entryIt == m_entries.end() || entryIt->second.Request.TransactionId != transactionId)
     {
         return result;
     }
@@ -474,16 +422,14 @@ PartyQuestDeferredWorldQueue::TryMarkRuntimeReady(
         return result;
     }
 
-    if (!MatchesRuntimeOwner(
-            entryIt->second, acGuardedSession, currentGeneration))
+    if (!MatchesRuntimeOwner(entryIt->second, acGuardedSession, currentGeneration))
     {
         Retire(entryIt);
         result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::IdentityMismatch;
         return result;
     }
 
-    const uint64_t queuedRevision =
-        entryIt->second.Request.CanonicalSnapshot.Revision;
+    const uint64_t queuedRevision = entryIt->second.Request.CanonicalSnapshot.Revision;
 
     if (aCurrentCanonicalQuestRevision > queuedRevision)
     {
@@ -493,29 +439,21 @@ PartyQuestDeferredWorldQueue::TryMarkRuntimeReady(
         return result;
     }
 
-    if (aCurrentCanonicalQuestRevision != queuedRevision ||
-        aCurrentRequest.CanonicalSnapshot.Revision != aCurrentCanonicalQuestRevision)
+    if (aCurrentCanonicalQuestRevision != queuedRevision || aCurrentRequest.CanonicalSnapshot.Revision != aCurrentCanonicalQuestRevision)
     {
         result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::StaleRevision;
         return result;
     }
 
-    const auto currentIdentity =
-        PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aCurrentRequest);
+    const auto currentIdentity = PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(aCurrentRequest);
     const auto fingerprintIt = m_transactionFingerprints.find(transactionId);
-    if (!currentIdentity ||
-        fingerprintIt == m_transactionFingerprints.end() ||
-        fingerprintIt->second != *currentIdentity)
+    if (!currentIdentity || fingerprintIt == m_transactionFingerprints.end() || fingerprintIt->second != *currentIdentity)
     {
         result.Status = PartyQuestDeferredWorldRuntimeReadinessStatus::IdentityMismatch;
         return result;
     }
 
-    result = EvaluateRuntimeReadiness(
-        entryIt->second,
-        aGenerationFence,
-        acReferenceReadiness,
-        acSources);
+    result = EvaluateRuntimeReadiness(entryIt->second, aGenerationFence, acReferenceReadiness, acSources);
     if (!result.IsReady())
         return result;
 
@@ -534,13 +472,10 @@ PartyQuestDeferredWorldQueue::TryMarkRuntimeReady(
     return result;
 }
 
-bool PartyQuestDeferredWorldQueue::InvalidateIfOlder(
-    const GameId& acQuestId,
-    uint64_t aCanonicalQuestRevision) noexcept
+bool PartyQuestDeferredWorldQueue::InvalidateIfOlder(const GameId& acQuestId, uint64_t aCanonicalQuestRevision) noexcept
 {
     const auto it = m_entries.find(acQuestId);
-    if (it == m_entries.end() ||
-        it->second.Request.CanonicalSnapshot.Revision >= aCanonicalQuestRevision)
+    if (it == m_entries.end() || it->second.Request.CanonicalSnapshot.Revision >= aCanonicalQuestRevision)
     {
         return false;
     }
@@ -566,29 +501,26 @@ std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRea
         it = m_entries.erase(it);
     }
 
-    std::sort(ready.begin(), ready.end(), [](const auto& acLeft, const auto& acRight)
-    {
-        if (acLeft.TargetWorldRevision != acRight.TargetWorldRevision)
-            return acLeft.TargetWorldRevision < acRight.TargetWorldRevision;
-        return acLeft.TransactionId < acRight.TransactionId;
-    });
+    std::sort(
+        ready.begin(), ready.end(),
+        [](const auto& acLeft, const auto& acRight)
+        {
+            if (acLeft.TargetWorldRevision != acRight.TargetWorldRevision)
+                return acLeft.TargetWorldRevision < acRight.TargetWorldRevision;
+            return acLeft.TransactionId < acRight.TransactionId;
+        });
     return ready;
 }
 
 size_t PartyQuestDeferredWorldQueue::ConsumeRuntimeReady(
-    PartyQuestRuntimeGuardedSession& aGuardedSession,
-    const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
-    const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
-    const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept
+    PartyQuestRuntimeGuardedSession& aGuardedSession, const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+    const PartyQuestDeferredWorldRuntimeReadinessSources& acSources, const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept
 {
     auto& generationFence = PartyQuestRuntimeGenerationFence::GetProcessFence();
     auto& processGuard = PartyQuestSaveGuard::GetProcessGuard();
     auto& processOwner = PartyQuestRuntimeSessionOwner::GetProcessOwner();
-    if (!processOwner.IsBound() ||
-        processOwner.GetGuardedSession() != &aGuardedSession ||
-        !acCanonicalRevisionObserver ||
-        !acReferenceReadiness.UsesGenerationFence(generationFence) ||
-        &aGuardedSession.GetSaveGuard() != &processGuard)
+    if (!processOwner.IsBound() || processOwner.GetGuardedSession() != &aGuardedSession || !acCanonicalRevisionObserver ||
+        !acReferenceReadiness.UsesGenerationFence(generationFence) || &aGuardedSession.GetSaveGuard() != &processGuard)
     {
         return 0;
     }
@@ -601,36 +533,33 @@ size_t PartyQuestDeferredWorldQueue::ConsumeRuntimeReady(
             orderedQuestIds.push_back(questId);
     }
 
-    std::sort(orderedQuestIds.begin(), orderedQuestIds.end(), [this](
-        const GameId& acLeft,
-        const GameId& acRight)
-    {
-        const auto leftIt = m_entries.find(acLeft);
-        const auto rightIt = m_entries.find(acRight);
-        if (leftIt == m_entries.end() || rightIt == m_entries.end())
-            return GameIdLess(acLeft, acRight);
+    std::sort(
+        orderedQuestIds.begin(), orderedQuestIds.end(),
+        [this](const GameId& acLeft, const GameId& acRight)
+        {
+            const auto leftIt = m_entries.find(acLeft);
+            const auto rightIt = m_entries.find(acRight);
+            if (leftIt == m_entries.end() || rightIt == m_entries.end())
+                return GameIdLess(acLeft, acRight);
 
-        const auto& left = leftIt->second.Request;
-        const auto& right = rightIt->second.Request;
-        if (left.TargetWorldRevision != right.TargetWorldRevision)
-            return left.TargetWorldRevision < right.TargetWorldRevision;
-        return left.TransactionId < right.TransactionId;
-    });
+            const auto& left = leftIt->second.Request;
+            const auto& right = rightIt->second.Request;
+            if (left.TargetWorldRevision != right.TargetWorldRevision)
+                return left.TargetWorldRevision < right.TargetWorldRevision;
+            return left.TransactionId < right.TransactionId;
+        });
 
     size_t consumed = 0;
     for (const GameId& questId : orderedQuestIds)
     {
         auto entryIt = m_entries.find(questId);
-        if (entryIt == m_entries.end() ||
-            !entryIt->second.Ready ||
-            entryIt->second.Request.Plan.DryRunOnly)
+        if (entryIt == m_entries.end() || !entryIt->second.Ready || entryIt->second.Request.Plan.DryRunOnly)
         {
             continue;
         }
 
         const uint64_t ownerGeneration = generationFence.GetGeneration();
-        if (!MatchesRuntimeOwner(
-                entryIt->second, aGuardedSession, ownerGeneration))
+        if (!MatchesRuntimeOwner(entryIt->second, aGuardedSession, ownerGeneration))
         {
             Retire(entryIt);
             continue;
@@ -647,8 +576,7 @@ size_t PartyQuestDeferredWorldQueue::ConsumeRuntimeReady(
             continue;
         }
 
-        const uint64_t queuedRevision =
-            entryIt->second.Request.CanonicalSnapshot.Revision;
+        const uint64_t queuedRevision = entryIt->second.Request.CanonicalSnapshot.Revision;
         if (currentRevision > queuedRevision)
         {
             m_transactionQuests.erase(entryIt->second.Request.TransactionId);
@@ -662,26 +590,16 @@ size_t PartyQuestDeferredWorldQueue::ConsumeRuntimeReady(
             continue;
         }
 
-        const auto currentIdentity =
-            PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(
-                entryIt->second.Request);
-        const auto fingerprintIt = m_transactionFingerprints.find(
-            entryIt->second.Request.TransactionId);
-        if (!currentIdentity ||
-            fingerprintIt == m_transactionFingerprints.end() ||
-            fingerprintIt->second != *currentIdentity)
+        const auto currentIdentity = PartyQuestRuntimeApplyCoordinator::BuildValidatedIdentity(entryIt->second.Request);
+        const auto fingerprintIt = m_transactionFingerprints.find(entryIt->second.Request.TransactionId);
+        if (!currentIdentity || fingerprintIt == m_transactionFingerprints.end() || fingerprintIt->second != *currentIdentity)
         {
             ResetRuntimeReadiness(entryIt->second);
             continue;
         }
 
-        const auto readiness = EvaluateRuntimeReadiness(
-            entryIt->second,
-            generationFence,
-            acReferenceReadiness,
-            acSources);
-        if (!readiness.IsReady() ||
-            readiness.RuntimeGeneration != entryIt->second.ReadyGeneration)
+        const auto readiness = EvaluateRuntimeReadiness(entryIt->second, generationFence, acReferenceReadiness, acSources);
+        if (!readiness.IsReady() || readiness.RuntimeGeneration != entryIt->second.ReadyGeneration)
         {
             ResetRuntimeReadiness(entryIt->second);
             continue;
@@ -694,10 +612,7 @@ size_t PartyQuestDeferredWorldQueue::ConsumeRuntimeReady(
             continue;
         }
 
-        if (!MatchesRuntimeOwner(
-                entryIt->second,
-                aGuardedSession,
-                finalLease->GetGeneration()))
+        if (!MatchesRuntimeOwner(entryIt->second, aGuardedSession, finalLease->GetGeneration()))
         {
             Retire(entryIt);
             continue;
@@ -727,11 +642,8 @@ size_t PartyQuestDeferredWorldQueue::ConsumeRuntimeReady(
             continue;
         }
 
-        const auto transition =
-            aGuardedSession.MarkWorldReadyPinned(entryIt->second.Request);
-        if (transition.Status != PartyQuestRuntimeGuardStatus::Ready ||
-            transition.TransitionStatus !=
-                PartyQuestRuntimeDurableTransitionStatus::Applied)
+        const auto transition = aGuardedSession.MarkWorldReadyPinned(entryIt->second.Request);
+        if (transition.Status != PartyQuestRuntimeGuardStatus::Ready || transition.TransitionStatus != PartyQuestRuntimeDurableTransitionStatus::Applied)
         {
             ResetRuntimeReadiness(entryIt->second);
             continue;
@@ -746,15 +658,11 @@ size_t PartyQuestDeferredWorldQueue::ConsumeRuntimeReady(
 }
 
 std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRuntimeReady(
-    const PartyQuestRuntimeGuardedSession& acGuardedSession,
-    PartyQuestRuntimeGenerationFence& aGenerationFence,
-    const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
-    const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
-    const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept
+    const PartyQuestRuntimeGuardedSession& acGuardedSession, PartyQuestRuntimeGenerationFence& aGenerationFence, const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+    const PartyQuestDeferredWorldRuntimeReadinessSources& acSources, const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept
 {
     std::vector<PartyQuestRuntimeApplyRequest> ready;
-    if (!acCanonicalRevisionObserver ||
-        &aGenerationFence == &PartyQuestRuntimeGenerationFence::GetProcessFence())
+    if (!acCanonicalRevisionObserver || &aGenerationFence == &PartyQuestRuntimeGenerationFence::GetProcessFence())
     {
         return ready;
     }
@@ -768,8 +676,7 @@ std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRun
         }
 
         const uint64_t ownerGeneration = aGenerationFence.GetGeneration();
-        if (!MatchesRuntimeOwner(
-                it->second, acGuardedSession, ownerGeneration))
+        if (!MatchesRuntimeOwner(it->second, acGuardedSession, ownerGeneration))
         {
             auto stale = it++;
             Retire(stale);
@@ -779,8 +686,7 @@ std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRun
         uint64_t currentRevision = 0;
         try
         {
-            currentRevision = acCanonicalRevisionObserver(
-                it->second.Request.CanonicalSnapshot.QuestId);
+            currentRevision = acCanonicalRevisionObserver(it->second.Request.CanonicalSnapshot.QuestId);
         }
         catch (...)
         {
@@ -789,8 +695,7 @@ std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRun
             continue;
         }
 
-        const uint64_t queuedRevision =
-            it->second.Request.CanonicalSnapshot.Revision;
+        const uint64_t queuedRevision = it->second.Request.CanonicalSnapshot.Revision;
         if (currentRevision > queuedRevision)
         {
             m_transactionQuests.erase(it->second.Request.TransactionId);
@@ -805,13 +710,8 @@ std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRun
             continue;
         }
 
-        const auto readiness = EvaluateRuntimeReadiness(
-            it->second,
-            aGenerationFence,
-            acReferenceReadiness,
-            acSources);
-        if (!readiness.IsReady() ||
-            readiness.RuntimeGeneration != it->second.ReadyGeneration)
+        const auto readiness = EvaluateRuntimeReadiness(it->second, aGenerationFence, acReferenceReadiness, acSources);
+        if (!readiness.IsReady() || readiness.RuntimeGeneration != it->second.ReadyGeneration)
         {
             ResetRuntimeReadiness(it->second);
             ++it;
@@ -826,10 +726,7 @@ std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRun
             continue;
         }
 
-        if (!MatchesRuntimeOwner(
-                it->second,
-                acGuardedSession,
-                finalLease->GetGeneration()))
+        if (!MatchesRuntimeOwner(it->second, acGuardedSession, finalLease->GetGeneration()))
         {
             auto stale = it++;
             Retire(stale);
@@ -841,27 +738,119 @@ std::vector<PartyQuestRuntimeApplyRequest> PartyQuestDeferredWorldQueue::TakeRun
         it = m_entries.erase(it);
     }
 
-    std::sort(ready.begin(), ready.end(), [](const auto& acLeft, const auto& acRight)
-    {
-        if (acLeft.TargetWorldRevision != acRight.TargetWorldRevision)
-            return acLeft.TargetWorldRevision < acRight.TargetWorldRevision;
-        return acLeft.TransactionId < acRight.TransactionId;
-    });
+    std::sort(
+        ready.begin(), ready.end(),
+        [](const auto& acLeft, const auto& acRight)
+        {
+            if (acLeft.TargetWorldRevision != acRight.TargetWorldRevision)
+                return acLeft.TargetWorldRevision < acRight.TargetWorldRevision;
+            return acLeft.TransactionId < acRight.TransactionId;
+        });
     return ready;
 }
 
-const PartyQuestDeferredWorldEntry* PartyQuestDeferredWorldQueue::FindByQuest(
-    const GameId& acQuestId) const noexcept
+const PartyQuestDeferredWorldEntry* PartyQuestDeferredWorldQueue::FindByQuest(const GameId& acQuestId) const noexcept
 {
     const auto it = m_entries.find(acQuestId);
     return it != m_entries.end() ? &it->second : nullptr;
 }
 
-const PartyQuestDeferredWorldEntry* PartyQuestDeferredWorldQueue::FindByTransaction(
-    uint64_t aTransactionId) const noexcept
+const PartyQuestDeferredWorldEntry* PartyQuestDeferredWorldQueue::FindByTransaction(uint64_t aTransactionId) const noexcept
 {
     const auto transactionIt = m_transactionQuests.find(aTransactionId);
     if (transactionIt == m_transactionQuests.end())
         return nullptr;
     return FindByQuest(transactionIt->second);
+}
+
+void PartyQuestDeferredWorldQueue::Clear() noexcept
+{
+    m_entries.clear();
+    m_transactionQuests.clear();
+    m_transactionFingerprints.clear();
+}
+
+size_t PartyQuestDeferredWorldQueue::ProcessDryRunReady(
+    const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness, const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
+    const CanonicalRevisionObserver& acCanonicalRevisionObserver, const std::function<void(const PartyQuestRuntimeApplyRequest&)>& acOnReady, size_t aMaxItems) noexcept
+{
+    if (!acOnReady || aMaxItems == 0)
+        return 0;
+
+    size_t processed = 0;
+    for (auto it = m_entries.begin(); it != m_entries.end() && processed < aMaxItems;)
+    {
+        if (!it->second.Request.Plan.DryRunOnly)
+        {
+            ++it;
+            continue;
+        }
+
+        const GameId questId = it->first;
+        const uint64_t currentRevision = acCanonicalRevisionObserver ? acCanonicalRevisionObserver(questId) : 0;
+        const uint64_t queuedRevision = it->second.Request.CanonicalSnapshot.Revision;
+
+        if (currentRevision > queuedRevision)
+        {
+            m_transactionQuests.erase(it->second.Request.TransactionId);
+            it = m_entries.erase(it);
+            continue;
+        }
+
+        if (currentRevision != 0 && currentRevision != queuedRevision)
+        {
+            ++it;
+            continue;
+        }
+
+        if (!it->second.LocationTargets.empty() || it->second.HasSceneDependency)
+        {
+            ++it;
+            continue;
+        }
+
+        bool referencesReady = true;
+        if (!it->second.ReferenceTargets.empty())
+        {
+            if (!acSources.ResolveReferenceFormId)
+            {
+                referencesReady = false;
+            }
+            else
+            {
+                std::vector<uint32_t> formIds;
+                formIds.reserve(it->second.ReferenceTargets.size());
+                for (const auto& target : it->second.ReferenceTargets)
+                {
+                    const uint32_t formId = acSources.ResolveReferenceFormId(target);
+                    if (formId == 0)
+                    {
+                        referencesReady = false;
+                        break;
+                    }
+                    formIds.push_back(formId);
+                }
+
+                if (referencesReady && !acReferenceReadiness.AreLoaded(formIds, acReferenceReadiness.GetObservationGeneration()))
+                {
+                    referencesReady = false;
+                }
+            }
+        }
+
+        if (referencesReady)
+        {
+            auto request = std::move(it->second.Request);
+            m_transactionQuests.erase(request.TransactionId);
+            it = m_entries.erase(it);
+            acOnReady(request);
+            ++processed;
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    return processed;
 }

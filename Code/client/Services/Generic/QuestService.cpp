@@ -485,11 +485,20 @@ void QuestService::PlanPartyQuestCanonicalRuntimeRequest(GameId aQuestId) noexce
 
         if (result.IsPlanned())
         {
-            // P0-D ends at a process-owned dry-run request. Native mutation stays
-            // physically disconnected until C/E/F and live validation are proven.
+            auto& runtimeOwner = PartyQuestRuntimeOwner::GetProcessOwner();
+            if (HasPartyQuestApplyAction(result.Request->Plan.Actions, PartyQuestApplyAction::WaitForWorldTargets))
+            {
+                const auto enqueued = runtimeOwner.GetDeferredWorldQueue().Enqueue(*result.Request);
+                spdlog::info(
+                    "PartyQuestRuntime dry-run request deferred for world targets: quest={:016X} transaction={} status={}", aQuestId.LogFormat(), result.Request->TransactionId,
+                    static_cast<unsigned>(enqueued));
+                return;
+            }
+
+            const auto dryRun = runtimeOwner.EvaluateDryRun(*result.Request);
             spdlog::info(
-                "PartyQuestRuntime dry-run request planned: quest={:016X} transaction={} worldRevision={} generation={}", aQuestId.LogFormat(), result.Request->TransactionId,
-                result.Request->TargetWorldRevision, result.RuntimeGeneration);
+                "PartyQuestRuntime dry-run request evaluated: quest={:016X} transaction={} worldRevision={} outcome={}", aQuestId.LogFormat(), result.Request->TransactionId,
+                result.Request->TargetWorldRevision, static_cast<unsigned>(dryRun.Outcome));
             return;
         }
 
@@ -558,7 +567,7 @@ void QuestService::OnPartyQuestCanonicalUpdate(const NotifyPartyQuestCanonicalUp
                         [this, questId]() noexcept { PlanPartyQuestCanonicalRuntimeRequest(questId); });
                     if (enqueued.Status != PartyQuestRuntimeOwner::EnqueueStatus::Queued)
                     {
-                        m_world.GetRunner().Queue([this, questId]() { PlanPartyQuestCanonicalRuntimeRequest(questId); });
+                        spdlog::debug("PartyQuestRuntime canonical enqueue rejected: quest={:016X} status={}", questId.LogFormat(), static_cast<unsigned>(enqueued.Status));
                     }
                 }
             }

@@ -29,6 +29,7 @@ PartyQuestRuntimeOwner::~PartyQuestRuntimeOwner() noexcept
     m_runtimeSessionBound = false;
     m_boundGeneration = 0;
     m_deferredOperations.clear();
+    m_deferredWorldQueue.Clear();
     m_skyrimObserver = {};
     m_papyrusObserver = {};
     m_executor = {};
@@ -41,8 +42,7 @@ PartyQuestRuntimeOwner& PartyQuestRuntimeOwner::GetProcessOwner() noexcept
     return s_owner;
 }
 
-PartyQuestRuntimeOwner::BoundaryStatus
-PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
+PartyQuestRuntimeOwner::BoundaryStatus PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
 {
     if (aBoundary != ClientBoundary::Shutdown)
     {
@@ -51,8 +51,7 @@ PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
             return BoundaryStatus::AlreadyShutdown;
     }
 
-    auto invalidation =
-        PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
+    auto invalidation = PartyQuestRuntimeGenerationFence::GetProcessFence().TryBeginInvalidation();
     if (!invalidation || !invalidation->IsValid())
         return BoundaryStatus::SynchronizationFailed;
 
@@ -69,31 +68,19 @@ PartyQuestRuntimeOwner::ApplyClientBoundary(ClientBoundary aBoundary) noexcept
     return BoundaryStatus::Applied;
 }
 
-void PartyQuestRuntimeOwner::ObserveSessionLifecycleBoundary(
-    PartyQuestRuntimeLifecycleEvent aEvent,
-    uint64_t aGeneration) noexcept
+void PartyQuestRuntimeOwner::ObserveSessionLifecycleBoundary(PartyQuestRuntimeLifecycleEvent aEvent, uint64_t aGeneration) noexcept
 {
     ClientBoundary boundary = ClientBoundary::RuntimeIdentityChanged;
     switch (aEvent)
     {
-    case PartyQuestRuntimeLifecycleEvent::PartyLeave:
-        boundary = ClientBoundary::PartyLeft;
-        break;
-    case PartyQuestRuntimeLifecycleEvent::Disconnect:
-        boundary = ClientBoundary::Disconnected;
-        break;
-    case PartyQuestRuntimeLifecycleEvent::CampaignSwitch:
-        boundary = ClientBoundary::CampaignChanged;
-        break;
-    case PartyQuestRuntimeLifecycleEvent::Shutdown:
-        boundary = ClientBoundary::Shutdown;
-        break;
+    case PartyQuestRuntimeLifecycleEvent::PartyLeave: boundary = ClientBoundary::PartyLeft; break;
+    case PartyQuestRuntimeLifecycleEvent::Disconnect: boundary = ClientBoundary::Disconnected; break;
+    case PartyQuestRuntimeLifecycleEvent::CampaignSwitch: boundary = ClientBoundary::CampaignChanged; break;
+    case PartyQuestRuntimeLifecycleEvent::Shutdown: boundary = ClientBoundary::Shutdown; break;
     case PartyQuestRuntimeLifecycleEvent::LoadGame:
     case PartyQuestRuntimeLifecycleEvent::NewGame:
     case PartyQuestRuntimeLifecycleEvent::MainMenu:
-    case PartyQuestRuntimeLifecycleEvent::ProfileSwitch:
-        boundary = ClientBoundary::RuntimeIdentityChanged;
-        break;
+    case PartyQuestRuntimeLifecycleEvent::ProfileSwitch: boundary = ClientBoundary::RuntimeIdentityChanged; break;
     }
 
     {
@@ -107,8 +94,7 @@ void PartyQuestRuntimeOwner::ObserveSessionLifecycleBoundary(
 
 void PartyQuestRuntimeOwner::MarkRuntimeSessionBound(uint64_t aGeneration) noexcept
 {
-    if (aGeneration == 0 ||
-        PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration() != aGeneration)
+    if (aGeneration == 0 || PartyQuestRuntimeGenerationFence::GetProcessFence().GetGeneration() != aGeneration)
     {
         return;
     }
@@ -121,9 +107,7 @@ void PartyQuestRuntimeOwner::MarkRuntimeSessionBound(uint64_t aGeneration) noexc
     m_boundGeneration = aGeneration;
 }
 
-PartyQuestRuntimeOwner::BootstrapResult PartyQuestRuntimeOwner::RunBootstrap(
-    uint64_t aExpectedGeneration,
-    const BootstrapAction& acAction) noexcept
+PartyQuestRuntimeOwner::BootstrapResult PartyQuestRuntimeOwner::RunBootstrap(uint64_t aExpectedGeneration, const BootstrapAction& acAction) noexcept
 {
     BootstrapResult result;
     result.RuntimeGeneration = aExpectedGeneration;
@@ -148,8 +132,7 @@ PartyQuestRuntimeOwner::BootstrapResult PartyQuestRuntimeOwner::RunBootstrap(
     }
 
     auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
-    if (fence.GetGeneration() != aExpectedGeneration ||
-        !m_sessionOwner.IsBound())
+    if (fence.GetGeneration() != aExpectedGeneration || !m_sessionOwner.IsBound())
     {
         result.Status = BootstrapStatus::StaleGeneration;
         return result;
@@ -169,10 +152,7 @@ PartyQuestRuntimeOwner::BootstrapResult PartyQuestRuntimeOwner::RunBootstrap(
     return result;
 }
 
-void PartyQuestRuntimeOwner::ConfigureRuntimeAdapters(
-    SkyrimObserver aSkyrimObserver,
-    PapyrusObserver aPapyrusObserver,
-    RuntimeExecutor aExecutor) noexcept
+void PartyQuestRuntimeOwner::ConfigureRuntimeAdapters(SkyrimObserver aSkyrimObserver, PapyrusObserver aPapyrusObserver, RuntimeExecutor aExecutor) noexcept
 {
     try
     {
@@ -197,9 +177,7 @@ void PartyQuestRuntimeOwner::ClearRuntimeAdapters() noexcept
     m_executor = {};
 }
 
-PartyQuestRuntimeOwner::EnqueueResult PartyQuestRuntimeOwner::Enqueue(
-    Validation aValidation,
-    Operation aOperation) noexcept
+PartyQuestRuntimeOwner::EnqueueResult PartyQuestRuntimeOwner::Enqueue(Validation aValidation, Operation aOperation) noexcept
 {
     EnqueueResult result;
     if (!aValidation || !aOperation)
@@ -217,8 +195,7 @@ PartyQuestRuntimeOwner::EnqueueResult PartyQuestRuntimeOwner::Enqueue(
     try
     {
         std::lock_guard lock(m_mutex);
-        if (!CanAcceptLocked() || !m_sessionOwner.IsBound() ||
-            m_boundGeneration != generation)
+        if (!CanAcceptLocked() || !m_sessionOwner.IsBound() || m_boundGeneration != generation)
         {
             result.Status = EnqueueStatus::AdmissionClosed;
             return result;
@@ -279,9 +256,7 @@ PartyQuestRuntimeOwner::ExecuteStatus PartyQuestRuntimeOwner::ExecuteNext() noex
         std::lock_guard lock(m_mutex);
         if (!CanAcceptLocked() || !m_sessionOwner.IsBound())
             return ExecuteStatus::AdmissionClosed;
-        if (deferred.OwnerEpoch != m_ownerEpoch ||
-            deferred.RuntimeGeneration != m_boundGeneration ||
-            lease->GetGeneration() != deferred.RuntimeGeneration)
+        if (deferred.OwnerEpoch != m_ownerEpoch || deferred.RuntimeGeneration != m_boundGeneration || lease->GetGeneration() != deferred.RuntimeGeneration)
         {
             return ExecuteStatus::StaleGeneration;
         }
@@ -399,8 +374,7 @@ bool PartyQuestRuntimeOwner::ObserveSkyrimRuntime() noexcept
     }
 }
 
-std::optional<PartyQuestPapyrusRuntimeObservation>
-PartyQuestRuntimeOwner::ObservePapyrusRuntime(uint64_t aTransactionId) noexcept
+std::optional<PartyQuestPapyrusRuntimeObservation> PartyQuestRuntimeOwner::ObservePapyrusRuntime(uint64_t aTransactionId) noexcept
 {
     PapyrusObserver observer;
     uint64_t generation{};
@@ -442,15 +416,14 @@ PartyQuestRuntimeOwner::ObservePapyrusRuntime(uint64_t aTransactionId) noexcept
     }
 }
 
-void PartyQuestRuntimeOwner::ApplyBoundaryStateLocked(
-    ClientBoundary aBoundary,
-    uint64_t aGeneration) noexcept
+void PartyQuestRuntimeOwner::ApplyBoundaryStateLocked(ClientBoundary aBoundary, uint64_t aGeneration) noexcept
 {
     ++m_ownerEpoch;
     if (m_ownerEpoch == 0)
         m_ownerEpoch = 1;
 
     m_deferredOperations.clear();
+    m_deferredWorldQueue.Clear();
     m_runtimeSessionBound = false;
     m_boundGeneration = 0;
 
@@ -460,19 +433,14 @@ void PartyQuestRuntimeOwner::ApplyBoundaryStateLocked(
         m_connected = true;
         m_inParty = false;
         break;
-    case ClientBoundary::PartyJoined:
-        m_inParty = m_connected;
-        break;
+    case ClientBoundary::PartyJoined: m_inParty = m_connected; break;
     case ClientBoundary::Disconnected:
         m_connected = false;
         m_inParty = false;
         break;
-    case ClientBoundary::PartyLeft:
-        m_inParty = false;
-        break;
+    case ClientBoundary::PartyLeft: m_inParty = false; break;
     case ClientBoundary::CampaignChanged:
-    case ClientBoundary::RuntimeIdentityChanged:
-        break;
+    case ClientBoundary::RuntimeIdentityChanged: break;
     case ClientBoundary::Shutdown:
         m_shutdown = true;
         m_connected = false;
@@ -488,8 +456,7 @@ void PartyQuestRuntimeOwner::ApplyBoundaryStateLocked(
 
 bool PartyQuestRuntimeOwner::CanAcceptLocked() const noexcept
 {
-    return !m_shutdown && m_connected && m_inParty &&
-        m_runtimeSessionBound && m_boundGeneration != 0;
+    return !m_shutdown && m_connected && m_inParty && m_runtimeSessionBound && m_boundGeneration != 0;
 }
 
 void PartyQuestRuntimeOwner::CloseCallbackLifetime() noexcept
@@ -504,4 +471,95 @@ void PartyQuestRuntimeOwner::CloseCallbackLifetime() noexcept
         lifetime->Owner = nullptr;
     }
     m_callbackLifetime.reset();
+}
+
+PartyQuestRuntimeDryRunResult PartyQuestRuntimeOwner::EvaluateDryRun(const PartyQuestRuntimeApplyRequest& aRequest) noexcept
+{
+    PartyQuestRuntimeDryRunResult result;
+    result.QuestId = aRequest.CanonicalSnapshot.QuestId;
+    result.TransactionId = aRequest.TransactionId;
+    result.TargetWorldRevision = aRequest.TargetWorldRevision;
+
+    if (!aRequest.Plan.DryRunOnly || !aRequest.CanonicalSnapshot.QuestId || aRequest.TransactionId == 0 || aRequest.TargetWorldRevision == 0)
+    {
+        result.Outcome = PartyQuestRuntimeDryRunOutcome::Invalid;
+        return result;
+    }
+
+    auto& fence = PartyQuestRuntimeGenerationFence::GetProcessFence();
+    const uint64_t generation = fence.GetGeneration();
+    result.RuntimeGeneration = generation;
+
+    if (fence.IsPoisoned() || fence.IsLifecycleTransitionPending() || generation == 0)
+    {
+        result.Outcome = PartyQuestRuntimeDryRunOutcome::Stale;
+        return result;
+    }
+
+    {
+        std::lock_guard lock(m_mutex);
+        if (m_shutdown || !m_connected || !m_inParty || !m_runtimeSessionBound || m_boundGeneration != generation)
+        {
+            result.Outcome = PartyQuestRuntimeDryRunOutcome::Stale;
+            return result;
+        }
+    }
+
+    if (!m_sessionOwner.IsBound())
+    {
+        result.Outcome = PartyQuestRuntimeDryRunOutcome::Invalid;
+        return result;
+    }
+
+    if (m_sessionOwner.IsRecoveryBlocked())
+    {
+        result.Outcome = PartyQuestRuntimeDryRunOutcome::RecoveryBlocked;
+        return result;
+    }
+
+    const auto compatStatus = m_compatibilityEnvironment.GetStatus();
+    if (compatStatus == PartyQuestCompatibilityEnvironmentCacheStatus::Computing)
+    {
+        result.Outcome = PartyQuestRuntimeDryRunOutcome::RetryableBusy;
+        return result;
+    }
+
+    if (HasPartyQuestApplyAction(aRequest.Plan.Actions, PartyQuestApplyAction::WaitForPapyrusQuiescence))
+    {
+        const auto papyrusObs = ObservePapyrusRuntime(aRequest.TransactionId);
+        if (!papyrusObs || papyrusObs->Status == PartyQuestPapyrusRuntimeObservationStatus::Unsupported)
+        {
+            result.Outcome = PartyQuestRuntimeDryRunOutcome::Unsupported;
+            return result;
+        }
+        if (papyrusObs->Status != PartyQuestPapyrusRuntimeObservationStatus::Idle)
+        {
+            result.Outcome = PartyQuestRuntimeDryRunOutcome::RetryableBusy;
+            return result;
+        }
+    }
+
+    if (aRequest.Plan.Safety.Status != PartyQuestRuntimeSafetyStatus::RuntimeSafe)
+    {
+        result.Outcome = PartyQuestRuntimeDryRunOutcome::Unsupported;
+        return result;
+    }
+
+    result.Outcome = PartyQuestRuntimeDryRunOutcome::WouldApply;
+
+    return result;
+}
+
+size_t PartyQuestRuntimeOwner::ProcessDeferredWorldReady(
+    const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness, const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
+    const PartyQuestDeferredWorldQueue::CanonicalRevisionObserver& acCanonicalObserver, size_t aMaxItems) noexcept
+{
+    {
+        std::lock_guard lock(m_mutex);
+        if (!CanAcceptLocked())
+            return 0;
+    }
+
+    return m_deferredWorldQueue.ProcessDryRunReady(
+        acReferenceReadiness, acSources, acCanonicalObserver, [this](const PartyQuestRuntimeApplyRequest& aRequest) noexcept { (void)EvaluateDryRun(aRequest); }, aMaxItems);
 }

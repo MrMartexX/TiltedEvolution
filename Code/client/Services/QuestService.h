@@ -43,15 +43,20 @@ public:
      * Read-only production-bootstrap view. Campaign identity is exposed only
      * after the server repair handshake has established a verified local replica.
      */
-    [[nodiscard]] std::optional<PartyQuestCampaignId>
-    GetVerifiedPartyQuestCampaignId() const noexcept
+    [[nodiscard]] std::optional<PartyQuestCampaignId> GetVerifiedPartyQuestCampaignId() const noexcept
     {
         if (!m_partyQuestProtocolVerified || !m_partyQuestSession)
             return std::nullopt;
         const auto campaign = m_partyQuestSession->GetCampaignId();
-        return campaign.IsValid()
-            ? std::optional<PartyQuestCampaignId>(campaign)
-            : std::nullopt;
+        return campaign.IsValid() ? std::optional<PartyQuestCampaignId>(campaign) : std::nullopt;
+    }
+
+    [[nodiscard]] uint64_t GetCanonicalQuestRevision(const GameId& aQuestId) const noexcept
+    {
+        if (!m_partyQuestProtocolVerified || !m_partyQuestSession)
+            return 0;
+        const auto* quest = m_partyQuestSession->GetReplica().FindQuest(aQuestId);
+        return quest ? quest->Revision : 0;
     }
 
 private:

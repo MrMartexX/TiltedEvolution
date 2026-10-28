@@ -9,6 +9,7 @@
 #include <Events/UpdateEvent.h>
 #include <Messages/PartyQuestMessages.h>
 #include <PartyQuestSkyrimPapyrusRuntimeObserver.h>
+#include <PartyQuestSkyrimReferenceReadiness.h>
 #include <PartyQuestSkyrimStageMutationExecutor.h>
 #include <PlayerCharacter.h>
 #include <Services/QuestService.h>
@@ -270,6 +271,27 @@ void PartyQuestRuntimeOwnerService::OnUpdate(const UpdateEvent&) noexcept
     // owner itself supplies the generation execution lease across validation and
     // callback entry; a lifecycle boundary therefore blocks before Skyrim access.
     (void)owner.ExecuteNext();
+
+    PartyQuestDeferredWorldRuntimeReadinessSources sources;
+    sources.ResolveReferenceFormId = [this](const GameId& aId) noexcept -> uint32_t
+    {
+        return m_world.GetModSystem().GetGameId(aId);
+    };
+    sources.IsLocationReady = [](const GameId&) noexcept
+    {
+        return false;
+    };
+    sources.IsSceneReady = [](uint32_t) noexcept
+    {
+        return false;
+    };
+
+    PartyQuestDeferredWorldQueue::CanonicalRevisionObserver revisionObserver = [this](const GameId& aId) noexcept -> uint64_t
+    {
+        return m_world.ctx().at<QuestService>().GetCanonicalQuestRevision(aId);
+    };
+
+    (void)owner.ProcessDeferredWorldReady(GetPartyQuestSkyrimReferenceReadiness(), sources, revisionObserver, 4);
 }
 
 void PartyQuestRuntimeOwnerService::TryBootstrap() noexcept

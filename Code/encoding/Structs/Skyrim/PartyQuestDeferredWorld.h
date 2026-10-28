@@ -61,15 +61,10 @@ struct PartyQuestDeferredWorldRuntimeReadinessSources
 
 struct PartyQuestDeferredWorldRuntimeReadinessResult
 {
-    PartyQuestDeferredWorldRuntimeReadinessStatus Status{
-        PartyQuestDeferredWorldRuntimeReadinessStatus::InvalidRequest};
+    PartyQuestDeferredWorldRuntimeReadinessStatus Status{PartyQuestDeferredWorldRuntimeReadinessStatus::InvalidRequest};
     uint64_t RuntimeGeneration{};
 
-    [[nodiscard]] bool IsReady() const noexcept
-    {
-        return Status == PartyQuestDeferredWorldRuntimeReadinessStatus::Ready &&
-            RuntimeGeneration != 0;
-    }
+    [[nodiscard]] bool IsReady() const noexcept { return Status == PartyQuestDeferredWorldRuntimeReadinessStatus::Ready && RuntimeGeneration != 0; }
 };
 
 struct PartyQuestDeferredWorldEntry
@@ -131,23 +126,18 @@ public:
 
     using CanonicalRevisionObserver = std::function<uint64_t(const GameId&)>;
 
-    [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus Enqueue(
-        PartyQuestRuntimeApplyRequest aRequest);
+    [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus Enqueue(PartyQuestRuntimeApplyRequest aRequest);
 
     /**
      * Runtime-only enqueue. The exact guarded session identity and generation
      * are captured atomically under a generation lease. A runtime request sent
      * through the diagnostic Enqueue overload is rejected fail-closed.
      */
-    [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus EnqueueRuntime(
-        PartyQuestRuntimeApplyRequest aRequest,
-        const PartyQuestRuntimeGuardedSession& acGuardedSession,
-        PartyQuestRuntimeGenerationFence& aGenerationFence) noexcept;
+    [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus
+    EnqueueRuntime(PartyQuestRuntimeApplyRequest aRequest, const PartyQuestRuntimeGuardedSession& acGuardedSession, PartyQuestRuntimeGenerationFence& aGenerationFence) noexcept;
 
     /** Diagnostic DryRunOnly readiness surface. Never accepts runtime plans. */
-    bool MarkReady(
-        PartyQuestRuntimeApplyRequest aCurrentRequest,
-        uint64_t aCurrentCanonicalQuestRevision) noexcept;
+    bool MarkReady(PartyQuestRuntimeApplyRequest aCurrentRequest, uint64_t aCurrentCanonicalQuestRevision) noexcept;
 
     /**
      * Runtime readiness gate. The current canonical revision is supplied
@@ -155,17 +145,23 @@ public:
      * in the queued snapshot must have its own authoritative evidence source.
      */
     [[nodiscard]] PartyQuestDeferredWorldRuntimeReadinessResult TryMarkRuntimeReady(
-        PartyQuestRuntimeApplyRequest aCurrentRequest,
-        uint64_t aCurrentCanonicalQuestRevision,
-        const PartyQuestRuntimeGuardedSession& acGuardedSession,
-        PartyQuestRuntimeGenerationFence& aGenerationFence,
-        const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+        PartyQuestRuntimeApplyRequest aCurrentRequest, uint64_t aCurrentCanonicalQuestRevision, const PartyQuestRuntimeGuardedSession& acGuardedSession,
+        PartyQuestRuntimeGenerationFence& aGenerationFence, const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
         const PartyQuestDeferredWorldRuntimeReadinessSources& acSources) noexcept;
 
     /** Drops a queued repair if a newer canonical quest revision is already known. */
-    bool InvalidateIfOlder(
-        const GameId& acQuestId,
-        uint64_t aCanonicalQuestRevision) noexcept;
+    bool InvalidateIfOlder(const GameId& acQuestId, uint64_t aCanonicalQuestRevision) noexcept;
+
+    /**
+     * Point-of-use transition for DryRunOnly deferred work.
+     * Evaluates reference readiness and invokes the callback for ready requests,
+     * retiring them up to aMaxItems.
+     */
+    [[nodiscard]] size_t ProcessDryRunReady(
+        const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness, const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
+        const CanonicalRevisionObserver& acCanonicalRevisionObserver, const std::function<void(const PartyQuestRuntimeApplyRequest&)>& acOnReady, size_t aMaxItems = 4) noexcept;
+
+    void Clear() noexcept;
 
     /** Diagnostic DryRunOnly extraction. Runtime plans are never emitted here. */
     [[nodiscard]] std::vector<PartyQuestRuntimeApplyRequest> TakeReady();
@@ -179,60 +175,40 @@ public:
      * so fresh evidence can retry without losing the deferred transaction.
      */
     [[nodiscard]] size_t ConsumeRuntimeReady(
-        PartyQuestRuntimeGuardedSession& aGuardedSession,
-        const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
-        const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
-        const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept;
+        PartyQuestRuntimeGuardedSession& aGuardedSession, const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+        const PartyQuestDeferredWorldRuntimeReadinessSources& acSources, const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept;
 
     /**
      * Explicit-fence unit-test extraction seam. Runtime production code must use
      * ConsumeRuntimeReady; passing the shared process fence here fails closed.
      */
     [[nodiscard]] std::vector<PartyQuestRuntimeApplyRequest> TakeRuntimeReady(
-        const PartyQuestRuntimeGuardedSession& acGuardedSession,
-        PartyQuestRuntimeGenerationFence& aGenerationFence,
-        const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
-        const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
+        const PartyQuestRuntimeGuardedSession& acGuardedSession, PartyQuestRuntimeGenerationFence& aGenerationFence,
+        const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness, const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
         const CanonicalRevisionObserver& acCanonicalRevisionObserver) noexcept;
 
-    [[nodiscard]] const PartyQuestDeferredWorldEntry* FindByQuest(
-        const GameId& acQuestId) const noexcept;
+    [[nodiscard]] const PartyQuestDeferredWorldEntry* FindByQuest(const GameId& acQuestId) const noexcept;
 
-    [[nodiscard]] const PartyQuestDeferredWorldEntry* FindByTransaction(
-        uint64_t aTransactionId) const noexcept;
+    [[nodiscard]] const PartyQuestDeferredWorldEntry* FindByTransaction(uint64_t aTransactionId) const noexcept;
 
     [[nodiscard]] size_t GetPendingCount() const noexcept { return m_entries.size(); }
-    [[nodiscard]] size_t GetRememberedTransactionCount() const noexcept
-    {
-        return m_transactionFingerprints.size();
-    }
+    [[nodiscard]] size_t GetRememberedTransactionCount() const noexcept { return m_transactionFingerprints.size(); }
 
 private:
-    [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus EnqueueBound(
-        PartyQuestRuntimeApplyRequest aRequest,
-        const PartyQuestCampaignId* apCampaignId,
-        const PartyQuestPlayerProfileId* apPlayerProfileId,
-        uint64_t aEnqueueGeneration);
+    [[nodiscard]] PartyQuestDeferredWorldEnqueueStatus
+    EnqueueBound(PartyQuestRuntimeApplyRequest aRequest, const PartyQuestCampaignId* apCampaignId, const PartyQuestPlayerProfileId* apPlayerProfileId, uint64_t aEnqueueGeneration);
 
-    [[nodiscard]] static bool MatchesRuntimeOwner(
-        const PartyQuestDeferredWorldEntry& acEntry,
-        const PartyQuestRuntimeGuardedSession& acGuardedSession,
-        uint64_t aGeneration) noexcept;
+    [[nodiscard]] static bool
+    MatchesRuntimeOwner(const PartyQuestDeferredWorldEntry& acEntry, const PartyQuestRuntimeGuardedSession& acGuardedSession, uint64_t aGeneration) noexcept;
 
     void Retire(std::unordered_map<GameId, PartyQuestDeferredWorldEntry>::iterator aIt) noexcept;
 
-    [[nodiscard]] static std::vector<GameId> CollectReferenceTargets(
-        const QuestSnapshot& acSnapshot);
-    [[nodiscard]] static std::vector<GameId> CollectLocationTargets(
-        const QuestSnapshot& acSnapshot);
-    [[nodiscard]] static std::vector<GameId> CollectWorldTargets(
-        const QuestSnapshot& acSnapshot);
+    [[nodiscard]] static std::vector<GameId> CollectReferenceTargets(const QuestSnapshot& acSnapshot);
+    [[nodiscard]] static std::vector<GameId> CollectLocationTargets(const QuestSnapshot& acSnapshot);
+    [[nodiscard]] static std::vector<GameId> CollectWorldTargets(const QuestSnapshot& acSnapshot);
 
-    [[nodiscard]] static PartyQuestDeferredWorldRuntimeReadinessResult
-    EvaluateRuntimeReadiness(
-        const PartyQuestDeferredWorldEntry& acEntry,
-        PartyQuestRuntimeGenerationFence& aGenerationFence,
-        const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
+    [[nodiscard]] static PartyQuestDeferredWorldRuntimeReadinessResult EvaluateRuntimeReadiness(
+        const PartyQuestDeferredWorldEntry& acEntry, PartyQuestRuntimeGenerationFence& aGenerationFence, const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness,
         const PartyQuestDeferredWorldRuntimeReadinessSources& acSources) noexcept;
 
     std::unordered_map<GameId, PartyQuestDeferredWorldEntry> m_entries;

@@ -1,7 +1,9 @@
 #pragma once
 
 #include <Structs/Skyrim/PartyQuestCompatibilityEnvironmentCache.h>
+#include <Structs/Skyrim/PartyQuestDeferredWorld.h>
 #include <Structs/Skyrim/PartyQuestPapyrusRuntimeMonitor.h>
+#include <Structs/Skyrim/PartyQuestRuntimeDryRunResult.h>
 #include <Structs/Skyrim/PartyQuestRuntimeGenerationFence.h>
 #include <Structs/Skyrim/PartyQuestRuntimeSessionOwner.h>
 
@@ -110,21 +112,11 @@ public:
 
     [[nodiscard]] static PartyQuestRuntimeOwner& GetProcessOwner() noexcept;
 
-    [[nodiscard]] PartyQuestRuntimeSessionOwner& GetSessionOwner() noexcept
-    {
-        return m_sessionOwner;
-    }
+    [[nodiscard]] PartyQuestRuntimeSessionOwner& GetSessionOwner() noexcept { return m_sessionOwner; }
 
-    [[nodiscard]] const PartyQuestRuntimeSessionOwner& GetSessionOwner() const noexcept
-    {
-        return m_sessionOwner;
-    }
+    [[nodiscard]] const PartyQuestRuntimeSessionOwner& GetSessionOwner() const noexcept { return m_sessionOwner; }
 
-    [[nodiscard]] PartyQuestCompatibilityEnvironmentCache&
-    GetCompatibilityEnvironmentCache() noexcept
-    {
-        return m_compatibilityEnvironment;
-    }
+    [[nodiscard]] PartyQuestCompatibilityEnvironmentCache& GetCompatibilityEnvironmentCache() noexcept { return m_compatibilityEnvironment; }
 
     [[nodiscard]] BoundaryStatus ApplyClientBoundary(ClientBoundary aBoundary) noexcept;
 
@@ -132,16 +124,12 @@ public:
      * Called by PartyQuestRuntimeSessionOwner while it owns the exclusive process
      * generation invalidation lease. It must never try to acquire that lease again.
      */
-    void ObserveSessionLifecycleBoundary(
-        PartyQuestRuntimeLifecycleEvent aEvent,
-        uint64_t aGeneration) noexcept;
+    void ObserveSessionLifecycleBoundary(PartyQuestRuntimeLifecycleEvent aEvent, uint64_t aGeneration) noexcept;
 
     /** Mark a successful durable process-session bind for the exact generation. */
     void MarkRuntimeSessionBound(uint64_t aGeneration) noexcept;
 
-    [[nodiscard]] BootstrapResult RunBootstrap(
-        uint64_t aExpectedGeneration,
-        const BootstrapAction& acAction) noexcept;
+    [[nodiscard]] BootstrapResult RunBootstrap(uint64_t aExpectedGeneration, const BootstrapAction& acAction) noexcept;
 
     /**
      * Installs concrete client adapters into this owner. The mutation executor is
@@ -149,15 +137,10 @@ public:
      * must still enter through PartyQuestRuntimeMutationDispatchGate and its
      * durable barrier before any future integration consumes this executor.
      */
-    void ConfigureRuntimeAdapters(
-        SkyrimObserver aSkyrimObserver,
-        PapyrusObserver aPapyrusObserver,
-        RuntimeExecutor aExecutor) noexcept;
+    void ConfigureRuntimeAdapters(SkyrimObserver aSkyrimObserver, PapyrusObserver aPapyrusObserver, RuntimeExecutor aExecutor) noexcept;
     void ClearRuntimeAdapters() noexcept;
 
-    [[nodiscard]] EnqueueResult Enqueue(
-        Validation aValidation,
-        Operation aOperation) noexcept;
+    [[nodiscard]] EnqueueResult Enqueue(Validation aValidation, Operation aOperation) noexcept;
     [[nodiscard]] ExecuteStatus ExecuteNext() noexcept;
 
     /**
@@ -173,8 +156,17 @@ public:
 
     /** Read-only owned adapters; both are point-of-use generation leased. */
     [[nodiscard]] bool ObserveSkyrimRuntime() noexcept;
-    [[nodiscard]] std::optional<PartyQuestPapyrusRuntimeObservation>
-    ObservePapyrusRuntime(uint64_t aTransactionId) noexcept;
+    [[nodiscard]] std::optional<PartyQuestPapyrusRuntimeObservation> ObservePapyrusRuntime(uint64_t aTransactionId) noexcept;
+
+    [[nodiscard]] PartyQuestDeferredWorldQueue& GetDeferredWorldQueue() noexcept { return m_deferredWorldQueue; }
+
+    [[nodiscard]] const PartyQuestDeferredWorldQueue& GetDeferredWorldQueue() const noexcept { return m_deferredWorldQueue; }
+
+    [[nodiscard]] PartyQuestRuntimeDryRunResult EvaluateDryRun(const PartyQuestRuntimeApplyRequest& aRequest) noexcept;
+
+    [[nodiscard]] size_t ProcessDeferredWorldReady(
+        const PartyQuestRuntimeReferenceReadiness& acReferenceReadiness, const PartyQuestDeferredWorldRuntimeReadinessSources& acSources,
+        const PartyQuestDeferredWorldQueue::CanonicalRevisionObserver& acCanonicalObserver, size_t aMaxItems = 4) noexcept;
 
 private:
     struct DeferredOperation
@@ -202,6 +194,7 @@ private:
     mutable std::mutex m_mutex;
     PartyQuestRuntimeSessionOwner m_sessionOwner;
     PartyQuestCompatibilityEnvironmentCache m_compatibilityEnvironment;
+    PartyQuestDeferredWorldQueue m_deferredWorldQueue;
     std::deque<DeferredOperation> m_deferredOperations;
     SkyrimObserver m_skyrimObserver;
     PapyrusObserver m_papyrusObserver;
@@ -223,40 +216,22 @@ private:
 class PartyQuestRuntimeCompatibilityEnvironmentHandle final
 {
 public:
-    [[nodiscard]] bool Start(
-        PartyQuestCompatibilityEnvironmentSnapshot aSnapshot) noexcept
+    [[nodiscard]] bool Start(PartyQuestCompatibilityEnvironmentSnapshot aSnapshot) noexcept
     {
-        return PartyQuestRuntimeOwner::GetProcessOwner()
-            .GetCompatibilityEnvironmentCache()
-            .Start(std::move(aSnapshot));
+        return PartyQuestRuntimeOwner::GetProcessOwner().GetCompatibilityEnvironmentCache().Start(std::move(aSnapshot));
     }
 
-    void Stop() noexcept
-    {
-        PartyQuestRuntimeOwner::GetProcessOwner()
-            .GetCompatibilityEnvironmentCache()
-            .Stop();
-    }
+    void Stop() noexcept { PartyQuestRuntimeOwner::GetProcessOwner().GetCompatibilityEnvironmentCache().Stop(); }
 
     [[nodiscard]] PartyQuestCompatibilityEnvironmentCacheStatus GetStatus() const noexcept
     {
-        return PartyQuestRuntimeOwner::GetProcessOwner()
-            .GetCompatibilityEnvironmentCache()
-            .GetStatus();
+        return PartyQuestRuntimeOwner::GetProcessOwner().GetCompatibilityEnvironmentCache().GetStatus();
     }
 
-    [[nodiscard]] std::optional<PartyQuestCompatibilityEnvironmentFingerprints>
-    GetReady() const noexcept
+    [[nodiscard]] std::optional<PartyQuestCompatibilityEnvironmentFingerprints> GetReady() const noexcept
     {
-        return PartyQuestRuntimeOwner::GetProcessOwner()
-            .GetCompatibilityEnvironmentCache()
-            .GetReady();
+        return PartyQuestRuntimeOwner::GetProcessOwner().GetCompatibilityEnvironmentCache().GetReady();
     }
 
-    [[nodiscard]] uint64_t GetComputationCount() const noexcept
-    {
-        return PartyQuestRuntimeOwner::GetProcessOwner()
-            .GetCompatibilityEnvironmentCache()
-            .GetComputationCount();
-    }
+    [[nodiscard]] uint64_t GetComputationCount() const noexcept { return PartyQuestRuntimeOwner::GetProcessOwner().GetCompatibilityEnvironmentCache().GetComputationCount(); }
 };
