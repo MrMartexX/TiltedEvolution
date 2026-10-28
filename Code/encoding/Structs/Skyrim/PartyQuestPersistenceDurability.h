@@ -31,28 +31,22 @@ enum class PartyQuestPersistenceGuarantee : uint8_t
  */
 struct PartyQuestPersistenceDurabilityPolicy
 {
-    static constexpr PartyQuestPersistenceGuarantee CurrentLocalGuarantee =
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient;
-    static constexpr PartyQuestPersistenceGuarantee MinimumPoCRuntimeMutationGuarantee =
-        PartyQuestPersistenceGuarantee::ProcessCrashResilient;
-    static constexpr PartyQuestPersistenceGuarantee MinimumProductionRuntimeMutationGuarantee =
-        PartyQuestPersistenceGuarantee::PowerLossDurable;
+    static constexpr PartyQuestPersistenceGuarantee CurrentLocalGuarantee = PartyQuestPersistenceGuarantee::ProcessCrashResilient;
+    static constexpr PartyQuestPersistenceGuarantee MinimumPoCRuntimeMutationGuarantee = PartyQuestPersistenceGuarantee::ProcessCrashResilient;
+    static constexpr PartyQuestPersistenceGuarantee MinimumProductionRuntimeMutationGuarantee = PartyQuestPersistenceGuarantee::PowerLossDurable;
 
-    [[nodiscard]] static constexpr bool Meets(
-        PartyQuestPersistenceGuarantee aProvided,
-        PartyQuestPersistenceGuarantee aRequired) noexcept
+    [[nodiscard]] static constexpr bool Meets(PartyQuestPersistenceGuarantee aProvided, PartyQuestPersistenceGuarantee aRequired) noexcept
     {
         return static_cast<uint8_t>(aProvided) >= static_cast<uint8_t>(aRequired);
     }
 
-    [[nodiscard]] static constexpr bool IsProductionRuntimeMutationReady(
-        PartyQuestPersistenceGuarantee aProvided) noexcept
+    [[nodiscard]] static constexpr bool IsProductionRuntimeMutationReady(PartyQuestPersistenceGuarantee aProvided) noexcept
     {
         return Meets(aProvided, MinimumProductionRuntimeMutationGuarantee);
     }
 
-    [[nodiscard]] static constexpr bool AllowsNativeRuntimeMutation() noexcept
-    {
-        return IsProductionRuntimeMutationReady(CurrentLocalGuarantee);
-    }
+    [[nodiscard]] static bool AllowsNativeRuntimeMutation() noexcept;
+
+    static void SetControlledActivationEnabled(bool aEnabled) noexcept;
+    [[nodiscard]] static bool IsControlledActivationEnabled() noexcept;
 };

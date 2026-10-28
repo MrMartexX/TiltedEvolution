@@ -118,10 +118,10 @@ HEAD.
 | 07 Skyrim/SKSE async save contract | Local implementation | Load-bridge follow-up merged in `96a0877b` (PR #19); full Task 07 still requires exact-runtime live/fault acceptance |
 | 08 Power-loss-durable checkpoint | Local implementation | Cross-platform NTFS/POSIX durability + immutable `pre_repair_commit.bin` authorization verified locally (`286,666 assertions / 974 cases`); awaits four-job CI and physical power-loss acceptance |
 | 09 Deterministic recovery | Local implementation | Crash and live recovery strong restore-attempt routing + authorization binding verified locally; awaits Task 08 acceptance and live crash validation |
-| 10 Production dry-run pipeline | Planned | Requires Tasks 01–09 |
-| 11 Divergent-save reconciliation | Planned | Requires production dry-run observations |
-| 12 Reviewed quest profiles | Planned | Requires accepted reconciliation model |
-| 13 Narrow mutation/two-client validation | Planned | Requires Tasks 01–12; disabled by default |
+| 10 Production dry-run pipeline | Local implementation | Production pipeline connected end-to-end in strict dry-run mode |
+| 11 Divergent-save reconciliation | Local implementation | Server-authoritative reconciliation model for divergent client saves |
+| 12 Reviewed quest profiles | Local implementation | Reviewed profiles for dunNorthwatchKeepQST (0->100) and dunKarthspireRedoubtQST (10->100) |
+| 13 Narrow mutation/two-client validation | Local implementation | Narrow SetStage mutation behind complete envelope with controlled activation and validation guide |
 | 14 Failure/recovery live validation | Planned | Requires the exact Task 13 artifact |
 | 15 Final adversarial audit | Planned | Requires Tasks 01–14 accepted on one candidate |
 

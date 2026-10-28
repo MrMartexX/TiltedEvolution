@@ -18,14 +18,14 @@ struct ModSystem;
  * existing native TESQuest::SetStage implementation. It never starts/stops a
  * quest, touches aliases, inventories or world references.
  *
- * Merely compiling this executor does not enable canonical mutation. The current
- * production runtime-safety/profile pipeline remains dry-run/fail-closed until
- * its live evidence prerequisites are satisfied.
+ * Controlled-activation capability is required for live testing. Shipping/default
+ * activation remains off until Task 15 accepts all evidence.
  */
 class PartyQuestSkyrimStageMutationExecutor final
 {
 public:
-    [[nodiscard]] static bool Execute(
-        const PartyQuestRuntimeApplyRequest& acRequest,
-        ModSystem& aModSystem) noexcept;
+    [[nodiscard]] static bool Execute(const PartyQuestRuntimeApplyRequest& acRequest, ModSystem& aModSystem) noexcept;
+
+    static void SetControlledActivationEnabled(bool aEnabled) noexcept;
+    [[nodiscard]] static bool IsControlledActivationEnabled() noexcept;
 };

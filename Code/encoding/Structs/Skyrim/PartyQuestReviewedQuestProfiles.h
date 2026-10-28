@@ -52,6 +52,7 @@ public:
     [[nodiscard]] static PartyQuestReviewedTransitionManifest BuildReviewedTransitionManifest() noexcept;
 
     [[nodiscard]] static const PartyQuestReviewedTransition* FindReviewedTransition(const PartyQuestTransitionIdentity& acIdentity) noexcept;
+    [[nodiscard]] static const PartyQuestReviewedTransition* FindReviewedTransition(const GameId& acQuestId, uint16_t aSourceStage, uint16_t aTargetStage) noexcept;
 
     [[nodiscard]] static std::span<const PartyQuestRuntimeCompatibilityRequirement> GetReviewedRequirements() noexcept;
 

@@ -100,6 +100,18 @@ const PartyQuestReviewedTransition* PartyQuestReviewedQuestProfiles::FindReviewe
     return nullptr;
 }
 
+const PartyQuestReviewedTransition* PartyQuestReviewedQuestProfiles::FindReviewedTransition(const GameId& acQuestId, uint16_t aSourceStage, uint16_t aTargetStage) noexcept
+{
+    for (const auto& transition : kReviewedTransitions)
+    {
+        if (transition.Identity.QuestId == acQuestId && transition.Identity.SourceStage == aSourceStage && transition.Identity.TargetStage == aTargetStage)
+        {
+            return &transition;
+        }
+    }
+    return nullptr;
+}
+
 std::span<const PartyQuestRuntimeCompatibilityRequirement> PartyQuestReviewedQuestProfiles::GetReviewedRequirements() noexcept
 {
     return kReviewedProfiles;
