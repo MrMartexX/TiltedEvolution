@@ -305,9 +305,86 @@ status must be read before reporting acceptance. No baseline/integration ref was
 The candidate is ready for an isolated draft review; this does not mark it ready
 to merge. Keep the explicit exclusions in any eventual integration description.
 
+## Completed baseline and d603fb39 hosted comparison
+
+The missing exact-baseline execution evidence is now available for
+d6a8ab205d3223facd30f54cc0f52d50bd1fe542:
+
+| Baseline job | Result | Assertions / cases |
+|---|---|---|
+| [Linux full build 40798492885](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40798492885) | success | TPTests compiled, not executed by this old workflow |
+| [Linux diagnostics 40800388854](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40800388854) | success | 286047 / 968 |
+| Windows diagnostics, same run | success | 287034 / 1022 |
+
+All required hosted checks also completed on candidate head
+d603fb3989541cff5df7abc27615c426e0bdbd81:
+
+| Candidate job | Result | Assertions / cases |
+|---|---|---|
+| [Linux full build 40799230226](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40799230226) | success | 286380 / 983 |
+| [Windows full build 40799230174, 1.6.1170](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40799230174) | success | 287367 / 1037 |
+| Windows full build, latest/1.7.104, same run | success | 287367 / 1037 |
+| [Linux diagnostics 40799278877](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40799278877) | success | 286380 / 983 |
+| Windows diagnostics, same run | success | 287367 / 1037 |
+
+The two PR build workflows checked out synthetic merge
+0f64860016dce1a4ca4af34f88c0daa11ac7d168. Its complete tree was compared with
+d603fb39 and is identical. Manual diagnostics checked out d603fb39 directly.
+All required compile/test/UI/staging steps executed; only optional release
+packaging was skipped. The [hosted snapshot](upstream-intake-2026-10-28/hosted-validation-d603fb39.json)
+retains job IDs, steps, conclusions and exact counts. Full logs are on D: under
+the snapshot's logsDirectory. These results precede the following code change.
+
+## T1 notification publication follow-up
+
+Review against the approved T1 criteria found a coverage gap: the original
+policy tests asserted stored counts and Relay/Drop flags, while the construction
+of actual outgoing messages and the respawn gold-loss result remained outside
+the tested boundary. No new gameplay root cause is claimed from this finding.
+
+A small server-only InventoryChangePublication helper now joins the existing
+checked mutation with construction and immediate publication of its existing
+wire messages. InventoryService and PlayerService supply their original recipient
+routing callbacks. The helper retains no callback, pointer or queued work.
+Authority lookup, permitted non-owner NPC policy, range checks, arithmetic,
+gold-loss calculation, failure logging and the independent NotifyRespawn path
+remain in their existing domains. No protocol/schema or native hook changed.
+
+The same five inventory regression cases now exercise this production boundary:
+
+- Authority failures preserve the entire entry list and publish no message:
+  missing entity/owner, stale or zero owner epoch, non-owner player, distant NPC
+  and unexpected epoch on an unowned object.
+- Successful changes apply once before publication and emit zero or one exact
+  NotifyInventoryChanges with the requested actor/epoch/item and permitted Drop;
+  owner suppression, nearby non-owner relay, unowned objects and disabled/unrequested
+  drops are covered.
+- Checked-arithmetic failure preserves the entry list and emits no notification.
+- Respawn gold success emits one current-epoch delta followed by one personal
+  result, with the count already changed and no synchronized drop.
+- Missing gold or a rejected zero delta emits no inventory message, preserves
+  all entries and sends one personal result with GoldLost=0.
+
+Local Windows x64 release / 1.6.1170: SkyrimServerRunner including STServer
+built successfully; focused TPTests passed **151 assertions / 5 cases**;
+full TPTests passed **287456 assertions / 1039 cases**. Existing directory-symlink
+privilege warnings remain; those unavailable local branches are not newly proven.
+Final hosted results for this follow-up are recorded on
+[draft PR #20](https://github.com/MrMartexX/TiltedEvolution/pull/20), separately
+from the preceding d603fb39 evidence. Native/runtime/content and actual
+two-client recipient/ownership behavior remain acceptance gates.
+
+Supplementary read-only CDB inspection of the already preserved exact 1.6.1170
+image/dump matched the imported read/write lock entry IDs 68233/68234/68239/68240,
+the ExtraDataList lock at 0x18 and GameVMUpdate's inactive read at 0x680.
+Output: D:/Codex/Artifacts/upstream-intake-2026-10-28/native-lock-boundary-1.6.1170.txt.
+No game was attached or launched for this inspection. This is not complete
+IDA/Ghidra, thread-domain, scene-layout or multi-runtime acceptance; unverified
+native assumptions remain explicitly unaccepted.
+
 ## Required before integration
 
-1. Preserve the hosted CI acceptance and exact counts for 80894cbc above; repeat required checks if code changes.
+1. Preserve each exact-SHA hosted record above; require all actual checks and exact counts for the notification follow-up before integration.
 2. Keep runtime-separated artifacts paired with their exact source/build identity.
 3. Finish native runtime, dialogue/inventory/ownership and content/compatibility checks from T1–T10.
 4. Review final source against both merge parents and retain the exclusions above in the merge record.

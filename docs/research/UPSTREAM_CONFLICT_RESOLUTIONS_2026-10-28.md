@@ -403,4 +403,3 @@ One final merge is possible, but it is not equivalent to choosing 20 conflict si
 No C++ patch, build, TPTests run, CI run, commit, push, branch update or Skyrim launch is claimed. All T1–T10 entries are acceptance work for implementation, not tests run in this documentation-only task.
 
 **P0 NOT CLOSED.**
-

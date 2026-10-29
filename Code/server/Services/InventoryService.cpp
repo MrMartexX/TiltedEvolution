@@ -1,7 +1,7 @@
 #include "InventoryService.h"
 
 #include <Components.h>
-#include <Structs/InventoryChangePolicy.h>
+#include <Services/InventoryChangePublication.h>
 #include <World.h>
 #include <GameServer.h>
 
@@ -52,23 +52,17 @@ void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChan
     context.DropRequested = message.Drop;
 
     auto& inventory = view.get<InventoryComponent>(*it).Content;
-    const auto result = ApplyAuthorizedInventoryChange(inventory, message.Item, context);
+    const auto result = InventoryChangePublication::ApplyAndPublish(inventory, message, context,
+        [&](const NotifyInventoryChanges& acNotify) {
+            if (!GameServer::Get()->SendToPlayersInRange(acNotify, *it, acMessage.GetSender()))
+                spdlog::error("InventoryService::OnInventoryChanges: SendToPlayersInRange failed");
+        });
     if (!result.Applied)
     {
         spdlog::debug("Rejected inventory delta: player={:X} actor={:X} requestedEpoch={} currentEpoch={}",
             acMessage.pPlayer->GetId(), message.ServerId, message.OwnershipEpoch, context.CurrentEpoch);
         return;
     }
-    if (!result.Relay)
-        return;
-
-    NotifyInventoryChanges notify;
-    notify.ServerId = message.ServerId;
-    notify.OwnershipEpoch = message.OwnershipEpoch;
-    notify.Item = message.Item;
-    notify.Drop = result.Drop;
-    if (!GameServer::Get()->SendToPlayersInRange(notify, *it, acMessage.GetSender()))
-        spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
 }
 
 void InventoryService::OnEquipmentChanges(const PacketEvent<RequestEquipmentChanges>& acMessage) noexcept

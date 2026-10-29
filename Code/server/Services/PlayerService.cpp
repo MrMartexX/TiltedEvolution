@@ -4,6 +4,7 @@
 
 #include <Services/PlayerService.h>
 #include <Services/CharacterService.h>
+#include <Services/InventoryChangePublication.h>
 #include <GameServer.h>
 
 #include <Messages/ShiftGridCellRequest.h>
@@ -173,26 +174,16 @@ void PlayerService::OnPlayerRespawnRequest(const PacketEvent<PlayerRespawnReques
             entry.BaseId = goldId;
             entry.Count = -goldToRemove;
 
-            const bool inventoryChanged = inventoryComponent.Content.AddOrRemoveEntry(entry);
-            if (inventoryChanged)
-            {
-                NotifyInventoryChanges notifyInventoryChanges{};
-                notifyInventoryChanges.ServerId = World::ToInteger(*character);
-                if (const auto* pOwnerComponent = m_world.try_get<OwnerComponent>(*character))
-                    notifyInventoryChanges.OwnershipEpoch = pOwnerComponent->OwnershipEpoch;
-                notifyInventoryChanges.Item = entry;
-                notifyInventoryChanges.Drop = false;
-
-                // Exclude respawned player from inventory changes notification...
-                if (!GameServer::Get()->SendToPlayersInRange(notifyInventoryChanges, *character, acMessage.GetSender()))
-                    spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
-            }
-
-            // ...and instead, send NotifyPlayerRespawn so that the client can print a message.
-            NotifyPlayerRespawn notifyPlayerRespawn{};
-            notifyPlayerRespawn.GoldLost = inventoryChanged ? goldToRemove : 0;
-
-            acMessage.pPlayer->Send(notifyPlayerRespawn);
+            const auto* pOwnerComponent = m_world.try_get<OwnerComponent>(*character);
+            const uint32_t ownershipEpoch = pOwnerComponent ? pOwnerComponent->OwnershipEpoch : 0;
+            InventoryChangePublication::ApplyRespawnGoldChange(
+                inventoryComponent.Content, World::ToInteger(*character), ownershipEpoch, entry, goldToRemove,
+                [&](const NotifyInventoryChanges& acNotify) {
+                    // The respawned player receives the personal result instead.
+                    if (!GameServer::Get()->SendToPlayersInRange(acNotify, *character, acMessage.GetSender()))
+                        spdlog::error("PlayerService::OnPlayerRespawnRequest: SendToPlayersInRange failed");
+                },
+                [&](const NotifyPlayerRespawn& acNotify) { acMessage.pPlayer->Send(acNotify); });
         }
 
         // Let all other players in cell respawn this player, since the body state seems to be bugged otherwise
