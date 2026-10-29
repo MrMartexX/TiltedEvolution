@@ -163,6 +163,11 @@ or save repair is authorized by these tests. Integration/dev still remain unchan
 
 ## Connected follower trade crash — 2026-10-29
 
+User clarification: the item-transfer crash was observed only once on the fork;
+no repeat attempt established reproducibility, and no crash was observed during
+the official-mod comparison. The dialogue/inventory overlay is a distinct symptom
+reported in both clients. Do not describe the crash itself as reproduced upstream.
+
 The user isolated the overlay symptom to the connected state: disconnected trade
 works, whereas connected trade leaves dialogue above inventory. Transferring items
 in that connected state also crashed the exact deployed 80894cbc build. Treat the
@@ -233,6 +238,22 @@ our intake baseline, clears menu pause/freeze flags for ContainerMenu only while
 connected (unless Skyrim Souls is active). This supplies a plausible connection-
 dependent mechanism, not proof of the exact faulty transition or crash writer.
 No additional menu mod was installed and no speculative native patch was made.
+
+Fresh stock-only startup was subsequently verified: process 24124 uses the exact
+official 1.8.4 client binary, loads stock SKSE 2.2.6 and has no LineageBridge module;
+SKSE's fresh log reports no plugin listeners. Gameplay comparison remains pending.
+MO2's global configuration stalled on Qt settings-file locking through the C:
+junction; a temporary portable configuration under D:/Games/Modding/MO2 launched
+the client using the same D: mods/profiles. Settings backups/restoration notes are
+in D:/Codex/Artifacts/official-str-1.8.4. No antivirus/security setting was changed.
+
+Further bounded analysis of the existing fork dump maps frame RVA 0x223115 to
+Address Library 15995 + 0x45. The reviewed local CommonLibSSE-NG source identifies
+15995 as InventoryEntryData::GetValue. Together with the recovered menu-processing
+frame 82082 this locates the crash during item-value calculation for the menu,
+while reading extra-data type 0x9B. It still does not identify who invalidated the
+pointer earlier: the necessary heap contents/history are absent from this dump.
+No larger dump collector or speculative native correction was enabled.
 
 ## Required before integration
 
