@@ -1,0 +1,273 @@
+{
+  "reviewDate": "2026-10-29",
+  "reviewHead": "e4b4ea2c45742a156b5d2ab833545fb36d7088d9",
+  "baseline": "d6a8ab205d3223facd30f54cc0f52d50bd1fe542",
+  "upstream": "25a0049a00900b8714e105f795380caf33678012",
+  "lastRequiredHostedGreen": "80894cbc68f192277d03f67d504e13d37ba9181d",
+  "codeTreeEqualsHostedGreen": true,
+  "scope": "Mechanical ancestry/blob/conflict-marker checks plus recorded source review; not native runtime acceptance",
+  "conflictFiles": 20,
+  "conflictRegions": 36,
+  "cleanOverlapFiles": 14,
+  "unchangedCriticalPaths": [
+    "Code/client/Services/Generic/QuestService.cpp",
+    "Code/client/VersionDb.h",
+    "Code/client/Systems/ModSystem.cpp",
+    "Code/client/Systems/ModSystem.h",
+    "Code/encoding/Messages/PartyQuestMessages.cpp",
+    "Code/encoding/Messages/PartyQuestMessages.h",
+    "LICENSE"
+  ],
+  "files": [
+    {
+      "path": ".github/workflows/linux.yml",
+      "markedConflict": true,
+      "baseBlob": "5e8d2f42332acda0b458f672888b533af2540c96",
+      "upstreamBlob": "bdc3efcbfdc3094eda846079183e5cf725032333",
+      "candidateBlob": "739f0f036a466b154de097ff3e8eb9453643aaf9"
+    },
+    {
+      "path": ".github/workflows/windows-playable-build.yml",
+      "markedConflict": true,
+      "baseBlob": "dfd2352d4db700619de75a1bdcbe26d1406faa7b",
+      "upstreamBlob": "8a83e0e5bb31bc064933955c573ed8c86767d561",
+      "candidateBlob": "8a83e0e5bb31bc064933955c573ed8c86767d561"
+    },
+    {
+      "path": ".github/workflows/windows.yml",
+      "markedConflict": true,
+      "baseBlob": "87aca944157ee5b5804ea3cc76e6bac128d41f42",
+      "upstreamBlob": "67a5557594095e9361bc45a42b6ba49315bd2287",
+      "candidateBlob": "bddd1dc42db82fc44029001f8a35d8be05b2ea2d"
+    },
+    {
+      "path": "Code/client/Games/Skyrim/Forms/TESQuest.h",
+      "markedConflict": true,
+      "baseBlob": "4fe1c185ca38fec7e0828e0b5f5694398dfbc6c9",
+      "upstreamBlob": "5e0f9214a128bc8d0d9502b2580cb348d0974a37",
+      "candidateBlob": "ff03ef46f82ad2a6e61bd3e7fc4918fab9ec8dcb"
+    },
+    {
+      "path": "Code/client/ScriptExtender.cpp",
+      "markedConflict": true,
+      "baseBlob": "f53b58c88f65901ceb94ddef7356a4802b76e8ed",
+      "upstreamBlob": "a99d119fd200c95164d40987b09fa381549bf0d0",
+      "candidateBlob": "c037f5611a1b33fddf400a7065060214a075a868"
+    },
+    {
+      "path": "Code/client/Services/Generic/QuestService.cpp",
+      "markedConflict": true,
+      "baseBlob": "88491ee7ef32c9853041dd802dd557e239396c5f",
+      "upstreamBlob": "ec897b183ccbd0090c5c8cafe6d643988da1aff3",
+      "candidateBlob": "88491ee7ef32c9853041dd802dd557e239396c5f"
+    },
+    {
+      "path": "Code/client/Services/QuestService.h",
+      "markedConflict": true,
+      "baseBlob": "f4344ecf17114a9e76f3c42bc4995173b82cf705",
+      "upstreamBlob": "6594995999247e53d04827db643983b29409af5a",
+      "candidateBlob": "35aabbc834cda6fcc663335d14cb45bb25b379ec"
+    },
+    {
+      "path": "Code/client/SkyrimVM64.cpp",
+      "markedConflict": true,
+      "baseBlob": "e553cebf1dafe5db9cf6c37614b5433a1c1d23bb",
+      "upstreamBlob": "8e96a9e2d0dc11e78548d92b836674ea82805245",
+      "candidateBlob": "76c466968aea637a72e590dd01365cdc131c46bd"
+    },
+    {
+      "path": "Code/client/TiltedOnlineApp.cpp",
+      "markedConflict": true,
+      "baseBlob": "9782717a78fb41d9e4713ac21a0ddd195426272c",
+      "upstreamBlob": "98b6c65b8192989360ecaa767c36179477003729",
+      "candidateBlob": "d1fe19dd3fe09b60e71efe9436c4b9a0a470e06d"
+    },
+    {
+      "path": "Code/client/VersionDb.h",
+      "markedConflict": true,
+      "baseBlob": "8a40f8a04be747067c55ff4b891f30d06f5f80b9",
+      "upstreamBlob": "0f050ee88ebfa22e96ddf3a2da8de0dc008585cd",
+      "candidateBlob": "8a40f8a04be747067c55ff4b891f30d06f5f80b9"
+    },
+    {
+      "path": "Code/client/main.cpp",
+      "markedConflict": true,
+      "baseBlob": "49857943c3e89661b207d99db6d2ad87d1e0d358",
+      "upstreamBlob": "9d409b612886b2fd044153ce612199131b904118",
+      "candidateBlob": "d2566c4ecdd2e6e94cab307f21c3cfcd13c2649e"
+    },
+    {
+      "path": "Code/client/xmake.lua",
+      "markedConflict": true,
+      "baseBlob": "9eb15da6cd9a15353d6fb5a1a3311e7c19a3d876",
+      "upstreamBlob": "ec4be6bc32b0d248f4799bdf24adaf721e293a1b",
+      "candidateBlob": "17c374e4e69e11d78ac1703544269ec5cc6d2e3e"
+    },
+    {
+      "path": "Code/encoding/Messages/ClientMessageFactory.h",
+      "markedConflict": true,
+      "baseBlob": "ef8d5d95f71bc3801021576e72419143b36f0267",
+      "upstreamBlob": "4f94d6d10e647012e41b4bd0b21ecfa914adb84a",
+      "candidateBlob": "c351f826ecfc303e0804745f9c207a663c5ed008"
+    },
+    {
+      "path": "Code/encoding/Messages/ServerMessageFactory.h",
+      "markedConflict": true,
+      "baseBlob": "8442412c84af94555e7479648783baeb377e3832",
+      "upstreamBlob": "516878b1d992944c650ccdd2b3fc0962f3441741",
+      "candidateBlob": "ec47ddb9cdc6675ce74899cc89c3bf1d86339861"
+    },
+    {
+      "path": "Code/encoding/Opcodes.h",
+      "markedConflict": true,
+      "baseBlob": "a8585f9cd74af8f38f8f4599e1f1555161d05eab",
+      "upstreamBlob": "baab493ccbfb8816c5d8c8ac6759f42d4154f2c7",
+      "candidateBlob": "e72c08158c4764b1a1fc2c62aa12e9fa4feabf90"
+    },
+    {
+      "path": "Code/server/Services/InventoryService.cpp",
+      "markedConflict": true,
+      "baseBlob": "26a5bd2d8d229ab91db71e9f0b054af4e400afdf",
+      "upstreamBlob": "2d7d0f0797d6e734816f56f8d7685b12c658ca82",
+      "candidateBlob": "0f834124c18570c3ed225524ef36d6270498fa3d"
+    },
+    {
+      "path": "Code/server/Services/PlayerService.cpp",
+      "markedConflict": true,
+      "baseBlob": "e6f2522a89ff947c8cbd2e3f7ce71fae85e07b7f",
+      "upstreamBlob": "e887a6ae280b2390a84b4d3020092b587d181ebb",
+      "candidateBlob": "ca34389c05c67c8f555f80e1fe7676b6a7443fcc"
+    },
+    {
+      "path": "Code/server/Services/QuestService.cpp",
+      "markedConflict": true,
+      "baseBlob": "10375395c2b8daff57b3bfdfc3b9be0e4288add3",
+      "upstreamBlob": "9f9e67f801a29f2d9717fb7ee5acba06264cf134",
+      "candidateBlob": "caaec80e37cab28e7520494c36b6ed6f72922805"
+    },
+    {
+      "path": "Code/tests/xmake.lua",
+      "markedConflict": true,
+      "baseBlob": "6f41bab50d34e336a1f68e0cd23ff7b954587fec",
+      "upstreamBlob": "19abce574791c5508f4a8f5a15bed8ae5f42d2ef",
+      "candidateBlob": "9e2ec4edbc7c3d0de2b701a539109387b2f8a0d1"
+    },
+    {
+      "path": "xmake.lua",
+      "markedConflict": true,
+      "baseBlob": "7431ac667989e7b97ea6484059002fbe84f90b49",
+      "upstreamBlob": "31ea6831cfc4a5603198f541d29a8daca1a11911",
+      "candidateBlob": "134a98999332643b3ae5a5448f9ec0bdab31bda1"
+    },
+    {
+      "path": ".github/workflows/docker-server-image.yml",
+      "markedConflict": false,
+      "baseBlob": "86169c85d0eb503ff646649c157eba6ce02f6a27",
+      "upstreamBlob": "c402244f5d00eb82b7ef2960d9b56969eb1e77e8",
+      "candidateBlob": "fe3a7fa9bab3b3399ddca86911dd3ae5c56b9680"
+    },
+    {
+      "path": "Code/client/Games/Animation.cpp",
+      "markedConflict": false,
+      "baseBlob": "e142a44ae87c4ccd81e07757ab767f00ecb8d9ff",
+      "upstreamBlob": "0714b2b88df20ce28e3939403a8bfd39bc5170d7",
+      "candidateBlob": "0b0f54591577f353fd470d18bc39f87ff0565660"
+    },
+    {
+      "path": "Code/client/Games/Skyrim/Actor.cpp",
+      "markedConflict": false,
+      "baseBlob": "b9190df902684a5df1ff84781fa9860ebb54014f",
+      "upstreamBlob": "9e1933e862404cf2e3375c429edf47dad6af349a",
+      "candidateBlob": "dda957f0947588968f7d9989ab16ec0de95e27d5"
+    },
+    {
+      "path": "Code/client/Games/Skyrim/Misc/BSScript.h",
+      "markedConflict": false,
+      "baseBlob": "8e502b8f8c7c669bdd88febcdd4907a0a9f50b9f",
+      "upstreamBlob": "fff6dec530fa458a6cd52ca6d964b28c5ba4ed95",
+      "candidateBlob": "6c6bea174022215d7c7e2dd9165ef763c5ad2366"
+    },
+    {
+      "path": "Code/client/Services/DiscoveryService.h",
+      "markedConflict": false,
+      "baseBlob": "b2876de3e1ad634699cc16fa498ba79647a74861",
+      "upstreamBlob": "8ff5d485ba20b7417dd1d34b2eb2901f6c351eb0",
+      "candidateBlob": "03eec46ea05749b185f05f85cfc1cbd6d16c0816"
+    },
+    {
+      "path": "Code/client/Services/Generic/DiscoveryService.cpp",
+      "markedConflict": false,
+      "baseBlob": "9715ef928a933de0e4b5278e5ba55648d86539ac",
+      "upstreamBlob": "cea7919d588cde0d52ad4b3db36a7e8afe96a8a5",
+      "candidateBlob": "60a129212d0eb6b21830756f37ae96d7bbb5dabc"
+    },
+    {
+      "path": "Code/client/Services/Generic/InventoryService.cpp",
+      "markedConflict": false,
+      "baseBlob": "f5645db7febcbf7cba9bee9af930eaf281313e30",
+      "upstreamBlob": "8d9f2c78cac916edf6ecb8bb1d3ded2e5703b9ab",
+      "candidateBlob": "8439d82c5e47cf890d91c170eb1f584a266bae2c"
+    },
+    {
+      "path": "Code/client/Services/Generic/ObjectService.cpp",
+      "markedConflict": false,
+      "baseBlob": "0978cfe0c12f1d0698c67fc74aeaabe1561e64fa",
+      "upstreamBlob": "b2140e2edaf0e9ab94a41acf5de95e06db0f0a93",
+      "candidateBlob": "345923b776f6198dc852f5fb3f8558f963c2a168"
+    },
+    {
+      "path": "Code/client/Services/Generic/PartyService.cpp",
+      "markedConflict": false,
+      "baseBlob": "939ed11d2ce0e8903c98e4530566d372cf35c9fd",
+      "upstreamBlob": "60d17fc54a482013e7469ee79ccac665729cc06b",
+      "candidateBlob": "52a48936def1d4e5425d72fb29644736f0039564"
+    },
+    {
+      "path": "Code/client/Services/Generic/TransportService.cpp",
+      "markedConflict": false,
+      "baseBlob": "c7d89e92590dd3ba016148f2e0b912e273f01be7",
+      "upstreamBlob": "ed490d1502e9b4cf5a0acfc81f8ec3c79df8386d",
+      "candidateBlob": "96f4e24daf8f50c0c2b36a0b16b0b53193f7777f"
+    },
+    {
+      "path": "Code/client/Services/InventoryService.h",
+      "markedConflict": false,
+      "baseBlob": "cff53bb5f5a272c137ad62c00090120d92f20e2d",
+      "upstreamBlob": "cff53bb5f5a272c137ad62c00090120d92f20e2d",
+      "candidateBlob": "cff53bb5f5a272c137ad62c00090120d92f20e2d"
+    },
+    {
+      "path": "Code/immersive_launcher/steam/SteamCeg.cpp",
+      "markedConflict": false,
+      "baseBlob": "61f796b6797d6c5b555ce94b1ba57384802a5de5",
+      "upstreamBlob": "c5561d45acace14aa87c5b12e679a161a4602c4f",
+      "candidateBlob": "dde02c04376892aabc3b7600fa8864ec23e9988c"
+    },
+    {
+      "path": "Code/xmake.lua",
+      "markedConflict": false,
+      "baseBlob": "bb726dabb07f96891e007f527d62818840348112",
+      "upstreamBlob": "403f220d0f2a8949815e7d1144635e6b6411fcc9",
+      "candidateBlob": "b1be55b070fb3492b892b7d24ce590305602b438"
+    },
+    {
+      "path": "README.md",
+      "markedConflict": false,
+      "baseBlob": "1f94e55451e2c4554a096824ceb3c8bce30094ff",
+      "upstreamBlob": "eecbb99a6fda016d20b420bb6efe1dc0e22bee49",
+      "candidateBlob": "8402ad81339db7331f144a943376f724df71480a"
+    }
+  ],
+  "canonicalSetStageCallPresent": false,
+  "dialogueOverlay": "Deferred explicitly by user; reproduced in fresh stock-only STR 1.8.4; not marked fixed",
+  "forkTradeCrash": "One observation only; no recurrence or upstream-crash equivalence established",
+  "remainingEvidence": [
+    "Exact-runtime native layouts/lock ABI and scene observations required by T4/T5/T10",
+    "Candidate save/load/MainMenu transition matrix on the intended environment",
+    "Two-client ownership handoff, reconnect and remote NPC behavior",
+    "Intended complete content/compatibility admission; no profile fingerprint relaxation",
+    "Baseline Linux run 40798492885 pending when this record was prepared"
+  ],
+  "integrationAccepted": false,
+  "p0Closed": false
+}

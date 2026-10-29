@@ -255,6 +255,56 @@ while reading extra-data type 0x9B. It still does not identify who invalidated t
 pointer earlier: the necessary heap contents/history are absent from this dump.
 No larger dump collector or speculative native correction was enabled.
 
+## Final review and user-directed UI deferral — 2026-10-29
+
+The user subsequently confirmed the dialogue overlay in the verified fresh
+stock-only official STR process, and explicitly deferred investigating this UI
+bug so intake work could continue. It remains a known issue, not a fixed item.
+The single observed fork crash remains separately recorded; it was not reproduced
+or observed on the official control. No causal equivalence is inferred.
+
+The [final source review snapshot](upstream-intake-2026-10-28/final-source-review.json)
+binds the review to e4b4ea2c45742a156b5d2ab833545fb36d7088d9. Subsequent edits in
+this slice are documentation/evidence only. It enumerates all 20 marked files /
+36 regions and 14 clean overlaps, records blobs against both parents, checks
+absence of merge markers, retained ancestry, and exact source equality to hosted
+green 80894cbc. The fork QuestService.cpp, VersionDb.h, ModSystem pair, PartyQuest
+message pair and license are byte-identical to the refreshed integration baseline.
+No new source fix was justified by this review. Mechanical checks and the following
+source observations do not substitute for native behavior or multiplayer evidence.
+
+| Plan group | Available evidence | Remaining acceptance or exclusion |
+|---|---|---|
+| T1 inventory | Checked delta/authorization tests and full CI; single-client theft no longer immediately regenerates clothing | Actual multi-client relay/owner behavior; single crash remains unclassified |
+| T2 protocol | Factory registration, reserved-slot rejection, action codec and message tests passed | Mixed-build rejection and changed payload behavior in the intended paired deployment |
+| T3 deferred stages | Fork quest service retained; upstream held-stage execution and its companion dedup deliberately excluded | Future port needs its own completion/lifecycle proof; no held-stage feature admitted here |
+| T4 quest ABI/content | Retained legacy list/typed aliases; both build configurations compile; offline topology comparison unchanged | Exact-runtime scene/layout observations and complete intended VFS/content admission |
+| T5 GameVM/lifecycle | Retained fences, both runtime builds green; candidate startup/load seen on 1.6.1170 | Full save/load/MainMenu matrix and supported-runtime native evidence |
+| T6 loader/mapping | Critical fork parser/mapping unchanged; startup/SKSE checks retained; current tests green | Distinguish stock control from custom save-provider environment in future live runs |
+| T7 SteamStub | Correct field alignment/flag decision retained; synthetic regressions green; candidate entered the game | Synthetic tests do not prove every executable variant or restoration path |
+| T8 build/tests | All required client/server/test targets and exact platform counts recorded | Legacy optional ESLoader stub failures remain separately disclosed |
+| T9 workflows | Real Linux/Windows build/test steps and UI completed; runtime artifacts exist | Baseline Linux comparison dispatched below; release/arm64 publication remains excluded |
+| T10 connected imports | Bounded action decoder and accepted-only replay tests; async NPC rebuilding excluded as one connected unit | Native lock/thread-domain proof, two-client handoff/reconnect and remote NPC transitions |
+
+The 14 clean overlaps were re-read as connected changes: release publication guard;
+animation cleanup; actor inventory/dialogue/controller integration; intrusive-ref
+include; discovery/cell changes; epoch-bound inventory; faction stash exclusions;
+party-disconnect cleanup; transport receive timing; retained inventory interface;
+SteamStub policy; generated include path and README. Imported code is not assigned
+canonical mutation authority. In particular the action payload still lacks an
+ownership incarnation; current-owner validation is not presented as complete replay
+protection. Native ownership-token capture/thread assumptions need evidence, not
+a speculative second registry/lifecycle model in this merge.
+
+The exact integration source d6a8ab205d3223facd30f54cc0f52d50bd1fe542 was dispatched
+for its missing hosted Linux comparison:
+[baseline Linux run 40798492885](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40798492885).
+It was still configuring dependencies when this review was recorded. Its current
+status must be read before reporting acceptance. No baseline/integration ref was changed.
+
+The candidate is ready for an isolated draft review; this does not mark it ready
+to merge. Keep the explicit exclusions in any eventual integration description.
+
 ## Required before integration
 
 1. Preserve the hosted CI acceptance and exact counts for 80894cbc above; repeat required checks if code changes.
