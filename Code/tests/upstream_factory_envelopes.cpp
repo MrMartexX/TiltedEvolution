@@ -12,6 +12,14 @@ void PopulateIntakeEnvelope(T& aMessage)
 {
     // Older user-provided message constructors leave these scalar fields
     // uninitialized. Supply valid fixtures instead of reading indeterminate data.
+    if constexpr (requires { aMessage.Position.x = float{}; aMessage.Position.y = float{}; aMessage.Position.z = float{}; })
+    {
+        aMessage.Position.x = 128.0f;
+        aMessage.Position.y = -64.0f;
+        aMessage.Position.z = 32.0f;
+    }
+    if constexpr (requires { aMessage.WorldSpaceFormID = GameId{}; })
+        aMessage.WorldSpaceFormID = GameId(2, 0x123456);
     if constexpr (requires { aMessage.Id = uint32_t{}; }) aMessage.Id = 29;
     if constexpr (requires { aMessage.ActorId = uint32_t{}; }) aMessage.ActorId = 31;
     if constexpr (requires { aMessage.PlayerId = uint32_t{}; }) aMessage.PlayerId = 41;
