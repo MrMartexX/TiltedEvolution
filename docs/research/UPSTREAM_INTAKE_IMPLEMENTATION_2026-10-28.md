@@ -200,6 +200,40 @@ canonical protocol admission because stable-storage node validation fails. That
 fail-closed environment issue does not establish the trade-crash cause; future
 canonical diagnostics must use the prepared physical D: server directory instead.
 
+## Official-mod comparison: isolation correction — 2026-10-29
+
+The user reports the dialogue/inventory overlap also with official STR 1.8.4's
+1.6.1170 release: connecting enables the symptom and disconnecting clears it.
+However, this first comparison was not fully isolated from research components.
+Process module inspection and skse64.log confirmed the official client loaded
+SkyrimTogetherLineageBridge.dll from the physical game Data/SKSE/Plugins directory.
+The physical skse64_1_6_1170.dll also contained our PartyQuestSKSE isolated-save
+exports (SHA256 341573A64F62640430C43C024DAE3CE9317D0B7266DD97CC07D8A0601233D070).
+Disabling fork mods in MO2 did not hide these physical files. The earlier claim
+that the official comparison contained no fork components was therefore incorrect.
+Neither contamination nor shared symptoms prove the root cause or baseline equivalence.
+
+After the user closed Skyrim, both research binaries were preserved under
+D:/Codex/Artifacts/official-str-1.8.4/research-components-backup. The physical
+bridge was removed from discovery, and SKSE 2.2.6 was restored from its official
+archived build: SHA256 C9A2C8A80DF6BF2372C5F49468BB2E5AB67786157265B6F29ECE9F4EAC075D54.
+All 62 enabled SKSE PEX files match that archive. Physical plugin discovery now
+contains only versionlib-1-6-1170-0.bin. Recheck loaded modules in a fresh process
+before counting the next comparison as stock-only. Restore the saved custom SKSE
+before future fork save-provider research requiring its extension; do not combine
+that restoration with this stock-only control. No user save was edited.
+
+Relevant primary sources: [upstream issue 787](https://github.com/tiltedphoques/TiltedEvolution/issues/787)
+reports connected follower-inventory crashes on STR 1.7.1. One commenter could not
+reproduce; a contributor suggests Skyrim Souls RE Updated as a menu-crash workaround.
+Its closed status is not a demonstrated code fix for this exact overlay or crash.
+[Issue 182](https://github.com/tiltedphoques/TiltedEvolution/issues/182) separately
+records barter-menu unpause problems. The official v1.8.4 UI.cpp, unchanged from
+our intake baseline, clears menu pause/freeze flags for ContainerMenu only while
+connected (unless Skyrim Souls is active). This supplies a plausible connection-
+dependent mechanism, not proof of the exact faulty transition or crash writer.
+No additional menu mod was installed and no speculative native patch was made.
+
 ## Required before integration
 
 1. Preserve the hosted CI acceptance and exact counts for 80894cbc above; repeat required checks if code changes.
