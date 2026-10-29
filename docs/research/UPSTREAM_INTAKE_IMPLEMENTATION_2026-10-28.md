@@ -382,6 +382,52 @@ No game was attached or launched for this inspection. This is not complete
 IDA/Ghidra, thread-domain, scene-layout or multi-runtime acceptance; unverified
 native assumptions remain explicitly unaccepted.
 
+## Completed T1 follow-up and T2 factory coverage
+
+T1 commit f243e95b1c28165e104411c9e9dcc10839b8b8b1 completed all required
+hosted checks before starting the independent factory-test follow-up:
+
+| Hosted validation | Assertions / cases |
+|---|---|
+| [Linux full build 40803069595](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40803069595) | 286480 / 985 |
+| [Windows full build 40803069698, both 1.6.1170 and latest](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40803069698) | 287467 / 1039 each |
+| [Diagnostics 40803063641, Linux](https://github.com/MrMartexX/TiltedEvolution/actions/runs/40803063641) | 286480 / 985 |
+| Diagnostics, Windows, same run | 287467 / 1039 |
+
+Required build/test/UI/staging steps ran. PR build checkout was
+0aed683929ff3813fdad144e64f3aad814b5256a; its full tree equals f243e95b.
+Full logs are preserved under D:/Codex/Artifacts/upstream-intake-2026-10-28/hosted-f243e95b.
+A clean local full 1.6.1170 release build and full TPTests also passed on f243e95b.
+Both x64 client and server contain the same git-describe build identity ending
+gf243e95b; hashes and local results are in inventory-publication-follow-up/local-f243-validation.json
+under that artifacts directory. These new binaries have not acquired gameplay evidence.
+
+The T2 review then found that factory registration/count checks and populated
+action fixtures did not exercise all ordinary active types or the imported
+ownership/scene fields with nonzero values. The test-only follow-up now round-trips
+51 client and 54 server types through the real factories, with distinct high-bit
+ownership/expected/rider/mount epochs, actor/owner identities, scene ID/phase,
+leveled NPC identity and populated nested ActorData where present. The latter is
+checked explicitly because AssignCharacterRequest's existing equality omits it.
+Some older user-provided constructors leave scalar fields uninitialized; the
+fixtures assign those fields explicitly rather than reading indeterminate values.
+No default-constructor behavior or wire schema is changed by these tests.
+
+The six canonical message types retain their existing valid-identity fixtures in
+party_quest_protocol/coordinator; two nonempty bounded action fixtures remain in
+upstream_protocol_intake. Both new visitor loops assert that exactly four types
+use these separate fixtures, so a new decoder-status type cannot silently escape
+coverage. Together the suites cover all 113 active registrations and retain
+reserved-slot rejection. Existing valid/invalid wire tests are not removed.
+
+Local Windows 1.6.1170 release: the focused encoding.intake tag passed
+**559 assertions / 5 cases** and full TPTests passed **287882 / 1041**.
+The production/native/protocol/workflow trees still equal f243e95b; only tests and
+documentation change. Exact hosted results for the final test commit belong to
+[PR #20](https://github.com/MrMartexX/TiltedEvolution/pull/20), not to an inferred
+green status from its parent. Native/runtime/content and actual multiplayer
+acceptance remain open; canonical mutation stays disabled.
+
 ## Required before integration
 
 1. Preserve each exact-SHA hosted record above; require all actual checks and exact counts for the notification follow-up before integration.
