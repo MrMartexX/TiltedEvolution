@@ -46,7 +46,7 @@ struct Actor : TESObjectREFR
     virtual void SetWeaponDrawn(bool aDraw);
     virtual void sub_A7();
     virtual void sub_A8();
-    virtual void SetPosition(const NiPoint3& acPoint, bool aSyncHavok = true);
+    virtual void SetPosition(const NiPoint3& acPoint, bool aUpdateCharController);
     virtual void sub_AA();
     virtual void Resurrect(bool aResetInventory);
     virtual void sub_AC();
@@ -197,6 +197,9 @@ struct Actor : TESObjectREFR
     MagicEquipment GetMagicEquipment() const noexcept;
     Inventory GetEquipment() const noexcept;
     int32_t GetGoldAmount() const noexcept;
+    // Returns the engine-recorded static leveled pick, or nullptr if unavailable.
+    // Changing baseForm directly does not update this record.
+    TESNPC* GetLeveledPick() const noexcept;
     uint16_t GetLevel() const noexcept;
     Factions GetFactions() const noexcept;
     ActorValues GetEssentialActorValues() const noexcept;
@@ -207,8 +210,6 @@ struct Actor : TESObjectREFR
     [[nodiscard]] Actor* GetCombatTarget() const noexcept;
     [[nodiscard]] bool HasPerk(uint32_t aPerkFormId) const noexcept;
     [[nodiscard]] uint8_t GetPerkRank(uint32_t aPerkFormId) const noexcept;
-    [[nodiscard]] bool IsWearingBodyPiece() const noexcept;
-    [[nodiscard]] bool ShouldWearBodyPiece() const noexcept;
     [[nodiscard]] bool IsVampireLord() const noexcept;
 
     // Setters
@@ -257,6 +258,12 @@ struct Actor : TESObjectREFR
         IS_A_MOUNT = 1 << 1,
         IS_COMMANDED_ACTOR = 1 << 16,
         IS_ESSENTIAL = 1 << 18,
+    };
+
+    // flags1
+    enum ActorFlags1
+    {
+        HAS_SCENE_DATA = 1 << 3,
     };
 
     bool IsMount() const noexcept { return flags2 & ActorFlags::IS_A_MOUNT; }
@@ -359,7 +366,7 @@ public:
     uint8_t flag197;
 
     uint8_t pad198[8];
-    BSRecursiveLock actorLock;
+    BSSpinLock actorLock;
     uint8_t padActorEnd[0x2B0 - 0x284];
 
     // void Save_Reversed(uint32_t aChangeFlags, Buffer::Writer& aWriter);

@@ -121,8 +121,10 @@ void ActorValueService::BroadcastActorValues() noexcept
 
         RequestActorValueChanges requestValueChanges;
         requestValueChanges.Id = localComponent.Id;
+        requestValueChanges.OwnershipEpoch = localComponent.OwnershipEpoch;
         RequestActorMaxValueChanges requestMaxValueChanges;
         requestMaxValueChanges.Id = localComponent.Id;
+        requestMaxValueChanges.OwnershipEpoch = localComponent.OwnershipEpoch;
 
         bool isPlayer = pActor->GetExtension() && pActor->GetExtension()->IsPlayer();
 
@@ -257,8 +259,11 @@ void ActorValueService::RunDeathStateUpdates() noexcept
         {
             localComponent.IsDead = isDead;
 
+            spdlog::info("Sending death state {} for local actor {:X}, server id: {:X}", isDead, pActor->formID, localComponent.Id);
+
             RequestDeathStateChange requestChange;
             requestChange.Id = localComponent.Id;
+            requestChange.OwnershipEpoch = localComponent.OwnershipEpoch;
             requestChange.IsDead = isDead;
 
             m_transport.Send(requestChange);
@@ -312,7 +317,11 @@ void ActorValueService::OnActorValueChanges(const NotifyActorValueChanges& acMes
 {
     auto view = m_world.view<FormIdComponent, RemoteComponent>();
 
-    const auto itor = std::find_if(std::begin(view), std::end(view), [id = acMessage.Id, view](entt::entity entity) { return view.get<RemoteComponent>(entity).Id == id; });
+    const auto itor = std::find_if(std::begin(view), std::end(view), [&acMessage, view](entt::entity entity)
+    {
+        const auto& remote = view.get<RemoteComponent>(entity);
+        return remote.Id == acMessage.Id && acMessage.OwnershipEpoch != 0 && remote.OwnershipEpoch == acMessage.OwnershipEpoch;
+    });
 
     if (itor == std::end(view))
         return;
@@ -344,7 +353,11 @@ void ActorValueService::OnActorMaxValueChanges(const NotifyActorMaxValueChanges&
 {
     auto view = m_world.view<FormIdComponent, RemoteComponent>();
 
-    const auto it = std::find_if(std::begin(view), std::end(view), [id = acMessage.Id, view](entt::entity entity) { return view.get<RemoteComponent>(entity).Id == id; });
+    const auto it = std::find_if(std::begin(view), std::end(view), [&acMessage, view](entt::entity entity)
+    {
+        const auto& remote = view.get<RemoteComponent>(entity);
+        return remote.Id == acMessage.Id && acMessage.OwnershipEpoch != 0 && remote.OwnershipEpoch == acMessage.OwnershipEpoch;
+    });
 
     if (it == std::end(view))
         return;
@@ -370,10 +383,20 @@ void ActorValueService::OnDeathStateChange(const NotifyDeathStateChange& acMessa
 {
     auto view = m_world.view<FormIdComponent, RemoteComponent>();
 
-    const auto it = std::find_if(std::begin(view), std::end(view), [id = acMessage.Id, view](entt::entity entity) { return view.get<RemoteComponent>(entity).Id == id; });
+    const auto it = std::find_if(std::begin(view), std::end(view), [&acMessage, view](entt::entity entity)
+    {
+        const auto& remote = view.get<RemoteComponent>(entity);
+        return remote.Id == acMessage.Id && acMessage.OwnershipEpoch != 0 && remote.OwnershipEpoch == acMessage.OwnershipEpoch;
+    });
 
     if (it == std::end(view))
+    {
+        const auto cEntity = Utils::FindEntityByServerId(acMessage.Id);
+        spdlog::info(
+            "Dropped death state {} for server id {:X} at epoch {}, entity found: {}, has form id: {}, waiting for 3D: {}", acMessage.IsDead, acMessage.Id, acMessage.OwnershipEpoch,
+            cEntity.has_value(), cEntity && m_world.all_of<FormIdComponent>(*cEntity), cEntity && m_world.all_of<WaitingFor3D>(*cEntity));
         return;
+    }
 
     auto& formIdComponent = view.get<FormIdComponent>(*it);
     Actor* pActor = Cast<Actor>(TESForm::GetById(formIdComponent.Id));
@@ -387,5 +410,8 @@ void ActorValueService::OnDeathStateChange(const NotifyDeathStateChange& acMessa
         return;
 
     if (pActor->IsDead() != acMessage.IsDead)
+    {
+        spdlog::info("Applying death state {} to remote actor {:X}, server id: {:X}", acMessage.IsDead, pActor->formID, acMessage.Id);
         acMessage.IsDead ? pActor->Kill() : pActor->Respawn();
+    }
 }

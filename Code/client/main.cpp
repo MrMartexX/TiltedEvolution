@@ -13,6 +13,26 @@ std::unique_ptr<TiltedOnlineApp> g_appInstance{nullptr};
 
 extern HICON g_SharedWindowIcon;
 
+#ifdef TP_SKYRIM_1_6_1170
+static constexpr std::string_view kSupportedGameVersions[] = {"1.6.1170.0", "1.6.1179.0"};
+#else
+static constexpr std::string_view kSupportedGameVersions[] = {"1.7.104.0", "1.7.104.0"};
+#endif
+
+static void ValidateGameVersion(const std::filesystem::path& acGamePath, const String& acExeVersion)
+{
+    if (acExeVersion == kSupportedGameVersions[0] || acExeVersion == kSupportedGameVersions[1])
+        return;
+
+    const std::string message = fmt::format(
+        "This build requires Skyrim SE {} (GOG {}), but detected {}.",
+        kSupportedGameVersions[0], kSupportedGameVersions[1], acExeVersion);
+    const std::wstring wideMessage(message.begin(), message.end());
+    Base::TaskDialog dialog(g_SharedWindowIcon, L"Error", L"Incompatible game version", wideMessage.c_str(), acGamePath.c_str());
+    dialog.Show();
+    exit(4);
+}
+
 static void ShowAddressLibraryError(const wchar_t* apGamePath)
 {
     auto errorDetail = fmt::format(L"Looking for it here: {}\\Data\\SKSE\\Plugins", apGamePath);
@@ -48,6 +68,8 @@ static void ShowNativeHookValidationError()
 
 void RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVersion)
 {
+    ValidateGameVersion(acGamePath, aExeVersion);
+
     if (!VersionDb::Get().Load(acGamePath, aExeVersion))
     {
         ShowAddressLibraryError(acGamePath.c_str());
@@ -79,7 +101,7 @@ void RunTiltedInit(const std::filesystem::path& acGamePath, const String& aExeVe
     // boundaries. Install those hooks before control reaches Skyrim's entry
     // point: BeginMain runs from GetStartupInfoW, after the pre-CRT boundary,
     // which leaves SKSE's trampoline pools uninitialized.
-    LoadScriptExender();
+    LoadScriptExtender();
 }
 
 void RunTiltedApp()

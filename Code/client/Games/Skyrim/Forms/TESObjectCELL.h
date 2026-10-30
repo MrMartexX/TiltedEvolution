@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Forms/TESForm.h>
+#include <BSCore/BSAtomic.h>
 
 struct TESObjectREFR;
 struct TESWorldSpace;
@@ -12,7 +13,12 @@ struct TESObjectCELL : TESForm
     Vector<TESObjectREFR*> GetRefsByFormTypes(const Vector<FormType>& aFormTypes) const noexcept;
     void GetCOCPlacementInfo(NiPoint3* aOutPos, NiPoint3* aOutRot, bool aAllowCellLoad) noexcept;
 
-    bool IsValid() const { return cellFlags[4] == 7; }
+    enum class CellState : uint8_t
+    {
+        Attached = 7
+    };
+
+    bool IsAttached() const { return cellState == CellState::Attached; }
 
     struct ReferenceData
     {
@@ -45,7 +51,9 @@ struct TESObjectCELL : TESForm
     static_assert(offsetof(LoadedCellData, encounterZone) == 0x160);
 
     uint8_t pad20[0x40 - 0x20];
-    uint8_t cellFlags[5];
+    uint16_t cellFlags;
+    uint16_t cellGameFlags;
+    CellState cellState;
     bool autoWaterLoaded;
     bool cellDetached;
     uint8_t pad47;
@@ -60,7 +68,7 @@ struct TESObjectCELL : TESForm
     GameArray<void*> unkD8;
     GameArray<void*> unkF0;
     GameArray<void*> unk108;
-    BSRecursiveLock lock;
+    BSSpinLock lock;
     TESWorldSpace* worldspace;
     LoadedCellData* loadedCellData;
     void* pLightingTemplate;
@@ -68,6 +76,8 @@ struct TESObjectCELL : TESForm
 };
 
 static_assert(offsetof(TESObjectCELL, cellFlags) == 0x40);
+static_assert(offsetof(TESObjectCELL, cellGameFlags) == 0x42);
+static_assert(offsetof(TESObjectCELL, cellState) == 0x44);
 static_assert(offsetof(TESObjectCELL, refData) == 0x88);
 static_assert(offsetof(TESObjectCELL, worldspace) == 0x128);
 static_assert(offsetof(TESObjectCELL, loadedCellData) == 0x130);

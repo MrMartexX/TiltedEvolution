@@ -25,9 +25,9 @@ struct TESQuest;
 /**
  * @brief Handles quest sync.
  *
- * The legacy stage-only runtime path remains unchanged. The equal-party path is
- * diagnostic-only: it mirrors canonical protocol state in memory and never
- * applies repair snapshots to Skyrim or save files.
+ * Legacy stage relay remains separate from the server-owned canonical campaign.
+ * Canonical updates route through the verified session/runtime owner in dry-run
+ * mode. Scene/reference evidence never grants mutation authority.
  */
 class QuestService final : public BSTEventSink<TESQuestStartStopEvent>, BSTEventSink<TESQuestStageEvent>
 {

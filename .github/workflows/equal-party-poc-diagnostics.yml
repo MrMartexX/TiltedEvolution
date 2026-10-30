@@ -54,22 +54,19 @@ jobs:
         with:
           path: ~/.xmake/packages
           # Do not race the full-build dependency cache namespace.
-          key: ${{ runner.os }}-xmake-poc-x64-debug-3.0.9-${{ hashFiles('**/xmake.lua') }}
+          key: ${{ runner.os }}-xmake-poc-x64-debug-3.1.0-${{ hashFiles('**/xmake.lua') }}
 
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
         with:
-          xmake-version: "3.0.9"
+          xmake-version: "3.1.0"
 
       - name: Configure and install dependencies
-        continue-on-error: true
         shell: bash
         run: |
-          set +e
-          set -o pipefail
+          set -eo pipefail
           xmake repo --update 2>&1 | tee poc-config.log
           timeout 25m xmake config --arch=x64 --mode=debug --yes 2>&1 | tee -a poc-config.log
-          exit 0
 
       - name: Build quest state tests
         id: build
@@ -153,15 +150,15 @@ jobs:
         with:
           path: ~/AppData/Local/.xmake/packages
           # Do not let restored precompiled packages poison full source builds.
-          key: ${{ runner.os }}-xmake-poc-x64-debug-3.0.9-${{ hashFiles('**/xmake.lua') }}
+          key: ${{ runner.os }}-xmake-poc-x64-debug-3.1.0-${{ hashFiles('**/xmake.lua') }}
 
       - name: Setup xmake
         uses: xmake-io/github-action-setup-xmake@v1
         with:
-          xmake-version: "3.0.9"
+          xmake-version: "3.1.0"
 
       - name: Configure
-        run: xmake config --arch=x64 --mode=debug --yes -vD
+        run: xmake config --arch=x64 --mode=debug --skyrim_version=1.6.1170 --yes -vD
 
       - name: Build Windows validation target and capture diagnostics
         shell: pwsh

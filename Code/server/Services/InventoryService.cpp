@@ -1,6 +1,7 @@
 #include "InventoryService.h"
 
 #include <Components.h>
+#include <Services/InventoryChangePublication.h>
 #include <World.h>
 #include <GameServer.h>
 
@@ -27,30 +28,41 @@ InventoryService::InventoryService(World& aWorld, entt::dispatcher& aDispatcher)
 
 void InventoryService::OnInventoryChanges(const PacketEvent<RequestInventoryChanges>& acMessage) noexcept
 {
-    auto& message = acMessage.Packet;
-
+    const auto& message = acMessage.Packet;
     auto view = m_world.view<InventoryComponent>();
-
     const auto it = view.find(static_cast<entt::entity>(message.ServerId));
     if (it == view.end())
         return;
 
-    auto& inventoryComponent = view.get<InventoryComponent>(*it);
-    if (!inventoryComponent.Content.AddOrRemoveEntry(message.Item))
+    const auto* pOwner = m_world.try_get<OwnerComponent>(*it);
+    const auto* pCharacter = m_world.try_get<CharacterComponent>(*it);
+    const auto* pCell = m_world.try_get<CellIdComponent>(*it);
+    InventoryChangeContext context;
+    context.EntityExists = true;
+    context.HasOwnerComponent = pOwner != nullptr;
+    context.HasOwner = pOwner && pOwner->GetOwner();
+    context.SenderIsOwner = pOwner && pOwner->GetOwner() == acMessage.pPlayer;
+    context.TargetIsNpc = pCharacter && !pCharacter->IsPlayer();
+    context.InRange = pCharacter && pCell &&
+        acMessage.pPlayer->GetCellComponent().IsInRange(*pCell, pCharacter->IsDragon());
+    context.CurrentEpoch = pOwner ? pOwner->OwnershipEpoch : 0;
+    context.RequestedEpoch = message.OwnershipEpoch;
+    context.UpdateClients = message.UpdateClients;
+    context.DropsEnabled = static_cast<bool>(bEnableItemDrops);
+    context.DropRequested = message.Drop;
+
+    auto& inventory = view.get<InventoryComponent>(*it).Content;
+    const auto result = InventoryChangePublication::ApplyAndPublish(inventory, message, context,
+        [&](const NotifyInventoryChanges& acNotify) {
+            if (!GameServer::Get()->SendToPlayersInRange(acNotify, *it, acMessage.GetSender()))
+                spdlog::error("InventoryService::OnInventoryChanges: SendToPlayersInRange failed");
+        });
+    if (!result.Applied)
+    {
+        spdlog::debug("Rejected inventory delta: player={:X} actor={:X} requestedEpoch={} currentEpoch={}",
+            acMessage.pPlayer->GetId(), message.ServerId, message.OwnershipEpoch, context.CurrentEpoch);
         return;
-
-    if (!message.UpdateClients)
-        return;
-
-    NotifyInventoryChanges notify;
-    notify.ServerId = message.ServerId;
-    notify.Item = message.Item;
-
-    notify.Drop = bEnableItemDrops ? message.Drop : false;
-
-    const entt::entity cOrigin = static_cast<entt::entity>(message.ServerId);
-    if (!GameServer::Get()->SendToPlayersInRange(notify, cOrigin, acMessage.GetSender()))
-        spdlog::error("{}: SendToPlayersInRange failed", __FUNCTION__);
+    }
 }
 
 void InventoryService::OnEquipmentChanges(const PacketEvent<RequestEquipmentChanges>& acMessage) noexcept
@@ -61,14 +73,35 @@ void InventoryService::OnEquipmentChanges(const PacketEvent<RequestEquipmentChan
 
     const auto it = view.find(static_cast<entt::entity>(message.ServerId));
 
-    if (it != view.end())
+    if (it == view.end())
+        return;
+
+    const auto* pOwnerComponent = m_world.try_get<OwnerComponent>(*it);
+    if (pOwnerComponent)
     {
-        auto& inventoryComponent = view.get<InventoryComponent>(*it);
-        inventoryComponent.Content.UpdateEquipment(message.CurrentInventory);
+        if (pOwnerComponent->GetOwner() != acMessage.pPlayer || pOwnerComponent->OwnershipEpoch != message.OwnershipEpoch)
+        {
+            const uint32_t ownerId = pOwnerComponent->GetOwner() ? pOwnerComponent->GetOwner()->GetId() : 0;
+            spdlog::debug(
+                "Rejected equipment change from player {:X} for actor {:X}; current owner is {:X} and requested epoch {} does not match {}",
+                acMessage.pPlayer->GetId(), message.ServerId, ownerId, message.OwnershipEpoch, pOwnerComponent->OwnershipEpoch);
+            return;
+        }
     }
+    else if (message.OwnershipEpoch != 0)
+    {
+        spdlog::warn(
+            "Rejected equipment change from player {:X} because object {:X} unexpectedly carried ownership epoch {}",
+            acMessage.pPlayer->GetId(), message.ServerId, message.OwnershipEpoch);
+        return;
+    }
+
+    auto& inventoryComponent = view.get<InventoryComponent>(*it);
+    inventoryComponent.Content.UpdateEquipment(message.CurrentInventory);
 
     NotifyEquipmentChanges notify;
     notify.ServerId = message.ServerId;
+    notify.OwnershipEpoch = message.OwnershipEpoch;
     notify.ItemId = message.ItemId;
     notify.EquipSlotId = message.EquipSlotId;
     notify.Count = message.Count;

@@ -10,6 +10,13 @@ struct ActorExtension
         kPlayer = 1 << 1,
     };
 
+    enum class ReconciliationStage
+    {
+        None,
+        WaitingForDisable,
+        WaitingFor3D
+    };
+
     bool IsRemote() const noexcept;
     bool IsLocal() const noexcept;
     bool IsPlayer() const noexcept;
@@ -20,7 +27,12 @@ struct ActorExtension
 
     ActionEvent LatestAnimation{};
     size_t GraphDescriptorHash = 0;
+    uint64_t GraphDescriptorProjectKey = 0;
 
-  private:
+    // TODO: atomic? bool instead? maybe simplify to `IsReenabling()` ?
+    // Protects discovery while rebuilding a leveled NPC.
+    ReconciliationStage Reconciliation{ReconciliationStage::None};
+
+private:
     uint32_t onlineFlags{0};
 };

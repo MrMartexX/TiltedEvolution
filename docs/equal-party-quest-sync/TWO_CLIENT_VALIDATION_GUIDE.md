@@ -1,5 +1,12 @@
 # Two-Client Equal-Party Quest Sync Validation Guide (Task 13)
 
+Status: Historical research guide; canonical mutation is disabled in the current intake candidate.
+
+The activation instructions below do not enable this candidate's native executor.
+Follow the [approved intake plan](../research/UPSTREAM_CONFLICT_RESOLUTIONS_2026-10-28.md)
+and [current status](../project/CURRENT_STATUS.md). Full predecessor acceptance and
+exact-runtime proof are required before a future mutation experiment.
+
 ---
 
 ## 🇷🇺 РУССКАЯ ВЕРСИЯ (RUSSIAN VERSION)

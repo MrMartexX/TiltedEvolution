@@ -78,4 +78,17 @@ enum class SteamStubDrmFlags : uint32_t
 {
     return (acHeader.Flags & static_cast<uint32_t>(SteamStubDrmFlags::NoEncryption)) == 0;
 }
+enum class CodeSectionAction : uint8_t
+{
+    Reject,
+    EnterPlaintext,
+    RestoreEncrypted
+};
+
+[[nodiscard]] constexpr CodeSectionAction SelectCodeSectionAction(const SteamStubHeaderV31& acHeader) noexcept
+{
+    if (acHeader.Signature != 0xC0DEC0DF || acHeader.OriginalEntryPoint == 0)
+        return CodeSectionAction::Reject;
+    return HasEncryptedCodeSection(acHeader) ? CodeSectionAction::RestoreEncrypted : CodeSectionAction::EnterPlaintext;
+}
 } // namespace steam

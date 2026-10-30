@@ -3,7 +3,7 @@
 enum ClientOpcode : unsigned char
 {
     kAuthenticationRequest = 0,
-    kCancelAssignmentRequest,
+    kReservedCancelAssignmentRequest = 1,
     kAssignCharacterRequest,
     kClientReferencesMoveRequest,
     kEnterExteriorCellRequest,
@@ -54,10 +54,11 @@ enum ClientOpcode : unsigned char
     kRequestSetWaypoint,
     kRequestRemoveWaypoint,
     kSetTimeCommandRequest,
-    kRequestPartyQuestTransaction,
-    kRequestPartyQuestReplicaReport,
-    kRequestPartyQuestRepairAck,
-    kClientOpcodeMax
+    kRequestPartyQuestTransaction = 52,
+    kRequestPartyQuestReplicaReport = 53,
+    kRequestPartyQuestRepairAck = 54,
+    kRequestActionEvents = 55,
+    kClientOpcodeMax = 56
 };
 
 enum ServerOpcode : unsigned char
@@ -78,7 +79,7 @@ enum ServerOpcode : unsigned char
     kNotifyActorValueChanges,
     kNotifyActorMaxValueChanges,
     kNotifyHealthChangeBroadcast,
-    kNotifySpawnData,
+    kReservedNotifySpawnData = 16,
     kNotifyActivate,
     kNotifyLockChange,
     kAssignObjectsResponse,
@@ -106,7 +107,7 @@ enum ServerOpcode : unsigned char
     kNotifySubtitle,
     kNotifyPlayerDialogue,
     kNotifyActorTeleport,
-    kNotifyRelinquishControl,
+    kReservedNotifyRelinquishControl = 44,
     kNotifyPlayerLeft,
     kNotifyPlayerJoined,
     kNotifyPlayerLevel,
@@ -118,8 +119,9 @@ enum ServerOpcode : unsigned char
     kNotifySetWaypoint,
     kNotifyRemoveWaypoint,
     kNotifySetTimeResult,
-    kNotifyPartyQuestTransactionResult,
-    kNotifyPartyQuestRepairPlan,
-    kNotifyPartyQuestCanonicalUpdate,
-    kServerOpcodeMax
+    kNotifyPartyQuestTransactionResult = 56,
+    kNotifyPartyQuestRepairPlan = 57,
+    kNotifyPartyQuestCanonicalUpdate = 58,
+    kNotifyActionEvents = 59,
+    kServerOpcodeMax = 60
 };

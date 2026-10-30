@@ -4,6 +4,28 @@
 
 #include <cstddef>
 
+TEST_CASE("SteamStub launcher decision cannot infer plaintext from missing metadata", "[launcher][steam-ceg]")
+{
+    steam::SteamStubHeaderV31 header{};
+    header.Signature = 0xC0DEC0DF;
+    header.OriginalEntryPoint = 0x1234;
+    for (uint32_t flags : {0u, 4u})
+        for (uintptr_t address : {uintptr_t{0}, uintptr_t{0x1000}})
+            for (uintptr_t size : {uintptr_t{0}, uintptr_t{0x1000}})
+            {
+                header.Flags = flags;
+                header.CodeSectionVirtualAddress = address;
+                header.CodeSectionRawSize = size;
+                const auto expected = flags == 4u ? steam::CodeSectionAction::EnterPlaintext : steam::CodeSectionAction::RestoreEncrypted;
+                REQUIRE(steam::SelectCodeSectionAction(header) == expected);
+            }
+    header.Signature = 0;
+    REQUIRE(steam::SelectCodeSectionAction(header) == steam::CodeSectionAction::Reject);
+    header.Signature = 0xC0DEC0DF;
+    header.OriginalEntryPoint = 0;
+    REQUIRE(steam::SelectCodeSectionAction(header) == steam::CodeSectionAction::Reject);
+}
+
 TEST_CASE("SteamStub 3.1 layout keeps Skyrim AppId separate from DRM flags", "[launcher][steam-ceg][runtime-compatibility]")
 {
     static_assert(sizeof(steam::SteamStubHeaderV31) == 240u);

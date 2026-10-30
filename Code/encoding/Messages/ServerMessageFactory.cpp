@@ -31,12 +31,15 @@ static struct ServerMessageFactoryInit
 
 UniquePtr<ServerMessage> ServerMessageFactory::Extract(TiltedPhoques::Buffer::Reader& aReader) const noexcept
 {
-    uint64_t data;
-    aReader.ReadBits(data, sizeof(ServerOpcode) * 8);
+    uint64_t data = 0;
+    if (!aReader.ReadBits(data, sizeof(ServerOpcode) * 8))
+        return {nullptr};
 
     if (data >= kServerOpcodeMax) [[unlikely]]
         return {nullptr};
 
     const auto opcode = static_cast<ServerOpcode>(data);
+    if (!s_serverMessageExtractor[opcode])
+        return {nullptr};
     return s_serverMessageExtractor[opcode](aReader);
 }

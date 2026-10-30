@@ -20,6 +20,34 @@
 #include <Structs/Skyrim/PartyQuestExternalSinkLifetime.h>
 
 #include <World.h>
+#include <BranchInfo.h>
+
+#if (IS_MASTER)
+namespace
+{
+bool IsDefaultModlist(GameList<Mod>& aCurrentModlist) noexcept
+{
+    static const auto s_defaultModlist = std::to_array<TiltedPhoques::String>(
+        {"Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm",
+        "Dragonborn.esm", "_ResourcePack.esl", "SkyrimTogether.esp", "SkyrimTogetherQuestPatches.esp"}
+    );
+
+    if (aCurrentModlist.Size() != s_defaultModlist.size())
+        return false;
+
+    auto expectedMod = s_defaultModlist.begin();
+    for (const auto* pCurrentMod : aCurrentModlist)
+    {
+        if (pCurrentMod->filename != *expectedMod)
+            return false;
+
+        ++expectedMod;
+    }
+
+    return true;
+}
+} // namespace
+#endif
 
 DiscoveryService::DiscoveryService(World& aWorld, entt::dispatcher& aDispatcher) noexcept
     : m_world(aWorld)
@@ -54,7 +82,7 @@ void DiscoveryService::VisitCell(bool aForceTrigger) noexcept
 
     if (pPlayer->GetWorldSpace())
         VisitExteriorCell(aForceTrigger);
-    else if (pPlayer->GetParentCell())
+    else if (pPlayer->GetParentCellEx())
         VisitInteriorCell(aForceTrigger);
 
     // exactly how the game does it too
@@ -120,7 +148,7 @@ void DiscoveryService::VisitInteriorCell(bool aForceTrigger) noexcept
 {
     ResetCachedCellData();
 
-    const uint32_t cellId = PlayerCharacter::Get()->GetParentCell()->formID;
+    const uint32_t cellId = PlayerCharacter::Get()->GetParentCellEx()->formID;
     if (m_interiorCellId != cellId || aForceTrigger)
     {
         CellChangeEvent cellChangeEvent{};
@@ -270,36 +298,15 @@ BSTEventResult DiscoveryService::OnEvent(const TESLoadGameEvent*, const EventDis
 {
     spdlog::info("Finished loading, triggering visit cell");
 
-    const TiltedPhoques::String defaultModlist[7] = {"Skyrim.esm",        "Update.esm",     "Dawnguard.esm",
-                                                    "HearthFires.esm",   "Dragonborn.esm", "_ResourcePack.esl",
-                                                    "SkyrimTogether.esp"};
-
-    auto& currentModlist = ModManager::Get()->mods;
-
-    bool isModlistEqual = currentModlist.Size() == 7;
-
-    if (isModlistEqual)
-    {
-        int i = 0;
-        for (const auto& currentMod : currentModlist)
-        {
-            if (currentMod->filename != defaultModlist[i])
-            {
-                isModlistEqual = false;
-                break;
-            }
-
-            i++;
-        }
-    }
-
-    if (!isModlistEqual)
+#if (IS_MASTER)
+    if (!IsDefaultModlist(ModManager::Get()->mods))
     {
         ConnectionErrorEvent errorEvent{};
         errorEvent.ErrorDetail = "{\"error\": \"non_default_install\"}";
 
         m_world.GetRunner().Trigger(errorEvent);
     }
+#endif
 
     VisitCell(true);
 

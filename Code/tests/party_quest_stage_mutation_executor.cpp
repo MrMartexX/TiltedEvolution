@@ -95,6 +95,13 @@ struct ControlledActivationScope
     }
 };
 
+TEST_CASE("Research activation cannot enable the production mutation policy", "[quest.party-state.stage-mutation][durability]")
+{
+    ControlledActivationScope scope(true);
+    REQUIRE(PartyQuestStageMutationAdapter::IsControlledActivationEnabled());
+    REQUIRE_FALSE(PartyQuestPersistenceDurabilityPolicy::AllowsNativeRuntimeMutation());
+}
+
 struct MockEngine
 {
     uint16_t LiveStage{0};

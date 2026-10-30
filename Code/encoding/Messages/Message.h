@@ -1,4 +1,5 @@
 #pragma once
+#include <TiltedCore/Serialization.hpp>
 
 #include "../Opcodes.h"
 #include "../ChatMessageTypes.h"

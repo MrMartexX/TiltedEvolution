@@ -14,18 +14,17 @@ struct ModSystem;
  *
  * The executor freshly resolves GameId -> local FormID -> TESQuest at point of
  * use, maps the form back to the same GameId, accepts only a running stage-only
- * snapshot with no alias/world/created-reference mutation surface, and calls the
- * existing native TESQuest::SetStage implementation. It never starts/stops a
- * quest, touches aliases, inventories or world references.
+ * snapshot with no alias/world/created-reference mutation surface. Native
+ * SetStage dispatch remains physically absent pending the full P0 proof.
  *
- * Controlled-activation capability is required for live testing. Shipping/default
- * activation remains off until Task 15 accepts all evidence.
+ * Merely compiling this executor does not enable canonical mutation. The current
+ * production runtime-safety/profile pipeline remains dry-run/fail-closed until
+ * its live evidence prerequisites are satisfied.
  */
 class PartyQuestSkyrimStageMutationExecutor final
 {
 public:
-    [[nodiscard]] static bool Execute(const PartyQuestRuntimeApplyRequest& acRequest, ModSystem& aModSystem) noexcept;
-
-    static void SetControlledActivationEnabled(bool aEnabled) noexcept;
-    [[nodiscard]] static bool IsControlledActivationEnabled() noexcept;
+    [[nodiscard]] static bool Execute(
+        const PartyQuestRuntimeApplyRequest& acRequest,
+        ModSystem& aModSystem) noexcept;
 };

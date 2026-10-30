@@ -4,141 +4,70 @@ on:
   workflow_dispatch:
   pull_request:
   push:
-    branches:
-      - master
+    branches: [master]
+  workflow_call:
+    inputs:
+      build-mode:
+        type: string
+        default: releasedbg
+      upload-build-for-next-job:
+        type: boolean
+        default: false
+
+env:
+  BUILD_MODE: ${{ inputs.build-mode || 'releasedbg' }}
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.build-mode || 'releasedbg' }}-linux-x64
   cancel-in-progress: true
 
 jobs:
   build:
-    strategy:
-      matrix:
-        os: [ubuntu-22.04]
-        arch: [x64]
-        mode: [debug]
-
-    runs-on: ${{ matrix.os }}
-    if: "!contains(github.event.head_commit.message, 'ci skip')"
-
+    runs-on: ubuntu-22.04
+    timeout-minutes: 50
     steps:
-    - uses: actions/checkout@v7
-      with:
-        fetch-depth: 0
-
-    - name: Classify validation scope
-      id: scope
-      shell: bash
-      run: |
-        if [[ "${{ github.event_name }}" != "pull_request" ||
-              "${{ github.event.action }}" != "synchronize" ||
-              -z "${{ github.event.before }}" ||
-              -z "${{ github.event.after }}" ]]; then
-          echo "full=true" >> "$GITHUB_OUTPUT"
-          echo "Full validation: non-synchronize event or missing push range."
-          exit 0
-        fi
-
-        mapfile -t files < <(git diff --name-only \
-          "${{ github.event.before }}" \
-          "${{ github.event.after }}")
-
-        isolated=true
-        if (( ${#files[@]} == 0 )); then
-          isolated=false
-        fi
-
-        for file in "${files[@]}"; do
-          case "$file" in
-            Code/encoding/Structs/Skyrim/PartyQuest*|Code/tests/party_quest_*)
-              ;;
-            *)
-              isolated=false
-              break
-              ;;
-          esac
-        done
-
-        if [[ "$isolated" == "true" ]]; then
-          echo "full=false" >> "$GITHUB_OUTPUT"
-        else
-          echo "full=true" >> "$GITHUB_OUTPUT"
-        fi
-        echo "PartyQuest-only pushed range: $isolated"
-
-    - name: Checkout submodules
-      if: steps.scope.outputs.full == 'true'
-      run: |
-        git submodule sync --recursive
-        git submodule update --init --force --recursive --depth=1
-
-    - name: Cache xmake dependencies
-      if: steps.scope.outputs.full == 'true'
-      uses: actions/cache@v6
-      with:
-        path: ~/.xmake/packages
-        # Full builds own this namespace; targeted jobs cannot reserve its key.
-        key: ${{ runner.os }}-xmake-full-${{ matrix.arch }}-${{ matrix.mode }}-3.0.9-${{ hashFiles('**/xmake.lua') }}
-
-    # Install dependencies
-    - name: Update apt repositories
-      if: steps.scope.outputs.full == 'true'
-      run: sudo apt-get update
-
-    - name: Install build dependencies
-      if: steps.scope.outputs.full == 'true'
-      run: sudo apt-get install --no-install-recommends -y protobuf-compiler
-
-    # Install xmake
-    - name: Setup xmake
-      if: steps.scope.outputs.full == 'true'
-      uses: xmake-io/github-action-setup-xmake@v1
-      with:
-        xmake-version: '3.0.9'
-
-    # Update xmake repository (in order to have the file that will be cached)
-    - name: Update xmake repository
-      if: steps.scope.outputs.full == 'true'
-      run: xmake repo --update
-
-    # Setup compilation mode and install project dependencies
-    - name: Configure xmake and install dependencies
-      if: steps.scope.outputs.full == 'true'
-      shell: bash
-      run: |
-        set +e
-        timeout 15m xmake config \
-          --arch=${{ matrix.arch }} \
-          --mode=${{ matrix.mode }} \
-          --yes
-        status=$?
-        set -e
-
-        if (( status != 0 )); then
-          while IFS= read -r log; do
-            echo "::group::xmake package failure: $log"
-            sed -n '1,240p' "$log"
-            echo "::endgroup::"
-          done < <(find "$HOME/.xmake/cache/packages" \
-            -path '*/installdir.failed/logs/install.txt' \
-            -type f \
-            -print 2>/dev/null | sort)
-        fi
-
-        exit "$status"
-
-    # Build the server
-    - name: Build
-      if: steps.scope.outputs.full == 'true'
-      run: xmake -y
-
-    # Create install
-    #- name: Install
-    # run: xmake install -o packaged
-
-    # Upload artifacts
-    #- uses: actions/upload-artifact@v2
-    #  with:
-    #    name: ${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.mode }}
-    #    path: packaged/bin/**
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Checkout submodules
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive --depth=1
+      - name: Install matching protobuf generator
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y protobuf-compiler
+          protoc --version | grep -E '^libprotoc 3\.12\.'
+      - uses: actions/cache@v6
+        with:
+          path: ~/.xmake/packages
+          key: linux-full-x64-${{ env.BUILD_MODE }}-3.1.0-protobuf3.12-${{ hashFiles('**/xmake.lua') }}
+      - uses: xmake-io/github-action-setup-xmake@v1
+        with:
+          xmake-version: '3.1.0'
+      - name: Configure and preserve failure diagnostics
+        shell: bash
+        run: |
+          set +e
+          timeout 15m xmake config --arch=x86_64 --mode="$BUILD_MODE" --yes -vD > config.log 2>&1
+          status=$?
+          cat config.log
+          if (( status != 0 )); then
+            find "$HOME/.xmake/cache/packages" -path '*/installdir.failed/logs/install.txt' -type f -exec tail -n 200 {} \; 2>/dev/null
+          fi
+          exit "$status"
+      - name: Build server and shared targets
+        run: xmake -y
+      - name: Run complete TPTests
+        shell: bash
+        run: |
+          set -o pipefail
+          timeout 10m xmake run TPTests 2>&1 | tee linux-tptests.log
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: linux-validation-${{ github.sha }}
+          path: |
+            config.log
+            linux-tptests.log
+          retention-days: 7

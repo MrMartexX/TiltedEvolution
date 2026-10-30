@@ -15,6 +15,7 @@
 #include <PlayerCharacter.h>
 
 #include <Effects/ActiveEffect.h>
+#include <Forms/SpellItem.h>
 
 TP_THIS_FUNCTION(TAddTarget, bool, MagicTarget, MagicTarget::AddTargetData& arData);
 TP_THIS_FUNCTION(TCheckAddEffectTargetData, bool, MagicTarget::AddTargetData, void* arArgs, float afResistance);
@@ -59,6 +60,15 @@ bool MagicTarget::AddTarget(AddTargetData& arData, bool aApplyHealPerkBonus, boo
 
 bool MagicTarget::AddTargetData::ShouldSync()
 {
+    // Constant effect slow time is an ability each client's scripts add and remove on their own player, so a synced
+    // copy would stay on the other players for good. Fire and forget slow time (shouts) still syncs.
+    if (pEffectItem->IsSlowEffect())
+    {
+        SpellItem* pSpellItem = Cast<SpellItem>(pSpell);
+        if (pSpellItem && pSpellItem->eCastingType == MagicSystem::CastingType::CONSTANT_EFFECT)
+            return false;
+    }
+
     return !pEffectItem->IsSummonEffect() && !pSpell->IsInvisibilitySpell() && !pSpell->IsWardSpell();
 }
 
@@ -68,7 +78,7 @@ bool MagicTarget::AddTargetData::IsForbiddenEffect(Actor* apTarget)
     if (apTarget != PlayerCharacter::Get())
         return false;
 
-    return pEffectItem->IsNightVisionEffect() || pEffectItem->IsSlowEffect();
+    return pEffectItem->IsNightVisionEffect();
 }
 
 Actor* MagicTarget::GetTargetAsActor()

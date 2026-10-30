@@ -803,7 +803,7 @@ void QuestService::OnQuestChanges(const PacketEvent<RequestQuestUpdate>& acMessa
     {
         if (!bEnableMiscQuestSync)
             return;
-        spdlog::info("{}: syncing type none/misc quest to party, gameId {:X} questStage {} questStatus {} questType {}",
+        spdlog::debug("{}: syncing type none/misc quest to party, gameId {:X} questStage {} questStatus {} questType {}",
                      __FUNCTION__, notify.Id.LogFormat(), message.Stage, message.Status, message.ClientQuestType);
     }
 

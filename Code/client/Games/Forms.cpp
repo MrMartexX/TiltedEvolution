@@ -48,6 +48,9 @@ void TESNPC::Deserialize(const String& acBuffer, uint32_t aChangeFlags) noexcept
     Load(&loadBuffer);
 
     loadBuffer.buffer = nullptr;
+
+    if (const uint32_t cRemoved = spellList.RemoveNullEntries())
+        spdlog::warn("Removed {} unresolved spell list entries from NPC {:X}", cRemoved, formID);
 }
 
 void TESNPC::Initialize() noexcept
@@ -59,7 +62,8 @@ void TESNPC::Initialize() noexcept
     npcClass = pPlayerBaseForm->npcClass;
     combatStyle = pPlayerBaseForm->combatStyle;
     raceForm.race = pPlayerBaseForm->raceForm.race;
-    outfits[0] = pPlayerBaseForm->outfits[0];
+    defaultOutfit = pPlayerBaseForm->defaultOutfit;
+    sleepOutfit = pPlayerBaseForm->sleepOutfit;
     spellList.Initialize();
     // End defaults
 
@@ -121,7 +125,7 @@ TESNPC* TESNPC::Create(const String& acBuffer, const uint32_t aChangeFlags) noex
     pNpc->Deserialize(acBuffer, aChangeFlags);
 
     // This forces facegen for some reason
-    pNpc->overlayRace = nullptr;
+    pNpc->originalRace = nullptr;
 
     return pNpc;
 }

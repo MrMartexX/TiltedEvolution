@@ -8,58 +8,17 @@ on:
   push:
     branches:
       - master
-    tags:
-      - 'v[0-9]+\.[0-9]+\.[0-9]+'
+  workflow_call:
 
 jobs:
   build-windows:
     if: ${{ github.repository_owner == 'tiltedphoques' || github.event_name != 'schedule' }} # Disable cron runs in forks
+    strategy:
+      fail-fast: false
+      matrix:
+        skyrim-version: ['latest', '1.6.1170']
     uses: ./.github/workflows/windows.yml
     with:
-      build-mode: 'release'
+      build-mode: release
+      skyrim-version: ${{ matrix.skyrim-version }}
       upload-build-for-next-job: true
-
-  package-and-upload:
-    runs-on: windows-2022
-    needs: build-windows
-    steps:
-      - name: Download artifact from the previous job
-        uses: actions/download-artifact@v8
-        with:
-          name: internal-job-files
-
-      - name: Package build and organize directories
-        run: |
-          mkdir -p str-build/SkyrimTogetherReborn
-          mv build/windows/x64/release/* str-build/SkyrimTogetherReborn
-          cp -r GameFiles/Skyrim/* str-build/
-
-      - name: Remove unnecessary build files, keep .pdb
-        run: |
-          mkdir str-pdb
-          mv str-build/SkyrimTogetherReborn/SkyrimTogether.pdb, str-build/SkyrimTogetherReborn/SkyrimTogetherServer.pdb str-pdb
-          rm str-build/SkyrimTogetherReborn/*.pdb, str-build/SkyrimTogetherReborn/*.lib, str-build/SkyrimTogetherReborn/*.exp
-          rm str-build/SkyrimTogetherReborn/*Tests.exe
-
-      - name: Sanitize artifact version
-        id: artifact-version
-        shell: pwsh
-        run: |
-          $raw = "${{ needs.build-windows.outputs.str-version }}"
-          $safe = $raw -replace '[\\/:*?"<>|\r\n]', '-'
-          if ([string]::IsNullOrWhiteSpace($safe)) {
-            $safe = "${{ github.sha }}"
-          }
-          "value=$safe" >> $env:GITHUB_OUTPUT
-
-      - name: Upload playable build
-        uses: actions/upload-artifact@v7
-        with:
-          name: Skyrim Together Build (${{ steps.artifact-version.outputs.value }})
-          path: str-build/
-
-      - name: Upload debug symbols
-        uses: actions/upload-artifact@v7
-        with:
-          name: Debug Symbols (${{ steps.artifact-version.outputs.value }})
-          path: str-pdb/

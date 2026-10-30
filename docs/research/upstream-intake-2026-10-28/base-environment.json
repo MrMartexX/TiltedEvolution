@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "analyzer_version": 1,
+  "status": "Complete",
+  "authorizes_runtime": false,
+  "authorizes_mutation": false,
+  "runtime": {"version": "1.6.1170.0", "executable_sha256": "c434208894f07f604b852f29b8edc3a58c4de63de783373733e72b2b73f33be9"},
+  "environment": {"plugin_fingerprint": "0x62557d41e3e9a150", "script_fingerprint": "0x28ae1c01a4a2ead7"},
+  "input_provenance": {"plugins": [{"path":"skyrim.esm","is_lite":false},{"path":"update.esm","is_lite":false},{"path":"dawnguard.esm","is_lite":false},{"path":"hearthfires.esm","is_lite":false},{"path":"dragonborn.esm","is_lite":false}],"archives":[{"path":"skyrim - misc.bsa","priority":1}],"loose_pex":[]},
+  "input_provenance_fingerprint": "0x4d8ce289ae466e33",
+  "quests": [
+    {"game_id": {"source_plugin":"Skyrim.esm","local_form_id":788417}, "source_plugin": "Skyrim.esm", "winning_plugin": "Skyrim.esm", "local_form_id": 788417, "source_is_lite": false, "editor_id": "dunNorthwatchKeepQST", "resolved_topology_fingerprint": "0x74f3bb2f41af7aec", "winning_override_fingerprint": "0xe512eed047636f89", "script_dependency_fingerprint": "0xa601307d46a8e562", "stages": [0,100], "objectives": [], "aliases": 0, "scenes": 0, "has_fragments": false, "has_conditions": false, "has_aliases": false, "has_scenes": false, "has_side_effect_indicators": false, "script_dependencies": [], "transitions": [{"from":0,"to":100,"disposition":"SafeCandidate","reason":"adjacent declared stages with no detected side-effect indicator"}]},
+    {"game_id": {"source_plugin":"Skyrim.esm","local_form_id":219109}, "source_plugin": "Skyrim.esm", "winning_plugin": "Skyrim.esm", "local_form_id": 219109, "source_is_lite": false, "editor_id": "dunKarthspireRedoubtQST", "resolved_topology_fingerprint": "0x8b054d9b48727d59", "winning_override_fingerprint": "0x970d7da42342c1a2", "script_dependency_fingerprint": "0xa601307d46a8e562", "stages": [10,100], "objectives": [], "aliases": 0, "scenes": 0, "has_fragments": false, "has_conditions": false, "has_aliases": false, "has_scenes": false, "has_side_effect_indicators": false, "script_dependencies": [], "transitions": [{"from":10,"to":100,"disposition":"SafeCandidate","reason":"adjacent declared stages with no detected side-effect indicator"}]}
+  ],
+  "errors": []
+}

@@ -1,0 +1,500 @@
+{
+  "schemaVersion": 1,
+  "reviewDate": "2026-10-28",
+  "status": "Evidence snapshot; all resolutions planned, no implementation acceptance",
+  "integration": "99b4d0803810c22d30f14365b5c94d7fc5dd290c",
+  "base": "9d81ef07d68e4bb2bd94fca246e798a564b7fb92",
+  "upstream": "25a0049a00900b8714e105f795380caf33678012",
+  "virtualConflictTree": "819a145340f69aac1688d31a30ac181630093f93",
+  "sourceInventory": "UPSTREAM_DEV_INTAKE_2026-10-28.json",
+  "detailReport": "UPSTREAM_CONFLICT_RESOLUTIONS_2026-10-28.md",
+  "conflictFiles": 20,
+  "conflictRegions": 36,
+  "files": [
+    {
+      "id": "F01",
+      "path": ".github/workflows/linux.yml",
+      "resolution": "R9",
+      "checks": [
+        "T8",
+        "T9"
+      ],
+      "regions": [
+        {
+          "id": "F01-H1",
+          "virtualStart": 41,
+          "virtualEnd": 188,
+          "decision": "Retain Ubuntu 22.04 x64 with the fork protobuf pins/generator; adopt reviewed full build mechanics and xmake 3.1.0 consistently; replace removed matrix.mode; gate staging with full build; admit 24.04/arm64 separately.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F02",
+      "path": ".github/workflows/windows-playable-build.yml",
+      "resolution": "R9",
+      "checks": [
+        "T9"
+      ],
+      "regions": [
+        {
+          "id": "F02-H1",
+          "virtualStart": 25,
+          "virtualEnd": 72,
+          "decision": "Remove the obsolete package-and-upload job; use the upstream runtime matrix calling one packaging owner in windows.yml; preserve manual dispatch, sanitized names and fork schedule restrictions.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F03",
+      "path": ".github/workflows/windows.yml",
+      "resolution": "R9",
+      "checks": [
+        "T5",
+        "T9"
+      ],
+      "regions": [
+        {
+          "id": "F03-H1",
+          "virtualStart": 102,
+          "virtualEnd": 105,
+          "decision": "Keep full-build dependency-cache condition; use cache identity matching the actual xmake version and configuration.",
+          "status": "Planned"
+        },
+        {
+          "id": "F03-H2",
+          "virtualStart": 122,
+          "virtualEnd": 127,
+          "decision": "Combine full-build condition with explicit --plat=windows, arch, BUILD_MODE and SKYRIM_VERSION; force full for candidate acceptance.",
+          "status": "Planned"
+        },
+        {
+          "id": "F03-H3",
+          "virtualStart": 134,
+          "virtualEnd": 138,
+          "decision": "Use Bash GITHUB_ENV syntax in the Bash build step; keep PowerShell syntax only in explicitly pwsh steps.",
+          "status": "Planned"
+        },
+        {
+          "id": "F03-H4",
+          "virtualStart": 171,
+          "virtualEnd": 174,
+          "decision": "Keep pnpm setup under the same full-build condition as UI compilation.",
+          "status": "Planned"
+        },
+        {
+          "id": "F03-H5",
+          "virtualStart": 180,
+          "virtualEnd": 183,
+          "decision": "Keep Node setup under the same full-build condition as UI compilation.",
+          "status": "Planned"
+        },
+        {
+          "id": "F03-H6",
+          "virtualStart": 197,
+          "virtualEnd": 269,
+          "decision": "Use one package flow in windows.yml; preserve live artifacts and sanitized runtime/SHA names; stage bridge and copy/upload live output before moving files; remove obsolete internal-job-files/str-version plumbing after caller audit.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F04",
+      "path": "Code/client/Games/Skyrim/Forms/TESQuest.h",
+      "resolution": "R4",
+      "checks": [
+        "T3",
+        "T4"
+      ],
+      "regions": [
+        {
+          "id": "F04-H1",
+          "virtualStart": 7,
+          "virtualEnd": 71,
+          "decision": "Keep BGSBaseAlias include and typed aliases; admit expanded scene declarations with dialogue ABI proof; first candidate retains fork stage representation/method contract, deferring the #848 stage behavior bundle.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F05",
+      "path": "Code/client/ScriptExtender.cpp",
+      "resolution": "R6",
+      "checks": [
+        "T6"
+      ],
+      "regions": [
+        {
+          "id": "F05-H1",
+          "virtualStart": 93,
+          "virtualEnd": 103,
+          "decision": "Retain error/return for empty runtime filename. Apply upstream startup-hook wording at the validated pStartSKSE call; coordinate LoadScriptExtender rename without replacing discovery checks.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F06",
+      "path": "Code/client/Services/Generic/QuestService.cpp",
+      "resolution": "R3",
+      "checks": [
+        "T3"
+      ],
+      "regions": [
+        {
+          "id": "F06-H1",
+          "virtualStart": 5,
+          "virtualEnd": 11,
+          "decision": "Keep PartyJoinedEvent and PartyLeftEvent; no UpdateEvent dependency until the held-stage consumer is separately admitted.",
+          "status": "Planned"
+        },
+        {
+          "id": "F06-H2",
+          "virtualStart": 56,
+          "virtualEnd": 65,
+          "decision": "Keep canonical and fork lifecycle subscriptions once each; do not add upstream duplicate left connection or held-stage update consumer in first candidate.",
+          "status": "Planned"
+        },
+        {
+          "id": "F06-H3",
+          "virtualStart": 71,
+          "virtualEnd": 104,
+          "decision": "Keep null-checked registration of the two tracked fork sinks and compatibility-registry log; defer five extra upstream sinks and their activation.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F07",
+      "path": "Code/client/Services/QuestService.h",
+      "resolution": "R3",
+      "checks": [
+        "T3"
+      ],
+      "regions": [
+        {
+          "id": "F07-H1",
+          "virtualStart": 15,
+          "virtualEnd": 27,
+          "decision": "Keep fork canonical message, connection and party event declarations; add only declarations used by admitted behavior.",
+          "status": "Planned"
+        },
+        {
+          "id": "F07-H2",
+          "virtualStart": 32,
+          "virtualEnd": 57,
+          "decision": "Explain separate legacy relay and canonical dry-run paths; do not describe party leader as canonical campaign owner.",
+          "status": "Planned"
+        },
+        {
+          "id": "F07-H3",
+          "virtualStart": 75,
+          "virtualEnd": 117,
+          "decision": "Keep verified campaign/revision accessors, friend and lifecycle methods; do not insert unbound HeldStages or duplicate lifecycle declarations.",
+          "status": "Planned"
+        },
+        {
+          "id": "F07-H4",
+          "virtualStart": 128,
+          "virtualEnd": 175,
+          "decision": "Keep runtime/session/cache/request storage, exact registered dispatcher pointers and scoped connections; defer HeldStages map/update connection. Preserve explicit destructor outside marker.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F08",
+      "path": "Code/client/SkyrimVM64.cpp",
+      "resolution": "R5",
+      "checks": [
+        "T5"
+      ],
+      "regions": [
+        {
+          "id": "F08-H1",
+          "virtualStart": 7,
+          "virtualEnd": 33,
+          "decision": "Keep Main fields/assertion and fork lifecycle/thread includes; delete hard-coded VMContext and use the runtime-conditioned GameVM header.",
+          "status": "Planned"
+        },
+        {
+          "id": "F08-H2",
+          "virtualStart": 43,
+          "virtualEnd": 58,
+          "decision": "Keep MainLoopLifecycleHookInstaller; use GameVM consistently for HookVMUpdate and TVMUpdate, preserving MainMenu transition and thread observation outside the markers.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F09",
+      "path": "Code/client/TiltedOnlineApp.cpp",
+      "resolution": "R6",
+      "checks": [
+        "T6"
+      ],
+      "regions": [
+        {
+          "id": "F09-H1",
+          "virtualStart": 21,
+          "virtualEnd": 26,
+          "decision": "Retain the three fork P0 includes and bootstrap/shutdown behavior; accept independent per-instance log sink without moving SKSE back into BeginMain.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F10",
+      "path": "Code/client/VersionDb.h",
+      "resolution": "R6",
+      "checks": [
+        "T6"
+      ],
+      "regions": [
+        {
+          "id": "F10-H1",
+          "virtualStart": 183,
+          "virtualEnd": 209,
+          "decision": "Keep fork Load implementation and bounded deterministic parser integration as a whole, not fork text inside upstream LoadV2 scaffolding.",
+          "status": "Planned"
+        },
+        {
+          "id": "F10-H2",
+          "virtualStart": 224,
+          "virtualEnd": 258,
+          "decision": "Keep exact runtime/module/namespace parsing and transactional map publication; reject upstream duplicate stream decoder structure.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F11",
+      "path": "Code/client/main.cpp",
+      "resolution": "R5/R6",
+      "checks": [
+        "T5",
+        "T6"
+      ],
+      "regions": [
+        {
+          "id": "F11-H1",
+          "virtualStart": 5,
+          "virtualEnd": 8,
+          "decision": "Keep native hook validation include.",
+          "status": "Planned"
+        },
+        {
+          "id": "F11-H2",
+          "virtualStart": 47,
+          "virtualEnd": 78,
+          "decision": "Keep both native-hook failure and incompatible-runtime dialogs; place runtime validation before Address Library/hook initialization.",
+          "status": "Planned"
+        },
+        {
+          "id": "F11-H3",
+          "virtualStart": 107,
+          "virtualEnd": 122,
+          "decision": "Keep post-commit native-hook verification and pre-entry SKSE timing; call the consistently renamed LoadScriptExtender exactly once.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F12",
+      "path": "Code/client/xmake.lua",
+      "resolution": "R8",
+      "checks": [
+        "T5",
+        "T8"
+      ],
+      "regions": [
+        {
+          "id": "F12-H1",
+          "virtualStart": 72,
+          "virtualEnd": 78,
+          "decision": "Remove redundant client add_requires tiltedcore; retain one build_client call and root version pin, fork sources/syslinks and explicit runtime define.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F13",
+      "path": "Code/encoding/Messages/ClientMessageFactory.h",
+      "resolution": "R2",
+      "checks": [
+        "T2"
+      ],
+      "regions": [
+        {
+          "id": "F13-H1",
+          "virtualStart": 74,
+          "virtualEnd": 78,
+          "decision": "Register surviving upstream messages, all three fork PartyQuest requests and RequestActionEvents once; remove retired types; add empty-dispatch-slot rejection in factory cpp.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F14",
+      "path": "Code/encoding/Messages/ServerMessageFactory.h",
+      "resolution": "R2",
+      "checks": [
+        "T2"
+      ],
+      "regions": [
+        {
+          "id": "F14-H1",
+          "virtualStart": 61,
+          "virtualEnd": 65,
+          "decision": "Include both PartyQuestMessages and NotifyActionEvents.",
+          "status": "Planned"
+        },
+        {
+          "id": "F14-H2",
+          "virtualStart": 79,
+          "virtualEnd": 85,
+          "decision": "Register surviving messages, all three canonical replies and NotifyActionEvents; remove NotifyRelinquishControl and other retired types; guard reserved slots in factory cpp.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F15",
+      "path": "Code/encoding/Opcodes.h",
+      "resolution": "R2",
+      "checks": [
+        "T2"
+      ],
+      "regions": [
+        {
+          "id": "F15-H1",
+          "virtualStart": 56,
+          "virtualEnd": 62,
+          "decision": "Keep fork client values including PartyQuest 52/53/54; reserve removed slot 1; append actions at 55 and move Max to 56; reject reserved slot.",
+          "status": "Planned"
+        },
+        {
+          "id": "F15-H2",
+          "virtualStart": 122,
+          "virtualEnd": 128,
+          "decision": "Keep fork server values including PartyQuest 56/57/58; reserve removed slots 16/44; append actions at 59 and Max=60; reject reserved slots.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F16",
+      "path": "Code/server/Services/InventoryService.cpp",
+      "resolution": "R1",
+      "checks": [
+        "T1"
+      ],
+      "regions": [
+        {
+          "id": "F16-H1",
+          "virtualStart": 38,
+          "virtualEnd": 87,
+          "decision": "One entity lookup, upstream sender/epoch/range authorization first, fork checked AddOrRemoveEntry exactly once, then success-only upstream relay/drop policy. Remove auto-merged duplicate call below marker.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F17",
+      "path": "Code/server/Services/PlayerService.cpp",
+      "resolution": "R1",
+      "checks": [
+        "T1"
+      ],
+      "regions": [
+        {
+          "id": "F17-H1",
+          "virtualStart": 187,
+          "virtualEnd": 203,
+          "decision": "Keep checked gold delta and one success-only notify; add OwnershipEpoch to that notify; preserve GoldLost=0 on failure and independent respawn handling.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F18",
+      "path": "Code/server/Services/QuestService.cpp",
+      "resolution": "R3",
+      "checks": [
+        "T3"
+      ],
+      "regions": [
+        {
+          "id": "F18-H1",
+          "virtualStart": 806,
+          "virtualEnd": 812,
+          "decision": "Take debug-level misc-quest log with notify fields; retain canonical persistence/protocol handlers. Defer unmarked #848 dedup block and Party::QuestStages with client behavior.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F19",
+      "path": "Code/tests/xmake.lua",
+      "resolution": "R8",
+      "checks": [
+        "T8"
+      ],
+      "regions": [
+        {
+          "id": "F19-H1",
+          "virtualStart": 9,
+          "virtualEnd": 23,
+          "decision": "Union portable PlaybackClock.cpp with all five Windows native load bridge cpp files, TPTests.rc and kernel32/bcrypt. Keep full test glob and fork include directories.",
+          "status": "Planned"
+        }
+      ]
+    },
+    {
+      "id": "F20",
+      "path": "xmake.lua",
+      "resolution": "R8/R9",
+      "checks": [
+        "T8",
+        "T9"
+      ],
+      "regions": [
+        {
+          "id": "F20-H1",
+          "virtualStart": 49,
+          "virtualEnd": 54,
+          "decision": "Retain existing tiltedcore 0.2.9 root pin; remove unused recastnavigation; preserve separately reviewed transitive dependency pins and source-built Windows GNS.",
+          "status": "Planned"
+        }
+      ]
+    }
+  ],
+  "requiredCompanionReview": [
+    "Code/encoding/Messages/ClientMessageFactory.cpp",
+    "Code/encoding/Messages/ServerMessageFactory.cpp",
+    "Code/client/Games/Skyrim/Forms/TESQuest.cpp",
+    "Code/client/Games/Skyrim/Misc/GameVM.h",
+    "Code/client/ScriptExtender.h",
+    "Code/server/Services/PartyService.h",
+    ".github/workflows/equal-party-poc-diagnostics.yml",
+    ".github/workflows/release.yml",
+    "Code/client/Services/Generic/CharacterService.cpp",
+    "Code/server/Services/CharacterService.cpp",
+    "Code/encoding/Messages/RequestActionEvents.cpp",
+    "Code/encoding/Messages/NotifyActionEvents.cpp"
+  ],
+  "intentionalFirstCandidateExclusions": [
+    {
+      "area": "Legacy held quest stages #848",
+      "reason": "Missing lifecycle/completion/authoritative identity proof; retain legacy baseline while admitting separately required scene declarations."
+    },
+    {
+      "area": "SteamStub zero-section success bypass",
+      "reason": "Not equivalent to corrected NoEncryption flag; no exact contradictory binary-variant proof collected."
+    }
+  ],
+  "claimedCppTestsRun": false,
+  "claimedMergedBuild": false,
+  "canonicalMutationEnabled": false
+}
