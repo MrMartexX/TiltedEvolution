@@ -20,6 +20,7 @@
 #include <Systems/InterpolationSystem.h>
 #include <Systems/AnimationSystem.h>
 #include <Systems/AnimationOwnershipReplay.h>
+#include <Systems/DeferredActorSetup.h>
 #include <Systems/CacheSystem.h>
 #include <Systems/FaceGenSystem.h>
 #include <Systems/LeveledNpcSystem.h>
@@ -326,6 +327,8 @@ void CharacterService::OnConnected(const ConnectedEvent& acConnectedEvent) const
 
 void CharacterService::OnDisconnected(const DisconnectedEvent& acDisconnectedEvent) const noexcept
 {
+    RetireDeferredActorSetupOnDisconnect(m_world);
+
     auto remoteView = m_world.view<FormIdComponent, RemoteComponent>();
     for (auto entity : remoteView)
     {
@@ -1768,13 +1771,18 @@ void CharacterService::RunRemoteUpdates() noexcept
         FaceGenSystem::Update(m_world, pActor, faceGenComponent);
     }
 
-    auto waitingView = m_world.view<FormIdComponent, WaitingFor3D>();
+    auto waitingView = m_world.view<FormIdComponent, RemoteComponent, WaitingFor3D>();
 
     Vector<entt::entity> readyEntities;
     for (auto entity : waitingView)
     {
         auto& formIdComponent = waitingView.get<FormIdComponent>(entity);
         auto& waitingFor3D = waitingView.get<WaitingFor3D>(entity);
+        const auto& remote = waitingView.get<RemoteComponent>(entity);
+        if (!CanConsumeDeferredActorSetup(
+                m_transport.IsOnline(), waitingFor3D.SpawnRequest.ServerId,
+                waitingFor3D.SpawnRequest.OwnershipEpoch, remote.Id, remote.OwnershipEpoch))
+            continue;
 
         Actor* pActor = Cast<Actor>(TESForm::GetById(formIdComponent.Id));
         if (!pActor || !pActor->GetNiNode())

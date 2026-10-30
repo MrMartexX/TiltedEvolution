@@ -1,6 +1,6 @@
 # Upstream intake implementation — 2026-10-28
 
-Status: Candidate published; required hosted CI passed on 80894cbc; live acceptance incomplete. P0 NOT CLOSED.
+Status: Candidate published; latest completed hosted baseline is a0054318 (2026-10-30). Follow-up results are recorded below; live acceptance remains incomplete. P0 NOT CLOSED. Earlier tables and dated results describe their original snapshots.
 
 This candidate follows the [approved conflict resolution review](UPSTREAM_CONFLICT_RESOLUTIONS_2026-10-28.md) and its [36-region manifest](UPSTREAM_CONFLICT_RESOLUTIONS_2026-10-28.json). Historical research remains unchanged.
 
@@ -540,3 +540,48 @@ The local runner reports unavailable directory-symlink privilege; the hosted
 Windows counts must be recorded separately. These results cover the corrected
 working tree, not gameplay or packets still in flight. Final exact-SHA CI remains
 required before acceptance; canonical mutation is still disabled.
+
+### Completed ownership-retirement CI baseline
+
+Commit a00543189fc1b89f26763f7cded79655edcaebc1 completed all required checks:
+Linux full build 41049877274 and diagnostics 41049870795 passed
+**286985 assertions / 998 cases**. Windows full build 41049877289 passed both
+1.6.1170 and latest with **287972 / 1052** each; Windows diagnostics in
+41049870795 passed **287972 / 1052**. Actual compile, complete TPTests, UI and
+bridge-staging steps ran; only optional release packaging was skipped.
+PR checkout 71b4c283d4f87aaa209d09a135e28017e6f51b13 and the head share tree
+24b2255d3641d3a207a4affc999d50dbcc93aba8. Both local runtime product builds
+and complete TPTests passed **287961 / 1052**; focused ownership tests passed
+**44 / 6**. Gameplay on this SHA is not claimed.
+
+## Pending actor setup after disconnect — 2026-10-30
+
+The next source audit found an independent consumption defect. OnDisconnected
+removed assignment/local/remote ownership components but retained WaitingFor3D
+and remote playback. Its consumer required only a FormIdComponent and the
+pending setup, so a reference becoming ready later could apply the previous
+connection's inventory, factions, animation variables and death/draw state.
+No RemoteComponent destruction subscription retired that work.
+
+Disconnect now retires pending 3D setup and remote playback before calling any
+existing actor cleanup. The small production helper only clears already-present
+nonempty pools: EnTT 3.10 clear<T>() otherwise assures storage even before the
+first spawn. Existing actor cleanup, owner removal and shutdown semantics are
+unchanged. The consumer requires a RemoteComponent and revalidates online state,
+server actor ID and the exact nonzero accepted ownership epoch before FormID
+lookup or any engine call. A ready reference cannot substitute for that grant.
+
+Seven regressions cover offline/stale/different-actor grants, valid zero server
+entity IDs and full-width epochs, real EnTT pending/playback retirement, absent
+ownership, disconnect before any spawn without creating pools, numeric identity
+reuse after cancellation with a fresh payload only, and unchanged rejected
+snapshots. The tests use actual client components and CharacterSpawnRequest;
+they do not execute native Skyrim calls or claim a general lifetime proof.
+Local 1.6.1170 MSVC client/launcher and TPTests built; focused tests passed
+**35 assertions / 7 cases**, complete TPTests passed **287996 / 1059**.
+Exact final-SHA hosted results must still be recorded independently.
+
+This remains the legacy actor pipeline. It does not introduce a second lifecycle
+domain, change wire data, authorize canonical quest mutation, or establish the
+still-required LoadGame-generation/native callback-quiescence proof. Packets
+without an ownership incarnation retain the documented provenance limitation.
