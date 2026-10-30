@@ -19,6 +19,7 @@
 
 #include <Systems/InterpolationSystem.h>
 #include <Systems/AnimationSystem.h>
+#include <Systems/AnimationOwnershipReplay.h>
 #include <Systems/CacheSystem.h>
 #include <Systems/FaceGenSystem.h>
 #include <Systems/LeveledNpcSystem.h>
@@ -761,6 +762,15 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
     }
 
     const entt::entity cEntity = *entity;
+    // Even when this client stays remote, queued actions and pending resets
+    // belong to the old owner. Retire them before reconciliation or decline.
+    if (auto* pAnimation = m_world.try_get<RemoteAnimationComponent>(cEntity))
+    {
+        if (!RetireAnimationReplayForOwnershipChange(
+                currentEpoch, acMessage.OwnershipEpoch, pAnimation->TimePoints,
+                pAnimation->ReplayCount, pAnimation->ResetAnimationGraphForReplay))
+            return;
+    }
     const auto* pFormIdComponent = m_world.try_get<FormIdComponent>(cEntity);
     Actor* pActor = pFormIdComponent ? Cast<Actor>(TESForm::GetById(pFormIdComponent->Id)) : nullptr;
 

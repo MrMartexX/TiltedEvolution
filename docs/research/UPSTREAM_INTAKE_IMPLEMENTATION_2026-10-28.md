@@ -482,3 +482,42 @@ The user explicitly declined a repeat test solely to equalize the friend's CC
 plugins (33 vs host 8); retain the mismatch as an evidence limitation rather than
 an independent mandatory rerun. Actual owner/epoch observations and remaining
 native/thread/lifecycle acceptance must still be reviewed. P0 remains open.
+
+
+## Ownership playback retirement follow-up — 2026-10-30
+
+After the replay-reset slice c810e7f6 completed every required Linux/Windows
+build and diagnostic job, source audit found a second bounded counterexample.
+OnOwnershipTransfer rebuilds interpolation for a new remote owner but preserves
+an existing RemoteAnimationComponent. Its TimePoints, ReplayCount and pending
+graph reset could therefore execute old-owner work under the newly accepted
+epoch. Local-owner promotion eventually deletes that component, but the
+remote-to-remote and not-ready/decline paths did not retire it first.
+
+The consumer now retires these three queued-playback fields immediately after
+the existing nonzero/newer-epoch and entity checks, before reference lookup,
+reconciliation or a possible ownership decline. No native graph reset or other
+engine action is performed by retirement. Last already-played diagnostic state
+and the actual visible graph are left alone. There is no new lifecycle domain,
+wire field, authority, opcode or callback ownership change.
+
+The production helper is tested with real ActionEvent lists. Four regressions
+cover future actions plus a pending reset, rejected zero/stale/duplicate epochs
+preserving the full queue state, reset-only replay retirement, and unknown-epoch/
+consecutive handoffs. A new-owner action can subsequently enter a clean queue.
+The helper does not authenticate packets still in the network: existing action
+messages carry no ownership incarnation, so A-to-B-to-A late arrival remains an
+explicit protocol-provenance limitation, not claimed fixed by this slice.
+
+Local MSVC 1.6.1170 client/launcher and TPTests built. Focused tests passed
+**31 assertions / 4 cases**; full TPTests passed **287948 / 1050**. Hosted checks
+for the new commit must be recorded separately; c810e7f6 remains the previous
+fully green reference until they complete. No gameplay proof on the new commit
+is claimed and canonical mutation remains disabled.
+
+Exit-dump inspection additionally found that critical allocator/object memory
+is absent from the snapshot and stream 16 (memory-information map) is missing.
+The invalid read and quit-cleanup call chain are confirmed, but prior free vs
+corruption, origin and responsible component cannot be proved from missing
+pages. No new dump capture, speculative allocator patch or third-party-mod blame
+was introduced.
