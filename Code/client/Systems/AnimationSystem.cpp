@@ -1,6 +1,7 @@
 #include <TiltedOnlinePCH.h>
 
 #include <Systems/AnimationSystem.h>
+#include <Systems/AnimationReplayReset.h>
 
 #include <Games/Animation/TESActionData.h>
 #include <Games/Animation/ActorMediator.h>
@@ -24,6 +25,12 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
 {
     auto& actions = aAnimationComponent.TimePoints;
 
+    if (!TryApplyAnimationReplayReset(
+            aAnimationComponent.ResetAnimationGraphForReplay,
+            [apActor]() { return apActor->animationGraphHolder.IsReady(); },
+            [apActor]() { return apActor->animationGraphHolder.RevertAnimationGraphManager(); }))
+        return;
+
     const auto it = std::begin(actions);
     if (it != std::end(actions) && it->Tick <= aTick)
     {
@@ -33,12 +40,6 @@ void AnimationSystem::Update(World& aWorld, Actor* apActor, RemoteAnimationCompo
             // Animation graph not ready, keep the action in queue and try again later
             return;
         }
-        if (aAnimationComponent.ReplayCount > 0 && aAnimationComponent.ResetAnimationGraphForReplay)
-        {
-            apActor->animationGraphHolder.RevertAnimationGraphManager();
-            aAnimationComponent.ResetAnimationGraphForReplay = false;
-        }
-
         const auto& first = *it;
 
         const auto actionId = first.ActionId;

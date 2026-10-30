@@ -437,3 +437,48 @@ acceptance remain open; canonical mutation stays disabled.
 5. Only then update integration/dev and project acceptance status.
 
 The earlier two-client mutation guide is historical research for this candidate; its environment variable cannot enable canonical mutation.
+
+
+## Replay reset follow-up — 2026-10-30
+
+A source-level counterexample was found while investigating the two-client
+animation report: ActionReplayCache may return ResetAnimationGraph=true with
+Actions empty when its final retained action is an exit. AnimationSystem::Update
+previously reset only inside the due-action branch and only with ReplayCount>0.
+Such a reset-only request could therefore never execute, even after the graph
+became ready. This is a demonstrated protocol-consumer mismatch, not proof that
+it caused every reported sliding/missing-animation symptom.
+
+The pending reset is now consumed independently of queue length and ReplayCount.
+It waits for graph readiness, remains pending if the native reset reports failure,
+and retires after successful reset. The existing per-action readiness check runs
+after the reset, so reset cannot bypass graph readiness for subsequent playback.
+No new action is synthesized; action order/count, wire format, ownership policy,
+generation fences and canonical mutation authority are unchanged.
+
+The small callback seam is used directly by the production consumer. Five
+regressions cover a real cache-produced exit-only chain, readiness delay and
+retry, preservation of subsequent actions, ordinary playback without a reset,
+and a failed native reset followed by success. Local latest Windows client/launcher
+and TPTests compiled. Focused TPTests: **35 assertions / 5 cases**; full TPTests:
+**287917 assertions / 1046 cases**, all passed. Existing local symlink-privilege
+warnings remain disclosed. Exact follow-up SHA hosted checks must finish before
+integration; these local results do not imply Linux/Windows hosted completion.
+
+Read-only inspection of the exact latest executable (SHA256
+846efccf0c1374d71f892907f46549560f2fcb0a75cb87a3eed438baa0f1402f)
+through native RTTI/vtables additionally correlates scene owner/state/phase fields
+at 0x98/0xB0/0xBC, action-array data/count at 0x80/0x90, package GetType slot 7
+returning 1 and Loops slot 5 returning false, phase condition lists at 0/8, and
+Character GetCurrentScene slot 0x4A. GameVM fields 0x210/0x690 and the floating
+SpeakSound return were independently inspected. These checks are bounded layout/
+entry evidence, not a blanket thread-domain or all-runtime authorization.
+The mapped-engine crash stack was traced through the quitGame branch into
+resource destruction: it is an exit-context failure, with the invalid pointer's
+origin still unknown. No speculative teardown patch or additional dump capture
+was introduced.
+
+The user explicitly declined a repeat test solely to equalize the friend's CC
+plugins (33 vs host 8); retain the mismatch as an evidence limitation rather than
+an independent mandatory rerun. Actual owner/epoch observations and remaining
+native/thread/lifecycle acceptance must still be reviewed. P0 remains open.
