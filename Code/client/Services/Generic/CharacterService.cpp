@@ -776,7 +776,15 @@ void CharacterService::OnOwnershipTransfer(const NotifyOwnershipTransfer& acMess
 
     // Preserve the accepted epoch's pick for actors that still need to be created.
     if (auto* pWaitingFor3D = m_world.try_get<WaitingFor3D>(cEntity))
+    {
+        // This second replay copy seeds animation variables once 3D is ready.
+        // Clearing only RemoteAnimationComponent would leave old-owner work here.
+        auto& replay = pWaitingFor3D->SpawnRequest.ActionsToReplay;
+        if (!RetireAnimationReplayForOwnershipChange(
+                currentEpoch, acMessage.OwnershipEpoch, replay.Actions, replay.ResetAnimationGraph))
+            return;
         pWaitingFor3D->SpawnRequest.LeveledNpcPickId = acMessage.LeveledNpcPickId;
+    }
 
     if (isLocalOwner)
     {

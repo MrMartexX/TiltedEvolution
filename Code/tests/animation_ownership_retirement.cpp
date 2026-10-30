@@ -1,6 +1,7 @@
 #include <Systems/AnimationOwnershipReplay.h>
 #include <Systems/AnimationReplayReset.h>
 #include <Structs/ActionEvent.h>
+#include <Structs/ActionReplayChain.h>
 #include <TiltedCore/Stl.hpp>
 #include <catch2/catch.hpp>
 
@@ -73,4 +74,41 @@ TEST_CASE("Playback retirement handles an unknown epoch and consecutive handoffs
     REQUIRE(queue.empty());
     REQUIRE_FALSE(pending);
     REQUIRE(replayCount == 0);
+}
+
+TEST_CASE("Ownership change retires the deferred 3D replay copy as well as live playback", "[actions.ownership]")
+{
+    ActionEvent old;
+    old.EventName = "old-owner-3d-seed";
+    old.Variables.Integers = {123};
+    ActionReplayChain deferred;
+    deferred.Actions = {old};
+    deferred.ResetAnimationGraph = true;
+    TiltedPhoques::List<ActionEvent> live{old};
+    uint32_t count = 1;
+    bool pending = true;
+
+    REQUIRE(RetireAnimationReplayForOwnershipChange(3, 4, live, count, pending));
+    REQUIRE(RetireAnimationReplayForOwnershipChange(
+        3, 4, deferred.Actions, deferred.ResetAnimationGraph));
+    REQUIRE(live.empty());
+    REQUIRE(count == 0);
+    REQUIRE_FALSE(pending);
+    REQUIRE(deferred.Actions.empty());
+    REQUIRE_FALSE(deferred.ResetAnimationGraph);
+}
+
+TEST_CASE("Stale ownership cannot clear the deferred 3D replay seed", "[actions.ownership]")
+{
+    ActionReplayChain deferred;
+    deferred.Actions.resize(1);
+    deferred.Actions.front().EventName = "current-3d-seed";
+    deferred.ResetAnimationGraph = true;
+    const auto original = deferred;
+    for (const uint32_t incoming : {0u, 2u, 3u})
+    {
+        REQUIRE_FALSE(RetireAnimationReplayForOwnershipChange(
+            3, incoming, deferred.Actions, deferred.ResetAnimationGraph));
+        REQUIRE(deferred == original);
+    }
 }

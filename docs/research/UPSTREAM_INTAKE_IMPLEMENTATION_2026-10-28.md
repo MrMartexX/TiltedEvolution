@@ -521,3 +521,22 @@ The invalid read and quit-cleanup call chain are confirmed, but prior free vs
 corruption, origin and responsible component cannot be proved from missing
 pages. No new dump capture, speculative allocator patch or third-party-mod blame
 was introduced.
+
+### Deferred 3D replay copy correction
+
+The same ownership-retirement slice also retires the independent
+WaitingFor3D::SpawnRequest.ActionsToReplay copy. RunRemoteUpdates consumes its
+first action's variables after 3D becomes ready; clearing only the live playback
+queue would allow this old-owner seed to survive the handoff. Both copies now
+use the same nonzero/newer-epoch check and are cleared before reconciliation or
+an ownership decline. Existing reconciliation of inventory, actor values,
+death/draw state and the pending request's epoch is unchanged.
+
+Two additional regressions use the actual ActionReplayChain: both copies are
+retired together, and zero/stale/duplicate grants preserve the deferred seed.
+Local MSVC latest client/launcher and tests built successfully. Focused tests
+passed **44 assertions / 6 cases**; complete TPTests passed **287961 / 1052**.
+The local runner reports unavailable directory-symlink privilege; the hosted
+Windows counts must be recorded separately. These results cover the corrected
+working tree, not gameplay or packets still in flight. Final exact-SHA CI remains
+required before acceptance; canonical mutation is still disabled.
